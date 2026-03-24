@@ -38,6 +38,10 @@ def inject_custom_styles():
     st.markdown(
         """
         <style>
+        :root {
+            color-scheme: light;
+        }
+
         .stApp {
             background:
                 radial-gradient(circle at top left, rgba(11, 110, 79, 0.16), transparent 28%),
@@ -66,27 +70,33 @@ def inject_custom_styles():
         }
 
         div[data-testid="stForm"] {
-            background: rgba(255, 252, 246, 0.92);
-            border: 1px solid rgba(22, 52, 45, 0.09);
+            background: rgba(255, 252, 246, 0.97);
+            border: 1px solid rgba(22, 52, 45, 0.14);
             border-radius: 18px;
             padding: 1.1rem 1rem 0.5rem 1rem;
             box-shadow: 0 18px 40px rgba(56, 52, 42, 0.08);
         }
 
         div[data-testid="stExpander"] {
-            background: rgba(255, 252, 246, 0.82);
-            border: 1px solid rgba(22, 52, 45, 0.1);
+            background: rgba(255, 252, 246, 0.94);
+            border: 1px solid rgba(22, 52, 45, 0.14);
             border-radius: 16px;
             overflow: hidden;
+        }
+
+        div[data-testid="stExpander"] summary,
+        div[data-testid="stExpander"] summary * {
+            color: #18352e !important;
+            font-weight: 700;
         }
 
         button[kind="primary"],
         .stButton > button {
             border-radius: 999px;
-            border: none;
+            border: 1px solid rgba(16, 36, 31, 0.12);
             background: linear-gradient(135deg, #0e6b57 0%, #1d8a72 100%);
-            color: #ffffff;
-            font-weight: 600;
+            color: #ffffff !important;
+            font-weight: 700;
             text-shadow: 0 1px 1px rgba(8, 28, 23, 0.28);
             letter-spacing: 0.01em;
             box-shadow: 0 10px 24px rgba(14, 107, 87, 0.22);
@@ -95,19 +105,62 @@ def inject_custom_styles():
         button[kind="primary"]:hover,
         .stButton > button:hover {
             background: linear-gradient(135deg, #0d5e4d 0%, #17735f 100%);
-            color: #ffffff;
+            color: #ffffff !important;
         }
 
         div[data-baseweb="select"] > div,
         .stTextInput input,
         .stTextArea textarea {
             border-radius: 14px;
-            background: rgba(255, 252, 246, 0.96);
+            background: rgba(255, 252, 246, 1);
+            border: 1px solid rgba(34, 69, 60, 0.22) !important;
+            color: #1d2a28 !important;
+            caret-color: #16342d;
+        }
+
+        .stTextInput input:focus,
+        .stTextArea textarea:focus,
+        div[data-baseweb="select"] > div:focus-within {
+            border-color: #1b7f69 !important;
+            box-shadow: 0 0 0 1px #1b7f69, 0 0 0 4px rgba(27, 127, 105, 0.12) !important;
+        }
+
+        .stTextInput label,
+        .stTextArea label,
+        .stSelectbox label,
+        .stMultiSelect label,
+        .stNumberInput label,
+        .stDateInput label,
+        .stTimeInput label,
+        .stRadio label,
+        .stCheckbox label,
+        .stForm label,
+        [data-testid="stWidgetLabel"] p,
+        [data-testid="stWidgetLabel"] span {
+            color: #38514a !important;
+            font-weight: 600;
+        }
+
+        .stTextInput input::placeholder,
+        .stTextArea textarea::placeholder {
+            color: #7a8e88 !important;
+            opacity: 1;
+        }
+
+        div[data-baseweb="select"] span,
+        div[data-baseweb="select"] input,
+        div[data-baseweb="select"] div {
+            color: #1d2a28 !important;
+        }
+
+        div[data-baseweb="select"] svg {
+            fill: #38514a !important;
         }
 
         .stTabs [data-baseweb="tab-list"] {
             gap: 0.5rem;
-            background: rgba(255, 252, 246, 0.72);
+            background: rgba(255, 252, 246, 0.92);
+            border: 1px solid rgba(22, 52, 45, 0.12);
             border-radius: 999px;
             padding: 0.35rem;
         }
@@ -115,12 +168,14 @@ def inject_custom_styles():
         .stTabs [data-baseweb="tab"] {
             border-radius: 999px;
             padding: 0.55rem 1rem;
-            color: #35524a;
+            color: #27453e !important;
+            font-weight: 600;
         }
 
         .stTabs [aria-selected="true"] {
-            background: linear-gradient(135deg, #16342d 0%, #235446 100%);
-            color: #fff7eb;
+            background: linear-gradient(135deg, #c9eadf 0%, #def3eb 100%);
+            color: #10241f !important;
+            border: 1px solid rgba(16, 36, 31, 0.1);
         }
 
         .autoirr-hero {
@@ -128,8 +183,13 @@ def inject_custom_styles():
             color: #fff8ef;
             border-radius: 24px;
             padding: 1.4rem 1.5rem;
+            border: 1px solid rgba(22, 52, 45, 0.1);
             box-shadow: 0 18px 42px rgba(28, 44, 39, 0.18);
             margin-bottom: 1rem;
+        }
+
+        .autoirr-hero h1 {
+            color: #fff8ef;
         }
 
         .autoirr-hero p {
@@ -151,12 +211,13 @@ def inject_custom_styles():
             border-radius: 999px;
             background: rgba(255, 248, 239, 0.14);
             border: 1px solid rgba(255, 248, 239, 0.14);
+            color: #fff8ef;
             font-size: 0.92rem;
         }
 
         .autoirr-section {
-            background: rgba(255, 252, 246, 0.9);
-            border: 1px solid rgba(22, 52, 45, 0.09);
+            background: rgba(255, 252, 246, 0.96);
+            border: 1px solid rgba(22, 52, 45, 0.12);
             border-radius: 20px;
             padding: 1rem 1.1rem;
             box-shadow: 0 14px 32px rgba(56, 52, 42, 0.07);
@@ -170,6 +231,17 @@ def inject_custom_styles():
         .autoirr-section p {
             margin: 0;
             color: #526963;
+        }
+
+        [data-testid="stDataFrame"],
+        [data-testid="stTable"] {
+            background: rgba(255, 252, 246, 0.96);
+            border-radius: 16px;
+            border: 1px solid rgba(22, 52, 45, 0.1);
+        }
+
+        [data-testid="stAlert"] {
+            border-radius: 16px;
         }
         </style>
         """,
