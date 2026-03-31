@@ -780,7 +780,7 @@ def render_inspection_tab(inspector, session_record):
                         }
                         for item in recipe_definition["elements"]
                     ],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
             else:
@@ -799,7 +799,7 @@ def render_inspection_tab(inspector, session_record):
             )
             history = get_pipe_attempt_history(existing_pipe["id"])
             if history:
-                st.dataframe(history, use_container_width=True, hide_index=True)
+                st.dataframe(history, width="stretch", hide_index=True)
         else:
             render_notice(
                 "This pipe number has not been inspected yet for this WO/connection.",
@@ -812,7 +812,7 @@ def render_inspection_tab(inspector, session_record):
         and recipe_definition
         and recipe_definition["elements"]
     )
-    if st.button("Prepare Inspection", disabled=not can_prepare, use_container_width=True):
+    if st.button("Prepare Inspection", disabled=not can_prepare, width="stretch"):
         st.session_state.active_inspection = create_inspection_attempt(
             production_number=selected_production,
             operation_description=selected_description,
@@ -1016,7 +1016,7 @@ def render_pipe_history_tab(inspector):
         st.info("No pipe history records matched the current filters.")
         return
 
-    st.dataframe(pipe_rows, use_container_width=True, hide_index=True)
+    st.dataframe(pipe_rows, width="stretch", hide_index=True)
     selected_pipe_id = st.selectbox(
         "Select Pipe Record",
         [row["id"] for row in pipe_rows],
@@ -1038,7 +1038,7 @@ def render_pipe_history_tab(inspector):
         return
 
     st.markdown("**Attempt History**")
-    st.dataframe(attempts, use_container_width=True, hide_index=True)
+    st.dataframe(attempts, width="stretch", hide_index=True)
 
     selected_attempt_id = st.selectbox(
         "Select Attempt",
@@ -1052,7 +1052,7 @@ def render_pipe_history_tab(inspector):
     measurements = get_attempt_measurements(selected_attempt_id)
     if measurements:
         st.markdown("**Measurement History**")
-        st.dataframe(measurements, use_container_width=True, hide_index=True)
+        st.dataframe(measurements, width="stretch", hide_index=True)
 
 
 def render_ncr_tab(inspector):
@@ -1070,7 +1070,7 @@ def render_ncr_tab(inspector):
         st.info("No NCR records matched the current filter.")
         return
 
-    st.dataframe(ncr_rows, use_container_width=True, hide_index=True)
+    st.dataframe(ncr_rows, width="stretch", hide_index=True)
     selected_ncr_id = st.selectbox(
         "Select NCR",
         [row["id"] for row in ncr_rows],
@@ -1131,7 +1131,7 @@ def render_workflow():
 
     col1, col2 = st.columns([5, 1])
     with col2:
-        if st.button("Log Out", use_container_width=True):
+        if st.button("Log Out", width="stretch"):
             close_inspector_session(session_record["id"])
             st.session_state.session_record = None
             st.session_state.inspector = None
