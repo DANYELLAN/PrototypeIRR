@@ -29,6 +29,12 @@ SITE_LISTS = {
     ],
 }
 
+WORK_ORDER_SITE_LISTS = {
+    "https://benoitinc.sharepoint.com/sites/AcumaticaDataStorage": [
+        "Production Operations",
+    ],
+}
+
 SITE_LISTS_ENV = os.getenv("SITE_LISTS")
 if SITE_LISTS_ENV:
     SITE_LISTS = {
@@ -74,6 +80,38 @@ def sync_multiple_lists_to_postgres(connection, site_to_list_results, site_ids):
             sync_counts[site_url][list_name] = inserted_count
 
     return sync_counts
+
+
+def sync_sharepoint_lists_to_postgres(site_lists=None, top=DEFAULT_TOP, fetch_all=True):
+    """Fetch configured SharePoint lists and persist them to PostgreSQL."""
+    selected_site_lists = site_lists or SITE_LISTS
+
+    token = get_access_token()
+    headers = build_headers(token)
+    site_results, site_ids = get_multiple_lists(
+        selected_site_lists,
+        headers=headers,
+        top=top,
+        fetch_all=fetch_all,
+    )
+
+    connection = get_db_connection()
+    try:
+        initialize_database(connection)
+        sync_counts = sync_multiple_lists_to_postgres(connection, site_results, site_ids)
+    finally:
+        connection.close()
+
+    return {
+        "site_results": site_results,
+        "site_ids": site_ids,
+        "sync_counts": sync_counts,
+    }
+
+
+def sync_work_orders_to_postgres():
+    """Refresh only the Production Operations work-order source list."""
+    return sync_sharepoint_lists_to_postgres(site_lists=WORK_ORDER_SITE_LISTS, fetch_all=True)
 
 
 def main():

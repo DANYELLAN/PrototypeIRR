@@ -1,8 +1,9 @@
 import os
+from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
-from msal import PublicClientApplication
+from msal import PublicClientApplication, SerializableTokenCache
 
 from config import get_env_int
 
@@ -12,8 +13,40 @@ AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
 GRAPH_SCOPES = ["https://graph.microsoft.com/.default"]
 GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 DEFAULT_TOP = get_env_int("SHAREPOINT_DEFAULT_TOP", 100)
+TOKEN_CACHE_FILE = Path(os.getenv("SHAREPOINT_TOKEN_CACHE_FILE", ".msal_token_cache.json"))
 
-APP = PublicClientApplication(client_id=CLIENT_ID, authority=AUTHORITY)
+APP = None
+CACHE = None
+
+
+def _get_cache():
+    """Load a persisted MSAL token cache from disk when available."""
+    global CACHE
+    if CACHE is None:
+        cache = SerializableTokenCache()
+        if TOKEN_CACHE_FILE.exists():
+            cache.deserialize(TOKEN_CACHE_FILE.read_text(encoding="utf-8"))
+        CACHE = cache
+    return CACHE
+
+
+def _save_cache():
+    """Persist the MSAL token cache so future refreshes reuse the session."""
+    cache = _get_cache()
+    if cache.has_state_changed:
+        TOKEN_CACHE_FILE.write_text(cache.serialize(), encoding="utf-8")
+
+
+def get_msal_app():
+    """Build the MSAL public client lazily so imports do not trigger network calls."""
+    global APP
+    if APP is None:
+        APP = PublicClientApplication(
+            client_id=CLIENT_ID,
+            authority=AUTHORITY,
+            token_cache=_get_cache(),
+        )
+    return APP
 
 
 class SharePointApiError(Exception):
@@ -22,16 +55,19 @@ class SharePointApiError(Exception):
 
 def get_access_token():
     """Get an access token via MSAL cache or interactive browser login."""
-    accounts = APP.get_accounts()
+    app = get_msal_app()
+    accounts = app.get_accounts()
     if accounts:
-        result = APP.acquire_token_silent(GRAPH_SCOPES, account=accounts[0])
+        result = app.acquire_token_silent(GRAPH_SCOPES, account=accounts[0])
         if result and "access_token" in result:
+            _save_cache()
             return result["access_token"]
 
     print("Opening browser for sign-in...")
-    result = APP.acquire_token_interactive(scopes=GRAPH_SCOPES)
+    result = app.acquire_token_interactive(scopes=GRAPH_SCOPES)
 
     if "access_token" in result:
+        _save_cache()
         return result["access_token"]
 
     error_message = result.get("error_description", result)

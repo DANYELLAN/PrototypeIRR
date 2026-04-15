@@ -6,11 +6,13 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from sharepoint_api import sync_work_orders_to_postgres  # noqa: E402
 from workflow_db import (  # noqa: E402
     close_inspector_session,
     complete_inspection_attempt,
     create_inspection_attempt,
     create_inspector_session,
+    delete_pipe_unit,
     determine_shift,
     evaluate_measurements,
     find_recipe_candidates,
@@ -23,14 +25,22 @@ from workflow_db import (  # noqa: E402
     get_ncr_reports,
     get_open_work_orders,
     get_pipe_attempt_history,
+    get_recipe_builder_options,
+    get_local_recipe_by_id,
+    get_pipe_unit_by_id,
     get_pipe_unit,
     get_recipe_elements,
+    list_local_recipes,
     has_manager_pin,
     initialize_workflow_schema,
     is_admin_user,
     is_manager_or_supervisor,
     search_pipe_units,
     set_manager_pin,
+    create_local_recipe,
+    reset_in_progress_pipe_unit,
+    update_local_recipe,
+    update_pipe_unit,
     update_ncr_report,
 )
 
@@ -61,6 +71,8 @@ def main():
         if action == "initialize":
             initialize_workflow_schema()
             return _result({"initialized": True})
+        if action == "sync_work_orders":
+            return _result(sync_work_orders_to_postgres())
         if action == "determine_shift":
             return _result(determine_shift())
         if action == "get_locations":
@@ -82,6 +94,12 @@ def main():
             return _result(has_manager_pin(payload.get("manager_item_id")))
         if action == "get_open_work_orders":
             return _result(get_open_work_orders(payload.get("branch")))
+        if action == "get_recipe_builder_options":
+            return _result(get_recipe_builder_options(payload.get("branch")))
+        if action == "list_local_recipes":
+            return _result(list_local_recipes(payload.get("branch")))
+        if action == "get_local_recipe_by_id":
+            return _result(get_local_recipe_by_id(payload.get("recipe_header_id")))
         if action == "get_connection_types":
             return _result(
                 get_connection_types(payload.get("production_number"), payload.get("branch"))
@@ -102,6 +120,8 @@ def main():
                     payload.get("pipe_number"),
                 )
             )
+        if action == "get_pipe_unit_by_id":
+            return _result(get_pipe_unit_by_id(payload.get("pipe_unit_id")))
         if action == "get_pipe_attempt_history":
             return _result(get_pipe_attempt_history(payload.get("pipe_unit_id")))
         if action == "get_attempt_measurements":
@@ -113,6 +133,7 @@ def main():
                     production_number=payload.get("production_number"),
                     pipe_number=payload.get("pipe_number"),
                     status=payload.get("status"),
+                    inspection_scope=payload.get("inspection_scope"),
                 )
             )
         if action == "get_ncr_reports":
@@ -127,6 +148,29 @@ def main():
                 immediate_containment=payload.get("immediate_containment"),
             )
             return _result({"updated": True})
+        if action == "delete_pipe_unit":
+            delete_pipe_unit(payload.get("pipe_unit_id"))
+            return _result({"deleted": True})
+        if action == "reset_in_progress_pipe_unit":
+            return _result(reset_in_progress_pipe_unit(payload.get("pipe_unit_id")))
+        if action == "update_pipe_unit":
+            return _result(
+                update_pipe_unit(
+                    payload.get("pipe_unit_id"),
+                    payload.get("production_number"),
+                    payload.get("operation_description"),
+                    payload.get("pipe_number"),
+                )
+            )
+        if action == "create_local_recipe":
+            return _result(create_local_recipe(payload.get("recipe_payload") or {}))
+        if action == "update_local_recipe":
+            return _result(
+                update_local_recipe(
+                    payload.get("recipe_header_id"),
+                    payload.get("recipe_payload") or {},
+                )
+            )
         if action == "evaluate_measurements":
             return _result(
                 evaluate_measurements(
