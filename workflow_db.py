@@ -1277,6 +1277,7 @@ def build_inspection_plan(
     recipe_definition,
     attempt_no,
     inspection_scope="standard",
+    rotation_index=None,
     every_pipe_count=DEFAULT_ALWAYS_INSPECT_COUNT,
     rotating_count=DEFAULT_ROTATING_COUNT,
 ):
@@ -1298,6 +1299,11 @@ def build_inspection_plan(
     always_items = sampling_plan.get("alwaysMeasureItems") or []
     rotating_items = sampling_plan.get("rotatingAuditItems") or []
     cycle_map = sampling_plan.get("cycleMap") or {}
+    sequence_index = (
+        int(rotation_index)
+        if rotation_index is not None and str(rotation_index).strip().isdigit()
+        else int(attempt_no)
+    )
     elements_by_sequence = {
         element.get("element_sequence"): element for element in recipe_elements
     }
@@ -1312,10 +1318,10 @@ def build_inspection_plan(
                 planned["inspected_this_pipe"] = True
                 due_elements.append(planned)
 
-        cycle_key = str(((attempt_no - 1) % max(len(rotating_items), 1)) + 1)
+        cycle_key = str(((sequence_index - 1) % max(len(rotating_items), 1)) + 1)
         rotating_selection = cycle_map.get(cycle_key)
         if rotating_selection is None and rotating_items:
-            rotating_selection = rotating_items[(attempt_no - 1) % len(rotating_items)]
+            rotating_selection = rotating_items[(sequence_index - 1) % len(rotating_items)]
         if rotating_selection is not None:
             selections = rotating_selection if isinstance(rotating_selection, list) else [rotating_selection]
             for item_no in selections:
@@ -1338,7 +1344,7 @@ def build_inspection_plan(
 
     rotating_elements = recipe_elements[always_count:]
     if rotating_elements and rotating_count > 0:
-        start_index = ((attempt_no - 1) * rotating_count) % len(rotating_elements)
+        start_index = ((sequence_index - 1) * rotating_count) % len(rotating_elements)
         for offset in range(rotating_count):
             rotating_element = rotating_elements[(start_index + offset) % len(rotating_elements)]
             planned = dict(rotating_element)
@@ -1735,6 +1741,8 @@ def create_inspection_attempt(
     inspection_scope="standard",
 ):
     """Create a new inspection attempt and return plan context."""
+    normalized_pipe_number = str(pipe_number).strip()
+    rotation_index = int(normalized_pipe_number) if normalized_pipe_number.isdigit() else None
     connection = get_db_connection()
     try:
         with connection.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -1775,7 +1783,10 @@ def create_inspection_attempt(
                             else "standard"
                         )
                         inspection_plan = build_inspection_plan(
-                            recipe_elements, attempt_no, inspection_scope=normalized_scope
+                            recipe_elements,
+                            attempt_no,
+                            inspection_scope=normalized_scope,
+                            rotation_index=rotation_index,
                         )
                         connection.commit()
                         return {
@@ -1833,7 +1844,10 @@ def create_inspection_attempt(
                 "full" if str(inspection_scope).strip().lower() == "full" else "standard"
             )
             inspection_plan = build_inspection_plan(
-                recipe_elements, attempt_no, inspection_scope=normalized_scope
+                recipe_elements,
+                attempt_no,
+                inspection_scope=normalized_scope,
+                rotation_index=rotation_index,
             )
             cursor.execute(
                 """

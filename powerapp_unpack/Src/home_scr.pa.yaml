@@ -1,0 +1,663 @@
+# ************************************************************************************************
+# Warning: YAML source code for Canvas Apps should only be used to review changes made within Power Apps Studio and for minor edits (Preview).
+# Use the maker portal to create and edit your Power Apps.
+# 
+# The schema file for Canvas Apps is available at https://go.microsoft.com/fwlink/?linkid=2304907
+# 
+# For more information, visit https://go.microsoft.com/fwlink/?linkid=2292623
+# ************************************************************************************************
+Screens:
+  home_scr:
+    Properties:
+      Fill: =If(vartheme="Light",Color.Cornsilk,varMainFill)
+      OnVisible: =//Set(callSpinner,false)
+    Children:
+      - ScreenContainer1:
+          Control: GroupContainer@1.5.0
+          Variant: AutoLayout
+          Properties:
+            Fill: =If(vartheme="Light",Color.Cornsilk,varMainFill)
+            Height: =800
+            LayoutDirection: =LayoutDirection.Vertical
+            LayoutGap: =16
+            PaddingBottom: =16
+            PaddingLeft: =16
+            PaddingRight: =16
+            PaddingTop: =16
+            Width: =1333
+          Children:
+            - HeaderContainer1:
+                Control: GroupContainer@1.5.0
+                Variant: AutoLayout
+                Properties:
+                  Fill: =RGBA(255, 255, 255, 1)
+                  FillPortions: =0
+                  Height: =75
+                  LayoutDirection: =LayoutDirection.Horizontal
+                  LayoutMaxHeight: =
+                  LayoutMaxWidth: =
+                  RadiusBottomLeft: =8
+                  RadiusBottomRight: =8
+                  RadiusTopLeft: =8
+                  RadiusTopRight: =8
+                Children:
+                  - Header1:
+                      Control: Header@0.0.44
+                      Properties:
+                        IsProfilePictureVisible: =false
+                        LayoutMaxHeight: =
+                        LayoutMaxWidth: =
+                        Logo: ='BenoitIconRegistered-Red'
+                        OnSelectLogo: =Navigate(scanBadge_scr)
+                        Title: |-
+                          =Concatenate(
+                              "Welcome ",
+                              varUserRecord.'Full Name'
+                              )
+            - MainContainer1:
+                Control: GroupContainer@1.5.0
+                Variant: AutoLayout
+                Properties:
+                  DropShadow: =DropShadow.None
+                  Fill: =RGBA(245, 245, 245, 1)
+                  LayoutAlignItems: =LayoutAlignItems.Stretch
+                  LayoutDirection: =LayoutDirection.Horizontal
+                  LayoutGap: =16
+                  LayoutMaxHeight: =
+                  LayoutMaxWidth: =
+                  LayoutOverflowY: =LayoutOverflow.Scroll
+                  LayoutWrap: =true
+                  PaddingBottom: =2
+                  PaddingLeft: =2
+                  PaddingRight: =2
+                  PaddingTop: =2
+                Children:
+                  - contTimeSheetEntry:
+                      Control: GroupContainer@1.5.0
+                      Variant: AutoLayout
+                      Properties:
+                        Fill: =RGBA(255, 255, 255, 1)
+                        LayoutAlignItems: =LayoutAlignItems.Center
+                        LayoutDirection: =LayoutDirection.Vertical
+                        LayoutGap: =5
+                        LayoutJustifyContent: =LayoutJustifyContent.Center
+                        LayoutMaxHeight: =
+                        LayoutMaxWidth: =
+                        LayoutMinHeight: =300
+                        LayoutMinWidth: =If(home_scr.Size = ScreenSize.Small, Parent.Width, 400)
+                        LayoutOverflowY: =LayoutOverflow.Scroll
+                        PaddingBottom: =10
+                        PaddingLeft: =5
+                        PaddingRight: =5
+                        PaddingTop: =10
+                        Visible: =!IsBlank(varUserRecord) &&  !IsBlank(varUserRecord)
+                      Children:
+                        - ImageContainer1:
+                            Control: GroupContainer@1.5.0
+                            Variant: AutoLayout
+                            Properties:
+                              DropShadow: =DropShadow.None
+                              LayoutAlignItems: =LayoutAlignItems.Center
+                              LayoutDirection: =LayoutDirection.Vertical
+                              LayoutGap: =5
+                              LayoutJustifyContent: =LayoutJustifyContent.End
+                              LayoutMaxHeight: =
+                              LayoutMaxWidth: =
+                              Width: =Parent.Width
+                            Children:
+                              - Container1:
+                                  Control: GroupContainer@1.5.0
+                                  Variant: ManualLayout
+                                  Properties:
+                                    DropShadow: =DropShadow.None
+                                    Height: =Parent.Height
+                                    LayoutMaxHeight: =
+                                    LayoutMaxWidth: =
+                                    Width: =Parent.Width
+                                    X: =40
+                                    Y: =40
+                                  Children:
+                                    - FeatureItemButton1:
+                                        Control: Button@0.0.45
+                                        Properties:
+                                          AccessibleLabel: ="Featured item button"
+                                          Appearance: ='ButtonCanvas.Appearance'.Transparent
+                                          FontSize: =20
+                                          FontWeight: =FontWeight.Bold
+                                          OnSelect: =Navigate(scrTimeSht_1)
+                                          Text: ="Time Sheet Entry"
+                                          Width: =Parent.Width
+                                          Y: =Image1.Y+Image1.Height+10
+                                    - Image1:
+                                        Control: Image@2.2.3
+                                        Properties:
+                                          Image: ='165853310'
+                                          ImagePosition: =ImagePosition.Fill
+                                          OnSelect: =Navigate(scrTimeSht_1)
+                                          RadiusBottomLeft: =90
+                                          RadiusBottomRight: =90
+                                          RadiusTopLeft: =90
+                                          RadiusTopRight: =90
+                                          X: =161
+                                          Y: =Parent.Height/2-Self.Height/2
+                                    - ButtonCanvas2:
+                                        Control: Button@0.0.45
+                                        Properties:
+                                          Appearance: ='ButtonCanvas.Appearance'.Transparent
+                                          Height: =Parent.Height
+                                          OnSelect: =Navigate(scrTimeSht_1,ScreenTransition.Fade)
+                                          Text: =
+                                          Width: =Parent.Width
+                  - Container21:
+                      Control: GroupContainer@1.5.0
+                      Variant: AutoLayout
+                      Properties:
+                        Fill: =RGBA(255, 255, 255, 1)
+                        LayoutAlignItems: =LayoutAlignItems.Center
+                        LayoutDirection: =LayoutDirection.Vertical
+                        LayoutGap: =5
+                        LayoutJustifyContent: =LayoutJustifyContent.Center
+                        LayoutMaxHeight: =
+                        LayoutMaxWidth: =
+                        LayoutMinHeight: =300
+                        LayoutMinWidth: =If(home_scr.Size = ScreenSize.Small, Parent.Width, 400)
+                        LayoutOverflowY: =LayoutOverflow.Scroll
+                        PaddingBottom: =10
+                        PaddingLeft: =5
+                        PaddingRight: =5
+                        PaddingTop: =10
+                      Children:
+                        - ImageContainer21:
+                            Control: GroupContainer@1.5.0
+                            Variant: AutoLayout
+                            Properties:
+                              AlignInContainer: =AlignInContainer.Center
+                              DropShadow: =DropShadow.None
+                              FillPortions: =1.5
+                              LayoutAlignItems: =LayoutAlignItems.Center
+                              LayoutDirection: =LayoutDirection.Vertical
+                              LayoutGap: =5
+                              LayoutJustifyContent: =LayoutJustifyContent.End
+                              LayoutMaxHeight: =
+                              LayoutMaxWidth: =
+                              Width: =Parent.Width
+                            Children:
+                              - Image21:
+                                  Control: Image@2.2.3
+                                  Properties:
+                                    Image: ='906503016'
+                                    ImagePosition: =ImagePosition.Fill
+                                    LayoutMaxHeight: =
+                                    LayoutMaxWidth: =
+                                    OnSelect: =Navigate(dailyMain_scr)
+                                    RadiusBottomLeft: =90
+                                    RadiusBottomRight: =90
+                                    RadiusTopLeft: =90
+                                    RadiusTopRight: =90
+                        - TitleContainer21:
+                            Control: GroupContainer@1.5.0
+                            Variant: AutoLayout
+                            Properties:
+                              AlignInContainer: =AlignInContainer.Center
+                              DropShadow: =DropShadow.None
+                              LayoutDirection: =LayoutDirection.Vertical
+                              LayoutMaxHeight: =
+                              LayoutMaxWidth: =
+                              LayoutMinWidth: =Container21.Width
+                              PaddingTop: =20
+                              Width: =Parent.Width
+                            Children:
+                              - FeatureItemButton21:
+                                  Control: Button@0.0.45
+                                  Properties:
+                                    AccessibleLabel: ="Featured item button"
+                                    Appearance: ='ButtonCanvas.Appearance'.Transparent
+                                    FontSize: =20
+                                    FontWeight: =FontWeight.Bold
+                                    LayoutMaxHeight: =
+                                    LayoutMaxWidth: =
+                                    LayoutMinWidth: =Parent.Width
+                                    OnSelect: =Navigate(dailyMain_scr)
+                                    Text: ="CNC Daily Checklist"
+                                    Width: =Parent.Width
+                  - Container31:
+                      Control: GroupContainer@1.5.0
+                      Variant: AutoLayout
+                      Properties:
+                        Fill: =RGBA(255, 255, 255, 1)
+                        LayoutAlignItems: =LayoutAlignItems.Center
+                        LayoutDirection: =LayoutDirection.Vertical
+                        LayoutGap: =5
+                        LayoutJustifyContent: =LayoutJustifyContent.Center
+                        LayoutMaxHeight: =
+                        LayoutMaxWidth: =
+                        LayoutMinHeight: =300
+                        LayoutMinWidth: =If(home_scr.Size = ScreenSize.Small, Parent.Width, 400)
+                        LayoutOverflowY: =LayoutOverflow.Scroll
+                        PaddingBottom: =10
+                        PaddingLeft: =5
+                        PaddingRight: =5
+                        PaddingTop: =10
+                      Children:
+                        - ImageContainer31:
+                            Control: GroupContainer@1.5.0
+                            Variant: AutoLayout
+                            Properties:
+                              AlignInContainer: =AlignInContainer.Center
+                              DropShadow: =DropShadow.None
+                              FillPortions: =1.5
+                              LayoutAlignItems: =LayoutAlignItems.Center
+                              LayoutDirection: =LayoutDirection.Vertical
+                              LayoutGap: =5
+                              LayoutJustifyContent: =LayoutJustifyContent.End
+                              LayoutMaxHeight: =
+                              LayoutMaxWidth: =
+                              LayoutMinWidth: =Container31.Width
+                              Width: =Parent.Width
+                            Children:
+                              - Image31:
+                                  Control: Image@2.2.3
+                                  Properties:
+                                    Image: ='901627692'
+                                    ImagePosition: =ImagePosition.Fill
+                                    LayoutMaxHeight: =
+                                    LayoutMaxWidth: =
+                                    OnSelect: =Navigate(contactIT_scr)
+                                    RadiusBottomLeft: =90
+                                    RadiusBottomRight: =90
+                                    RadiusTopLeft: =90
+                                    RadiusTopRight: =90
+                        - TitleContainer31:
+                            Control: GroupContainer@1.5.0
+                            Variant: AutoLayout
+                            Properties:
+                              AlignInContainer: =AlignInContainer.Center
+                              DropShadow: =DropShadow.None
+                              LayoutDirection: =LayoutDirection.Vertical
+                              LayoutMaxHeight: =
+                              LayoutMaxWidth: =
+                              LayoutMinWidth: =Container31.Width
+                              PaddingTop: =20
+                              Width: =Parent.Width
+                            Children:
+                              - FeatureItemButton31:
+                                  Control: Button@0.0.45
+                                  Properties:
+                                    AccessibleLabel: ="Featured item button"
+                                    Appearance: ='ButtonCanvas.Appearance'.Transparent
+                                    FontSize: =20
+                                    FontWeight: =FontWeight.Bold
+                                    LayoutMaxHeight: =
+                                    LayoutMaxWidth: =
+                                    LayoutMinWidth: =Parent.Width
+                                    OnSelect: =Navigate(contactIT_scr)
+                                    Text: ="Contact IT"
+                                    Width: =Parent.Width
+                  - Container41:
+                      Control: GroupContainer@1.5.0
+                      Variant: AutoLayout
+                      Properties:
+                        Fill: =RGBA(255, 255, 255, 1)
+                        LayoutAlignItems: =LayoutAlignItems.Center
+                        LayoutDirection: =LayoutDirection.Vertical
+                        LayoutGap: =5
+                        LayoutJustifyContent: =LayoutJustifyContent.Center
+                        LayoutMaxHeight: =
+                        LayoutMaxWidth: =
+                        LayoutMinHeight: =300
+                        LayoutMinWidth: =If(home_scr.Size = ScreenSize.Small, Parent.Width, 400)
+                        LayoutOverflowY: =LayoutOverflow.Scroll
+                        PaddingBottom: =10
+                        PaddingLeft: =5
+                        PaddingRight: =5
+                        PaddingTop: =10
+                      Children:
+                        - ImageContainer41:
+                            Control: GroupContainer@1.5.0
+                            Variant: AutoLayout
+                            Properties:
+                              AlignInContainer: =AlignInContainer.Center
+                              DropShadow: =DropShadow.None
+                              FillPortions: =1.5
+                              LayoutAlignItems: =LayoutAlignItems.Center
+                              LayoutDirection: =LayoutDirection.Vertical
+                              LayoutGap: =5
+                              LayoutJustifyContent: =LayoutJustifyContent.End
+                              LayoutMaxHeight: =
+                              LayoutMaxWidth: =
+                              LayoutMinWidth: =Container41.Width
+                              Width: =Parent.Width
+                            Children:
+                              - Image41:
+                                  Control: Image@2.2.3
+                                  Properties:
+                                    Image: ='484151512_super'
+                                    ImagePosition: =ImagePosition.Fill
+                                    LayoutMaxHeight: =
+                                    LayoutMaxWidth: =
+                                    OnSelect: |-
+                                      =Set(
+                                          varPleaseWait,
+                                          true
+                                      );
+                                      Set(
+                                          varRequester,
+                                          ""
+                                      );
+                                      ClearCollect(
+                                          colEnnisAssets,
+                                          Assets
+                                      );
+                                      ClearCollect(
+                                          colEnnisAssetLocations,
+                                          Locations
+                                      );
+                                      Set(
+                                          varRequestTimer,
+                                          true
+                                      );
+                                      Set(
+                                          varPleaseWait,
+                                          false
+                                      );
+                                      Set(
+                                          varUserDetails,
+                                          Office365Users.UserProfileV2(User().Email)
+                                      );
+                                      NewForm(NewMaintenanceRequest);
+                                      Navigate(
+                                          scrMaintenanceRequest,
+                                          ScreenTransition.CoverRight
+                                      )
+                                    RadiusBottomLeft: =90
+                                    RadiusBottomRight: =90
+                                    RadiusTopLeft: =90
+                                    RadiusTopRight: =90
+                        - TitleContainer41:
+                            Control: GroupContainer@1.5.0
+                            Variant: AutoLayout
+                            Properties:
+                              AlignInContainer: =AlignInContainer.Center
+                              DropShadow: =DropShadow.None
+                              LayoutDirection: =LayoutDirection.Vertical
+                              LayoutMaxHeight: =
+                              LayoutMaxWidth: =
+                              LayoutMinWidth: =Container41.Width
+                              PaddingTop: =20
+                              Width: =Parent.Width
+                            Children:
+                              - FeatureItemButton41:
+                                  Control: Button@0.0.45
+                                  Properties:
+                                    AccessibleLabel: ="Featured item button"
+                                    Appearance: ='ButtonCanvas.Appearance'.Transparent
+                                    FontSize: =20
+                                    FontWeight: =FontWeight.Bold
+                                    LayoutMaxHeight: =
+                                    LayoutMaxWidth: =
+                                    LayoutMinWidth: =Parent.Width
+                                    OnSelect: |-
+                                      =Set(
+                                          varPleaseWait,
+                                          true
+                                      );
+                                      Set(
+                                          varRequester,
+                                          ""
+                                      );
+                                      ClearCollect(
+                                          colEnnisAssets,
+                                          Assets
+                                      );
+                                      ClearCollect(
+                                          colEnnisAssetLocations,
+                                          Locations
+                                      );
+                                      Set(
+                                          varRequestTimer,
+                                          true
+                                      );
+                                      Set(
+                                          varPleaseWait,
+                                          false
+                                      );
+                                      Set(
+                                          varUserDetails,
+                                          Office365Users.UserProfileV2(User().Email)
+                                      );
+                                      NewForm(NewMaintenanceRequest);
+                                      Navigate(
+                                          scrMaintenanceRequest,
+                                          ScreenTransition.CoverRight
+                                      )
+                                    Text: ="Contact Maintenance"
+                                    Width: =Parent.Width
+                  - Container51:
+                      Control: GroupContainer@1.5.0
+                      Variant: AutoLayout
+                      Properties:
+                        Fill: =RGBA(255, 255, 255, 1)
+                        LayoutAlignItems: =LayoutAlignItems.Center
+                        LayoutDirection: =LayoutDirection.Vertical
+                        LayoutGap: =5
+                        LayoutJustifyContent: =LayoutJustifyContent.Center
+                        LayoutMaxHeight: =
+                        LayoutMaxWidth: =
+                        LayoutMinHeight: =300
+                        LayoutMinWidth: =If(home_scr.Size = ScreenSize.Small, Parent.Width, 400)
+                        LayoutOverflowY: =LayoutOverflow.Scroll
+                        PaddingBottom: =10
+                        PaddingLeft: =5
+                        PaddingRight: =5
+                        PaddingTop: =10
+                      Children:
+                        - ImageContainer51:
+                            Control: GroupContainer@1.5.0
+                            Variant: AutoLayout
+                            Properties:
+                              AlignInContainer: =AlignInContainer.Center
+                              DropShadow: =DropShadow.None
+                              FillPortions: =1.5
+                              LayoutAlignItems: =LayoutAlignItems.Center
+                              LayoutDirection: =LayoutDirection.Vertical
+                              LayoutGap: =5
+                              LayoutJustifyContent: =LayoutJustifyContent.End
+                              LayoutMaxHeight: =
+                              LayoutMaxWidth: =
+                              LayoutMinWidth: =Container51.Width
+                              Width: =Parent.Width
+                            Children:
+                              - Image51:
+                                  Control: Image@2.2.3
+                                  Properties:
+                                    Image: ='99307922'
+                                    ImagePosition: =ImagePosition.Fill
+                                    LayoutMaxHeight: =
+                                    LayoutMaxWidth: =
+                                    OnSelect: =Navigate(contactSup_scr)
+                                    RadiusBottomLeft: =90
+                                    RadiusBottomRight: =90
+                                    RadiusTopLeft: =90
+                                    RadiusTopRight: =90
+                        - TitleContainer51:
+                            Control: GroupContainer@1.5.0
+                            Variant: AutoLayout
+                            Properties:
+                              AlignInContainer: =AlignInContainer.Center
+                              DropShadow: =DropShadow.None
+                              LayoutDirection: =LayoutDirection.Vertical
+                              LayoutMaxHeight: =
+                              LayoutMaxWidth: =
+                              LayoutMinWidth: =Container51.Width
+                              PaddingTop: =20
+                              Width: =Parent.Width
+                            Children:
+                              - FeatureItemButton51:
+                                  Control: Button@0.0.45
+                                  Properties:
+                                    AccessibleLabel: ="Featured item button"
+                                    Appearance: ='ButtonCanvas.Appearance'.Transparent
+                                    FontSize: =20
+                                    FontWeight: =FontWeight.Bold
+                                    LayoutMaxHeight: =
+                                    LayoutMaxWidth: =
+                                    LayoutMinWidth: =Parent.Width
+                                    OnSelect: =Navigate(contactSup_scr)
+                                    Text: ="Contact Supervisor"
+                                    Width: =Parent.Width
+                  - Container61:
+                      Control: GroupContainer@1.5.0
+                      Variant: AutoLayout
+                      Properties:
+                        Fill: =RGBA(255, 255, 255, 1)
+                        LayoutAlignItems: =LayoutAlignItems.Center
+                        LayoutDirection: =LayoutDirection.Vertical
+                        LayoutGap: =5
+                        LayoutJustifyContent: =LayoutJustifyContent.Center
+                        LayoutMaxHeight: =
+                        LayoutMaxWidth: =
+                        LayoutMinHeight: =300
+                        LayoutMinWidth: =If(home_scr.Size = ScreenSize.Small, Parent.Width, 400)
+                        LayoutOverflowY: =LayoutOverflow.Scroll
+                        PaddingBottom: =10
+                        PaddingLeft: =5
+                        PaddingRight: =5
+                        PaddingTop: =10
+                      Children:
+                        - ImageContainer61:
+                            Control: GroupContainer@1.5.0
+                            Variant: AutoLayout
+                            Properties:
+                              AlignInContainer: =AlignInContainer.Center
+                              DropShadow: =DropShadow.None
+                              FillPortions: =1.5
+                              LayoutAlignItems: =LayoutAlignItems.Center
+                              LayoutDirection: =LayoutDirection.Vertical
+                              LayoutGap: =5
+                              LayoutJustifyContent: =LayoutJustifyContent.End
+                              LayoutMaxHeight: =
+                              LayoutMaxWidth: =
+                              LayoutMinWidth: =Container61.Width
+                              Width: =Parent.Width
+                            Children:
+                              - Icon4:
+                                  Control: Classic/Icon@2.5.0
+                                  Properties:
+                                    Icon: =Icon.Settings
+                                    LayoutMaxHeight: =
+                                    LayoutMaxWidth: =
+                                    OnSelect: =Navigate(settingScreen)
+                        - TitleContainer61:
+                            Control: GroupContainer@1.5.0
+                            Variant: AutoLayout
+                            Properties:
+                              AlignInContainer: =AlignInContainer.Center
+                              DropShadow: =DropShadow.None
+                              LayoutDirection: =LayoutDirection.Vertical
+                              LayoutMaxHeight: =
+                              LayoutMaxWidth: =
+                              LayoutMinWidth: =Container61.Width
+                              PaddingTop: =20
+                              Width: =Parent.Width
+                            Children:
+                              - FeatureItemButton61:
+                                  Control: Button@0.0.45
+                                  Properties:
+                                    AccessibleLabel: ="Featured item button"
+                                    Appearance: ='ButtonCanvas.Appearance'.Transparent
+                                    FontSize: =20
+                                    FontWeight: =FontWeight.Bold
+                                    Layout: ='ButtonCanvas.Layout'.IconBefore
+                                    LayoutMaxHeight: =
+                                    LayoutMaxWidth: =
+                                    LayoutMinWidth: =Parent.Width
+                                    OnSelect: =Select(Icon4)
+                                    Text: ="Settings"
+                                    Width: =Parent.Width
+      - contPleaseWait_1:
+          Control: GroupContainer@1.5.0
+          Variant: ManualLayout
+          Properties:
+            Fill: =RGBA(0, 0, 0, 0.74)
+            Height: =App.Height
+            Visible: =varPleaseWait
+            Width: =App.Width
+          Children:
+            - TextCanvas23_1:
+                Control: Text@0.0.51
+                Properties:
+                  Align: ='TextCanvas.Align'.Center
+                  Font: =Font.'Segoe UI'
+                  FontColor: =RGBA(255, 255, 255, 1)
+                  Height: =75
+                  Size: =50
+                  Text: ="Please wait while we load the data......"
+                  Width: =App.Width
+                  Y: =App.Height/2-Self.Height/2
+      - Spinner_1:
+          Control: GroupContainer@1.5.0
+          Variant: ManualLayout
+          Properties:
+            Fill: =RGBA(255, 255, 255, 1)
+            Height: =App.Height
+            Visible: =callSpinner
+            Width: =App.Width
+          Children:
+            - Image3_4:
+                Control: Image@2.2.3
+                Properties:
+                  BorderColor: =RGBA(0, 0, 0, 0)
+                  BorderStyle: =BorderStyle.None
+                  BorderThickness: =2
+                  DisabledBorderColor: =RGBA(0, 0, 0, 0)
+                  DisabledFill: =RGBA(0, 0, 0, 0)
+                  FocusedBorderThickness: =4
+                  HoverBorderColor: =RGBA(0, 0, 0, 0)
+                  HoverFill: =RGBA(0, 0, 0, 0)
+                  Image: ='Main Scene'
+                  PressedBorderColor: =RGBA(0, 0, 0, 0)
+                  PressedFill: =RGBA(0, 0, 0, 0)
+                  X: =App.Width/2-Self.Width/2
+                  Y: =App.Height/2
+            - Image4_4:
+                Control: Image@2.2.3
+                Properties:
+                  BorderColor: =RGBA(0, 0, 0, 0)
+                  BorderStyle: =BorderStyle.None
+                  BorderThickness: =2
+                  DisabledBorderColor: =RGBA(0, 0, 0, 0)
+                  DisabledFill: =RGBA(0, 0, 0, 0)
+                  FocusedBorderThickness: =4
+                  Height: =131
+                  HoverBorderColor: =RGBA(0, 0, 0, 0)
+                  HoverFill: =RGBA(0, 0, 0, 0)
+                  Image: ='BenoitLogoRegistered-Red'
+                  PressedBorderColor: =RGBA(0, 0, 0, 0)
+                  PressedFill: =RGBA(0, 0, 0, 0)
+                  Width: =329
+                  X: =App.Width/2-Self.Width/2
+                  Y: =187
+            - TextCanvas9_2:
+                Control: Text@0.0.51
+                Properties:
+                  Align: ='TextCanvas.Align'.Center
+                  Height: =47
+                  Size: =20
+                  Text: '="Please wait while we gather data . . . . . ." '
+                  Weight: ='TextCanvas.Weight'.Semibold
+                  Width: =445
+                  X: =App.Width/2-Self.Width/2
+                  Y: =App.Height/2+100
+            - ButtonCanvas25:
+                Control: Button@0.0.45
+                Properties:
+                  Appearance: ='ButtonCanvas.Appearance'.Transparent
+                  FontColor: =RGBA(255, 0, 0, 1)
+                  FontWeight: =FontWeight.Bold
+                  Icon: ="Dismiss"
+                  Layout: ='ButtonCanvas.Layout'.IconOnly
+                  OnSelect: =Set(callSpinner,false)
+                  Text: ="Cancel"
+                  Width: =32
+                  X: =App.Width-Self.Width-5
+                  Y: =App.Height-Self.Height-5

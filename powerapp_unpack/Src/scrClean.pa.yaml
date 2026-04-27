@@ -1,0 +1,56 @@
+# ************************************************************************************************
+# Warning: YAML source code for Canvas Apps should only be used to review changes made within Power Apps Studio and for minor edits (Preview).
+# Use the maker portal to create and edit your Power Apps.
+# 
+# The schema file for Canvas Apps is available at https://go.microsoft.com/fwlink/?linkid=2304907
+# 
+# For more information, visit https://go.microsoft.com/fwlink/?linkid=2292623
+# ************************************************************************************************
+Screens:
+  scrClean:
+    Children:
+      - Rectangle1:
+          Control: Rectangle@2.3.0
+          Properties:
+            Fill: =RGBA(13, 50, 61, 1)
+            Height: =799
+            Width: =1333
+      - dudeCleaningAWindowImage:
+          Control: Image@2.2.3
+          Properties:
+            Fill: =RGBA(255, 255, 255, 1)
+            Height: =800
+            Image: ='2498709'
+            Width: =1333
+      - timCleanScr:
+          Control: Timer@2.1.0
+          Properties:
+            AutoPause: =false
+            AutoStart: =true
+            BorderThickness: =0
+            Color: =RGBA(255, 255, 0, 1)
+            DisplayMode: =DisplayMode.View
+            Duration: =30000
+            Fill: =RGBA(0, 0, 0, 0)
+            Height: =53
+            HoverColor: =RGBA(255, 255, 255, 1)
+            OnTimerEnd: =Back()
+            Size: =15
+            Text: =Text(Time(0, 0, Self.Value/1000), "ss")
+            Visible: =false
+            Width: =48
+            X: =1285
+            Y: =747
+      - cleanScreenTimerTxt:
+          Control: Label@2.5.1
+          Properties:
+            Align: =Align.Center
+            Color: =RGBA(255, 255, 0, 1)
+            Font: =Font.'Lato Light'
+            FontWeight: =FontWeight.Bold
+            Height: =293
+            Size: =120
+            Text: =Text(DateAdd(Today(),-((timCleanScr.Value+(timCleanScr.Duration))/1000), TimeUnit.Seconds),"ss")
+            Width: =297
+            X: =518
+            Y: =253

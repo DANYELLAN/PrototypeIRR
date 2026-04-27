@@ -1,0 +1,60 @@
+# ************************************************************************************************
+# Warning: YAML source code for Canvas Apps should only be used to review changes made within Power Apps Studio and for minor edits (Preview).
+# Use the maker portal to create and edit your Power Apps.
+# 
+# The schema file for Canvas Apps is available at https://go.microsoft.com/fwlink/?linkid=2304907
+# 
+# For more information, visit https://go.microsoft.com/fwlink/?linkid=2292623
+# ************************************************************************************************
+Screens:
+  contactSup_scr:
+    Properties:
+      Fill: =If(vartheme="Light",Color.Cornsilk,varMainFill)
+    Children:
+      - Arrow1_2:
+          Control: Arrow@2.3.0
+          Variant: BackArrow
+          Properties:
+            OnSelect: =Back()
+            X: =20
+            Y: =12
+      - itcomments_txt_1:
+          Control: Classic/TextInput@2.3.2
+          Properties:
+            Default: =""
+            Height: =89
+            HintText: ="What issues are you having"
+            Width: =658
+            X: =328
+            Y: =439
+      - Button3_3:
+          Control: Classic/Button@2.2.0
+          Properties:
+            Color: =RGBA(255, 255, 255, 1)
+            Fill: =RGBA(39, 67, 125, 1)
+            HoverColor: =RGBA(255, 255, 255, 1)
+            OnSelect: |-
+              =/*'PowerAppV2->Postmessageinachatorchannel-3'.Run(Gallery6.Selected.Subtitle4.Text, DataCardValue1.Text);
+              If(
+                  !IsBlank(Gallery6.Selected.'Email to SMS'),
+                  Office365Outlook.SendEmailV2(Gallery6.Selected.'Email to SMS',DataCardValue1.Text &" with "&DataCardValue2.Text& " "&"is in the lobby to see you.","")
+
+              ))*/
+
+              Notify_Super_Teams.Run(LookUp(Users, 'Employee ID' = varCurrentBadge, 'Employee Name'),LookUp(Stations,EmailTest = User().Email,'Machine No'),itcomments_txt_1.Text);
+              Reset(itcomments_txt_1);
+              Notify("Message Sent", NotificationType.Success)
+            Text: ="Submit"
+            X: =577
+            Y: =692
+      - TextCanvas5_2:
+          Control: Text@0.0.51
+          Properties:
+            Font: =Font.'Lato Black'
+            FontColor: =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            Height: =94
+            Size: =40
+            Text: ="Contact Supervisor"
+            Width: =453
+            X: =450
+            Y: =62

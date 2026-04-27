@@ -1,0 +1,1160 @@
+# ************************************************************************************************
+# Warning: YAML source code for Canvas Apps should only be used to review changes made within Power Apps Studio and for minor edits (Preview).
+# Use the maker portal to create and edit your Power Apps.
+# 
+# The schema file for Canvas Apps is available at https://go.microsoft.com/fwlink/?linkid=2304907
+# 
+# For more information, visit https://go.microsoft.com/fwlink/?linkid=2292623
+# ************************************************************************************************
+Screens:
+  scrMaintenanceRequest:
+    Properties:
+      OnVisible: =UpdateContext({varPriority:"Low"})
+    Children:
+      - NewMaintenanceRequest:
+          Control: Form@2.4.4
+          Layout: Vertical
+          Properties:
+            DataSource: ='Ennis Maintenance Request'
+            DefaultMode: =FormMode.New
+            Height: =741
+            NumberOfColumns: =1
+            OnReset: =
+            X: =273
+            Y: =56
+          Children:
+            - Title_DataCard1:
+                Control: TypedDataCard@1.0.7
+                Variant: TextualEdit
+                Properties:
+                  DataField: ="Title"
+                  Default: =ThisItem.Title
+                  DisplayName: =DataSourceInfo([@'Ennis Maintenance Request'],DataSourceInfo.DisplayName,Title)
+                  MaxLength: =DataSourceInfo([@'Ennis Maintenance Request'], DataSourceInfo.MaxLength, Title)
+                  Required: =false
+                  Update: =DataCardValue1.Value
+                  X: =0
+                  Y: =0
+                Children:
+                  - DataCardKey1:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldName
+                      Properties:
+                        Height: =28
+                        Size: =20
+                        Text: ="Needed"
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =Parent.Width - 48
+                        Wrap: =false
+                        X: =24
+                        Y: =10
+                  - DataCardValue1:
+                      Control: TextInput@0.0.54
+                      MetadataKey: FieldValue
+                      Properties:
+                        AccessibleLabel: =Parent.DisplayName
+                        BorderColor: =RGBA(106, 122, 127, 1)
+                        BorderRadius: =5
+                        BorderStyle: =BorderStyle.Solid
+                        BorderThickness: =1
+                        DisplayMode: =Parent.DisplayMode
+                        FontSize: =20
+                        Height: =40
+                        Mode: ="'TextInputCanvas.Mode'.TextInputModeSingleLine"
+                        OnChange: |-
+                          =Set(varResetTimer,true);Set(varRequestTimer,false);
+                          Set(varResetTimer,false);Set(varRequestTimer,true)
+                        Placeholder: ="What needs to be done?"
+                        Required: =Parent.Required
+                        ValidationState: =If(IsBlank(Parent.Error), "None", "Error")
+                        Value: =Parent.Default
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardKey1.Y + DataCardKey1.Height + 4
+                  - ErrorMessage1:
+                      Control: Text@0.0.51
+                      MetadataKey: ErrorMessage
+                      Properties:
+                        Height: =30
+                        Text: =Parent.Error
+                        Visible: =And(!IsBlank(Parent.Error), Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardValue1.Y + DataCardValue1.Height
+                  - StarVisible1:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldRequired
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Height: =30
+                        Text: ="*"
+                        Visible: =And(Parent.Required, Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =30
+                        Y: =DataCardKey1.Y
+                  - Image4:
+                      Control: Image@2.2.3
+                      Properties:
+                        Height: =24
+                        Image: ='Green Checkmark'
+                        Visible: =!IsBlank(DataCardValue1.Value)
+                        Width: =24
+            - Description_DataCard1:
+                Control: TypedDataCard@1.0.7
+                Variant: TextualEdit
+                Properties:
+                  DataField: ="Description"
+                  Default: =ThisItem.Description
+                  DisplayName: =DataSourceInfo([@'Ennis Maintenance Request'],DataSourceInfo.DisplayName,Description)
+                  Height: =193
+                  MaxLength: =DataSourceInfo([@'Ennis Maintenance Request'], DataSourceInfo.MaxLength, Description)
+                  Required: =false
+                  Update: =DataCardValue2.Value
+                  X: =0
+                  Y: =1
+                Children:
+                  - DataCardKey2:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldName
+                      Properties:
+                        Font: =Font.'Segoe UI'
+                        Height: =28
+                        Size: =20
+                        Text: =Parent.DisplayName
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =Parent.Width - 48
+                        Wrap: =false
+                        X: =24
+                        Y: =10
+                  - DataCardValue2:
+                      Control: TextInput@0.0.54
+                      MetadataKey: FieldValue
+                      Properties:
+                        AccessibleLabel: =Parent.DisplayName
+                        BorderColor: =RGBA(106, 122, 127, 1)
+                        BorderRadius: =5
+                        BorderStyle: =BorderStyle.Solid
+                        BorderThickness: =1
+                        DisplayMode: =Parent.DisplayMode
+                        Font: =Font.'Segoe UI'
+                        FontSize: =20
+                        Height: =136
+                        Mode: ='TextInputCanvas.Mode'.Multiline
+                        OnChange: |-
+                          =Set(varResetTimer,true);Set(varRequestTimer,false);
+                          Set(varResetTimer,false);Set(varRequestTimer,true)
+                        Placeholder: ="Add a description"
+                        Required: =Parent.Required
+                        ValidationState: =If(IsBlank(Parent.Error), "None", "Error")
+                        Value: =Parent.Default
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardKey2.Y + DataCardKey2.Height + 4
+                  - ErrorMessage2:
+                      Control: Text@0.0.51
+                      MetadataKey: ErrorMessage
+                      Properties:
+                        Height: =30
+                        Text: =Parent.Error
+                        Visible: =And(!IsBlank(Parent.Error), Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardValue2.Y + DataCardValue2.Height
+                  - StarVisible2:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldRequired
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Height: =30
+                        Text: ="*"
+                        Visible: =And(Parent.Required, Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =30
+                        Y: =DataCardKey2.Y
+                  - Image4_1:
+                      Control: Image@2.2.3
+                      Properties:
+                        Height: =27
+                        Image: ='Green Checkmark'
+                        Visible: =!IsBlank(DataCardValue2.Value)
+                        Width: =24
+            - Priority_DataCard1:
+                Control: TypedDataCard@1.0.7
+                Variant: ComboBoxEdit
+                Properties:
+                  DataField: ="Priority"
+                  Default: =ThisItem.Priority
+                  DisplayName: =DataSourceInfo([@'Ennis Maintenance Request'],DataSourceInfo.DisplayName,Priority)
+                  Height: =90
+                  Required: =false
+                  Update: ={Value:varPriority}
+                  X: =0
+                  Y: =2
+                Children:
+                  - DataCardKey3:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldName
+                      Properties:
+                        Font: =Font.'Segoe UI'
+                        Height: =28
+                        Size: =20
+                        Text: =Parent.DisplayName
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =Parent.Width - 48
+                        Wrap: =false
+                        X: =24
+                        Y: =10
+                  - ErrorMessage3:
+                      Control: Text@0.0.51
+                      MetadataKey: ErrorMessage
+                      Properties:
+                        Height: =30
+                        Text: =Parent.Error
+                        Visible: =And(!IsBlank(Parent.Error), Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: '=10  '
+                  - StarVisible3:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldRequired
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Height: =20
+                        Text: ="*"
+                        Visible: =And(Parent.Required, Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =30
+                        Y: =DataCardKey3.Y
+                  - ButtonCanvas9_1:
+                      Control: Button@0.0.45
+                      Properties:
+                        Appearance: =If(varPriority=Self.Text,'ButtonCanvas.Appearance'.Primary,'ButtonCanvas.Appearance'.Outline)
+                        BasePaletteColor: =RGBA(0, 204, 255, 1)
+                        BorderRadius: =5
+                        Font: =Font.'Segoe UI'
+                        FontSize: =20
+                        Height: =40
+                        OnSelect: |-
+                          =UpdateContext({varPriority:Self.Text});Set(varResetTimer,true);Set(varRequestTimer,false);
+                          Set(varResetTimer,false);Set(varRequestTimer,true)
+                        Text: ="Low"
+                        X: =24
+                        Y: =40
+                  - ButtonCanvas9_2:
+                      Control: Button@0.0.45
+                      Properties:
+                        Appearance: =If(varPriority=Self.Text,'ButtonCanvas.Appearance'.Primary,'ButtonCanvas.Appearance'.Outline)
+                        BasePaletteColor: =RGBA(0, 204, 255, 1)
+                        BorderRadius: =5
+                        Font: =Font.'Segoe UI'
+                        FontSize: =20
+                        Height: =40
+                        OnSelect: |-
+                          =UpdateContext({varPriority:Self.Text});Set(varResetTimer,true);Set(varRequestTimer,false);
+                          Set(varResetTimer,false);Set(varRequestTimer,true)
+                        Text: ="Medium"
+                        X: =136
+                        Y: =40
+                  - ButtonCanvas9_3:
+                      Control: Button@0.0.45
+                      Properties:
+                        Appearance: =If(varPriority=Self.Text,'ButtonCanvas.Appearance'.Primary,'ButtonCanvas.Appearance'.Outline)
+                        BasePaletteColor: =RGBA(0, 204, 255, 1)
+                        BorderRadius: =5
+                        Font: =Font.'Segoe UI'
+                        FontSize: =20
+                        Height: =40
+                        OnSelect: |-
+                          =UpdateContext({varPriority:Self.Text});Set(varResetTimer,true);Set(varRequestTimer,false);
+                          Set(varResetTimer,false);Set(varRequestTimer,true)
+                        Text: ="High"
+                        X: =249
+                        Y: =40
+            - Status_DataCard1:
+                Control: TypedDataCard@1.0.7
+                Variant: TextualEdit
+                IsLocked: true
+                Properties:
+                  DataField: ="Status"
+                  Default: =ThisItem.Status
+                  DisplayName: =DataSourceInfo([@'Ennis Maintenance Request'],DataSourceInfo.DisplayName,Status)
+                  MaxLength: =DataSourceInfo([@'Ennis Maintenance Request'], DataSourceInfo.MaxLength, Status)
+                  Required: =false
+                  Update: =DataCardValue4.Value
+                  Visible: =false
+                  X: =0
+                  Y: =3
+                Children:
+                  - DataCardKey4:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldName
+                      Properties:
+                        Height: =22
+                        Text: =Parent.DisplayName
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =Parent.Width - 48
+                        Wrap: =false
+                        X: =24
+                        Y: =10
+                  - DataCardValue4:
+                      Control: TextInput@0.0.54
+                      MetadataKey: FieldValue
+                      Properties:
+                        AccessibleLabel: =Parent.DisplayName
+                        DisplayMode: =Parent.DisplayMode
+                        Mode: ="'TextInputCanvas.Mode'.TextInputModeSingleLine"
+                        Required: =Parent.Required
+                        ValidationState: =If(IsBlank(Parent.Error), "None", "Error")
+                        Value: =Parent.Default
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardKey4.Y + DataCardKey4.Height + 4
+                  - ErrorMessage4:
+                      Control: Text@0.0.51
+                      MetadataKey: ErrorMessage
+                      Properties:
+                        Height: =30
+                        Text: =Parent.Error
+                        Visible: =And(!IsBlank(Parent.Error), Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardValue4.Y + DataCardValue4.Height
+                  - StarVisible4:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldRequired
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Height: =30
+                        Text: ="*"
+                        Visible: =And(Parent.Required, Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =30
+                        Y: =DataCardKey4.Y
+            - WO Type_DataCard1:
+                Control: TypedDataCard@1.0.7
+                Variant: TextualEdit
+                IsLocked: true
+                Properties:
+                  DataField: ="WO_x0020_Type"
+                  Default: =ThisItem.'WO Type'
+                  DisplayName: =DataSourceInfo([@'Ennis Maintenance Request'],DataSourceInfo.DisplayName,WO_x0020_Type)
+                  MaxLength: =DataSourceInfo([@'Ennis Maintenance Request'], DataSourceInfo.MaxLength, WO_x0020_Type)
+                  Required: =false
+                  Update: =DataCardValue5.Value
+                  Visible: =false
+                  X: =0
+                  Y: =4
+                Children:
+                  - DataCardKey5:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldName
+                      Properties:
+                        Height: =22
+                        Text: =Parent.DisplayName
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =Parent.Width - 48
+                        Wrap: =false
+                        X: =24
+                        Y: =10
+                  - DataCardValue5:
+                      Control: TextInput@0.0.54
+                      MetadataKey: FieldValue
+                      Properties:
+                        AccessibleLabel: =Parent.DisplayName
+                        DisplayMode: =Parent.DisplayMode
+                        Mode: ="'TextInputCanvas.Mode'.TextInputModeSingleLine"
+                        Required: =Parent.Required
+                        ValidationState: =If(IsBlank(Parent.Error), "None", "Error")
+                        Value: =Parent.Default
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardKey5.Y + DataCardKey5.Height + 4
+                  - ErrorMessage5:
+                      Control: Text@0.0.51
+                      MetadataKey: ErrorMessage
+                      Properties:
+                        Height: =30
+                        Text: =Parent.Error
+                        Visible: =And(!IsBlank(Parent.Error), Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardValue5.Y + DataCardValue5.Height
+                  - StarVisible5:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldRequired
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Height: =30
+                        Text: ="*"
+                        Visible: =And(Parent.Required, Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =30
+                        Y: =DataCardKey5.Y
+            - Sequential Id_DataCard1:
+                Control: TypedDataCard@1.0.7
+                Variant: NumberEdit
+                IsLocked: true
+                Properties:
+                  DataField: ="Sequential_x0020_Id"
+                  Default: =ThisItem.'Sequential Id'
+                  DisplayName: =DataSourceInfo([@'Ennis Maintenance Request'],DataSourceInfo.DisplayName,Sequential_x0020_Id)
+                  Required: =false
+                  Update: =Value(DataCardValue6.Value)
+                  Visible: =false
+                  X: =0
+                  Y: =5
+                Children:
+                  - DataCardKey6:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldName
+                      Properties:
+                        Height: =22
+                        Text: =Parent.DisplayName
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =Parent.Width - 48
+                        Wrap: =false
+                        X: =24
+                        Y: =10
+                  - DataCardValue6:
+                      Control: NumberInput@2.9.12
+                      MetadataKey: FieldValue
+                      Properties:
+                        AccessibleLabel: =Parent.DisplayName
+                        DisplayMode: =Parent.DisplayMode
+                        Max: =Blank()
+                        Min: =Blank()
+                        ValidationState: =If(IsBlank(Parent.Error), "None", "Error")
+                        Value: =Parent.Default
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardKey6.Y + DataCardKey6.Height + 4
+                  - ErrorMessage6:
+                      Control: Text@0.0.51
+                      MetadataKey: ErrorMessage
+                      Properties:
+                        Height: =30
+                        Text: =Parent.Error
+                        Visible: =And(!IsBlank(Parent.Error), Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardValue6.Y + DataCardValue6.Height
+                  - StarVisible6:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldRequired
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Height: =30
+                        Text: ="*"
+                        Visible: =And(Parent.Required, Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =30
+                        Y: =DataCardKey6.Y
+            - Asset ID_DataCard1:
+                Control: TypedDataCard@1.0.7
+                Variant: NumberEdit
+                IsLocked: true
+                Properties:
+                  DataField: ="Asset_x0020_ID"
+                  Default: =ThisItem.'Asset ID'
+                  DisplayName: =DataSourceInfo([@'Ennis Maintenance Request'],DataSourceInfo.DisplayName,Asset_x0020_ID)
+                  Required: =false
+                  Update: =Value(DataCardValue7.Value)
+                  Visible: =false
+                  X: =0
+                  Y: =6
+                Children:
+                  - DataCardKey7:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldName
+                      Properties:
+                        Height: =22
+                        Text: =Parent.DisplayName
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =Parent.Width - 48
+                        Wrap: =false
+                        X: =24
+                        Y: =10
+                  - DataCardValue7:
+                      Control: NumberInput@2.9.12
+                      MetadataKey: FieldValue
+                      Properties:
+                        AccessibleLabel: =Parent.DisplayName
+                        DisplayMode: =Parent.DisplayMode
+                        Max: =Blank()
+                        Min: =Blank()
+                        ValidationState: =If(IsBlank(Parent.Error), "None", "Error")
+                        Value: =dpAsset.Selected.'Asset Id'
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardKey7.Y + DataCardKey7.Height + 4
+                  - ErrorMessage7:
+                      Control: Text@0.0.51
+                      MetadataKey: ErrorMessage
+                      Properties:
+                        Height: =30
+                        Text: =Parent.Error
+                        Visible: =And(!IsBlank(Parent.Error), Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardValue7.Y + DataCardValue7.Height
+                  - StarVisible7:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldRequired
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Height: =30
+                        Text: ="*"
+                        Visible: =And(Parent.Required, Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =30
+                        Y: =DataCardKey7.Y
+            - Location ID_DataCard1:
+                Control: TypedDataCard@1.0.7
+                Variant: NumberEdit
+                IsLocked: true
+                Properties:
+                  DataField: ="Location_x0020_ID"
+                  Default: =ThisItem.'Location ID'
+                  DisplayName: =DataSourceInfo([@'Ennis Maintenance Request'],DataSourceInfo.DisplayName,Location_x0020_ID)
+                  Required: =false
+                  Update: =Value(DataCardValue8.Value)
+                  Visible: =false
+                  X: =0
+                  Y: =7
+                Children:
+                  - DataCardKey8:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldName
+                      Properties:
+                        Height: =22
+                        Text: =Parent.DisplayName
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =Parent.Width - 48
+                        Wrap: =false
+                        X: =24
+                        Y: =10
+                  - DataCardValue8:
+                      Control: NumberInput@2.9.12
+                      MetadataKey: FieldValue
+                      Properties:
+                        AccessibleLabel: =Parent.DisplayName
+                        DisplayMode: =Parent.DisplayMode
+                        Max: =Blank()
+                        Min: =Blank()
+                        ValidationState: =If(IsBlank(Parent.Error), "None", "Error")
+                        Value: =dpLocation.Selected.LocationID
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardKey8.Y + DataCardKey8.Height + 4
+                  - ErrorMessage8:
+                      Control: Text@0.0.51
+                      MetadataKey: ErrorMessage
+                      Properties:
+                        Height: =30
+                        Text: =Parent.Error
+                        Visible: =And(!IsBlank(Parent.Error), Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardValue8.Y + DataCardValue8.Height
+                  - StarVisible8:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldRequired
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Height: =30
+                        Text: ="*"
+                        Visible: =And(Parent.Required, Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =30
+                        Y: =DataCardKey8.Y
+            - Organization ID_DataCard1:
+                Control: TypedDataCard@1.0.7
+                Variant: NumberEdit
+                IsLocked: true
+                Properties:
+                  DataField: ="Organization_x0020_ID"
+                  Default: =ThisItem.'Organization ID'
+                  DisplayName: =DataSourceInfo([@'Ennis Maintenance Request'],DataSourceInfo.DisplayName,Organization_x0020_ID)
+                  Required: =false
+                  Update: =Value(DataCardValue9.Value)
+                  Visible: =false
+                  X: =0
+                  Y: =8
+                Children:
+                  - DataCardKey9:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldName
+                      Properties:
+                        Height: =22
+                        Text: =Parent.DisplayName
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =Parent.Width - 48
+                        Wrap: =false
+                        X: =24
+                        Y: =10
+                  - DataCardValue9:
+                      Control: NumberInput@2.9.12
+                      MetadataKey: FieldValue
+                      Properties:
+                        AccessibleLabel: =Parent.DisplayName
+                        DisplayMode: =Parent.DisplayMode
+                        Max: =Blank()
+                        Min: =Blank()
+                        ValidationState: =If(IsBlank(Parent.Error), "None", "Error")
+                        Value: =Parent.Default
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardKey9.Y + DataCardKey9.Height + 4
+                  - ErrorMessage9:
+                      Control: Text@0.0.51
+                      MetadataKey: ErrorMessage
+                      Properties:
+                        Height: =30
+                        Text: =Parent.Error
+                        Visible: =And(!IsBlank(Parent.Error), Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardValue9.Y + DataCardValue9.Height
+                  - StarVisible9:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldRequired
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Height: =30
+                        Text: ="*"
+                        Visible: =And(Parent.Required, Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =30
+                        Y: =DataCardKey9.Y
+            - Requester_DataCard1:
+                Control: TypedDataCard@1.0.7
+                Variant: TextualEdit
+                Properties:
+                  DataField: ="Requester"
+                  Default: =ThisItem.Requester
+                  DisplayName: =DataSourceInfo([@'Ennis Maintenance Request'],DataSourceInfo.DisplayName,Requester)
+                  MaxLength: =DataSourceInfo([@'Ennis Maintenance Request'], DataSourceInfo.MaxLength, Requester)
+                  Required: =false
+                  Update: =DataCardValue10.Value
+                  Visible: =false
+                  X: =0
+                  Y: =9
+                Children:
+                  - DataCardKey10:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldName
+                      Properties:
+                        Height: =22
+                        Text: =Parent.DisplayName
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =Parent.Width - 48
+                        Wrap: =false
+                        X: =24
+                        Y: =10
+                  - DataCardValue10:
+                      Control: TextInput@0.0.54
+                      MetadataKey: FieldValue
+                      Properties:
+                        AccessibleLabel: =Parent.DisplayName
+                        DisplayMode: =Parent.DisplayMode
+                        Mode: ="'TextInputCanvas.Mode'.TextInputModeSingleLine"
+                        Required: =Parent.Required
+                        ValidationState: =If(IsBlank(Parent.Error), "None", "Error")
+                        Value: =varRequester
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardKey10.Y + DataCardKey10.Height + 4
+                  - ErrorMessage10:
+                      Control: Text@0.0.51
+                      MetadataKey: ErrorMessage
+                      Properties:
+                        Height: =30
+                        Text: =Parent.Error
+                        Visible: =And(!IsBlank(Parent.Error), Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardValue10.Y + DataCardValue10.Height
+                  - StarVisible10:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldRequired
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Height: =30
+                        Text: ="*"
+                        Visible: =And(Parent.Required, Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =30
+                        Y: =DataCardKey10.Y
+            - Requester ID_DataCard1:
+                Control: TypedDataCard@1.0.7
+                Variant: TextualEdit
+                Properties:
+                  DataField: ="Requester_x0020_ID"
+                  Default: =ThisItem.'Requester ID'
+                  DisplayName: =DataSourceInfo([@'Ennis Maintenance Request'],DataSourceInfo.DisplayName,Requester_x0020_ID)
+                  MaxLength: =DataSourceInfo([@'Ennis Maintenance Request'], DataSourceInfo.MaxLength, Requester_x0020_ID)
+                  Required: =false
+                  Update: =DataCardValue11.Value
+                  Visible: =false
+                  X: =0
+                  Y: =10
+                Children:
+                  - DataCardKey11:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldName
+                      Properties:
+                        Height: =22
+                        Text: =Parent.DisplayName
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =Parent.Width - 48
+                        Wrap: =false
+                        X: =24
+                        Y: =10
+                  - DataCardValue11:
+                      Control: TextInput@0.0.54
+                      MetadataKey: FieldValue
+                      Properties:
+                        AccessibleLabel: =Parent.DisplayName
+                        DisplayMode: =Parent.DisplayMode
+                        Mode: ="'TextInputCanvas.Mode'.TextInputModeSingleLine"
+                        Required: =Parent.Required
+                        ValidationState: =If(IsBlank(Parent.Error), "None", "Error")
+                        Value: =varRequesterID
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardKey11.Y + DataCardKey11.Height + 4
+                  - ErrorMessage11:
+                      Control: Text@0.0.51
+                      MetadataKey: ErrorMessage
+                      Properties:
+                        Height: =30
+                        Text: =Parent.Error
+                        Visible: =And(!IsBlank(Parent.Error), Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardValue11.Y + DataCardValue11.Height
+                  - StarVisible11:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldRequired
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Height: =30
+                        Text: ="*"
+                        Visible: =And(Parent.Required, Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =30
+                        Y: =DataCardKey11.Y
+            - DataCard1:
+                Control: TypedDataCard@1.0.7
+                Variant: BlankCard
+                Properties:
+                  Height: =125
+                  X: =0
+                  Y: =11
+                Children:
+                  - TextInputCanvas1:
+                      Control: TextInput@0.0.54
+                      Properties:
+                        Appearance: ='TextInputCanvas.Appearance'.Outline
+                        BorderColor: =RGBA(106, 122, 127, 1)
+                        BorderRadius: =5
+                        BorderStyle: =BorderStyle.Solid
+                        BorderThickness: =1
+                        Font: =Font.'Segoe UI'
+                        FontSize: =20
+                        Height: =54
+                        OnChange: |-
+                          =Set(varResetTimer,true);Set(varRequestTimer,false);
+                          Set(varResetTimer,false);Set(varRequestTimer,true)
+                        Placeholder: |-
+                          ="Enter your ADP #"
+                        TriggerOutput: ='TextInputCanvas.TriggerOutput'.Keypress
+                        Type: ='TextInputCanvas.Type'.Search
+                        Visible: =Switch(varRequester,"",true,"Can't Find Employee",false)
+                        Width: =202
+                        X: =26
+                        Y: =57
+                  - DataCardKey3_1:
+                      Control: Text@0.0.51
+                      Properties:
+                        Font: =Font.'Segoe UI'
+                        Height: =28
+                        Size: =20
+                        Text: ="Requester"
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =125
+                        Wrap: =false
+                        X: =26
+                        Y: =26
+                  - TextCanvas21_1:
+                      Control: Text@0.0.51
+                      Properties:
+                        Align: ='TextCanvas.Align'.Start
+                        Font: =Font.'Segoe UI'
+                        FontColor: =Switch(varRequester,"Can't Find Employee",Color.Red,Color.Green)
+                        Height: =38
+                        Size: =20
+                        Text: =varRequester
+                        VerticalAlign: =VerticalAlign.Bottom
+                        Visible: =Switch(varRequester,"",false,"Can't Find Employee",true,!IsBlank(varRequester))
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =312
+                        X: =26
+                        Y: =57
+                  - ButtonCanvas14:
+                      Control: Button@0.0.45
+                      Properties:
+                        Appearance: ='ButtonCanvas.Appearance'.Transparent
+                        FontSize: =40
+                        Height: =54
+                        Icon: ="Search"
+                        IconStyle: ='ButtonCanvas.IconStyle'.Filled
+                        OnSelect: |-
+                          =Set(varRequesterID,TextInputCanvas1.Value);Set(varRequester,If(IsBlank(LookUp(colEmployees ,TextInputCanvas1.Value=ADPEmpNumber,'Full Name')),"Can't Find Employee",LookUp(colEmployees ,TextInputCanvas1.Value=ADPEmpNumber,'Full Name')));Set(varResetTimer,true);Set(varRequestTimer,false);
+                          Set(varResetTimer,false);Set(varRequestTimer,true);Reset(TextInputCanvas1)
+                        Text: =
+                        Visible: =Switch(varRequester,"",true,"Can't Find Employee",false)
+                        Width: =45
+                        X: =228
+                        Y: =57
+                  - ButtonCanvas15:
+                      Control: Button@0.0.45
+                      Properties:
+                        Appearance: ='ButtonCanvas.Appearance'.Transparent
+                        Height: =28
+                        Icon: ="ArrowReset"
+                        IconStyle: ='ButtonCanvas.IconStyle'.Filled
+                        Layout: ='ButtonCanvas.Layout'.IconOnly
+                        OnSelect: |-
+                          =Set(varRequester,"");Reset(TextInputCanvas1);Set(varResetTimer,true);Set(varRequestTimer,false);
+                          Set(varResetTimer,false);Set(varRequestTimer,true)
+                        Width: =28
+                        X: =123
+                        Y: =26
+                  - Image4_2:
+                      Control: Image@2.2.3
+                      Properties:
+                        Height: =26
+                        Image: ='Green Checkmark'
+                        Visible: =Switch(varRequester,"",false,"Can't Find Employee",false,true)
+                        Width: =26
+            - DataCard2:
+                Control: TypedDataCard@1.0.7
+                Variant: BlankCard
+                Properties:
+                  Height: =113
+                  X: =0
+                  Y: =12
+                Children:
+                  - dpLocation:
+                      Control: DropDown@0.0.45
+                      Properties:
+                        BorderColor: =RGBA(106, 122, 127, 1)
+                        BorderRadius: =5
+                        BorderStyle: =BorderStyle.Solid
+                        BorderThickness: =1
+                        FontSize: =20
+                        Height: =43
+                        Items: =colEnnisAssetLocations
+                        OnChange: |-
+                          =Set(varResetTimer,true);Set(varRequestTimer,false);
+                          Set(varResetTimer,false);Set(varRequestTimer,true)
+                        Width: =264
+                        X: =26
+                        Y: =48
+                      Children:
+                        - Title2:
+                            Control: DropDownDataField@1.5.0
+                            Variant: textualColumn
+                            IsLocked: true
+                            Properties:
+                              FieldDisplayName: ="Title"
+                              FieldName: ="Title"
+                              FieldType: ="s"
+                              Order: =1
+                  - dpAsset:
+                      Control: DropDown@0.0.45
+                      Properties:
+                        BorderColor: =RGBA(106, 122, 127, 1)
+                        BorderRadius: =5
+                        BorderStyle: =BorderStyle.Solid
+                        BorderThickness: =1
+                        FontSize: =20
+                        Height: =43
+                        Items: =Filter(colEnnisAssets,'Location Id'=dpLocation.Selected.LocationID)
+                        OnChange: |-
+                          =Set(varResetTimer,true);Set(varRequestTimer,false);
+                          Set(varResetTimer,false);Set(varRequestTimer,true)
+                        Width: =264
+                        X: =339
+                        Y: =48
+                      Children:
+                        - '{Name}1':
+                            Control: DropDownDataField@1.5.0
+                            Variant: textualColumn
+                            IsLocked: true
+                            Properties:
+                              FieldDisplayName: ="{Name}"
+                              FieldName: ="{Name}"
+                              FieldType: ="s"
+                              Order: =1
+                  - DataCardKey3_2:
+                      Control: Text@0.0.51
+                      Properties:
+                        Font: =Font.'Segoe UI'
+                        Height: =28
+                        Size: =20
+                        Text: ="Location"
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =125
+                        Wrap: =false
+                        X: =26
+                        Y: =20
+                  - DataCardKey3_3:
+                      Control: Text@0.0.51
+                      Properties:
+                        Font: =Font.'Segoe UI'
+                        Height: =28
+                        Size: =20
+                        Text: ="Asset"
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =125
+                        Wrap: =false
+                        X: =339
+                        Y: =20
+            - Asset_DataCard1:
+                Control: TypedDataCard@1.0.7
+                Variant: TextualEdit
+                Properties:
+                  DataField: ="Asset"
+                  Default: =ThisItem.Asset
+                  DisplayName: =DataSourceInfo([@'Ennis Maintenance Request'],DataSourceInfo.DisplayName,'Asset')
+                  MaxLength: =DataSourceInfo([@'Ennis Maintenance Request'], DataSourceInfo.MaxLength, 'Asset')
+                  Required: =false
+                  Update: =DataCardValue3.Value
+                  Visible: =false
+                  X: =0
+                  Y: =13
+                Children:
+                  - DataCardKey12:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldName
+                      Properties:
+                        Height: =22
+                        Text: =Parent.DisplayName
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =Parent.Width - 48
+                        Wrap: =false
+                        X: =24
+                        Y: =10
+                  - DataCardValue3:
+                      Control: TextInput@0.0.54
+                      MetadataKey: FieldValue
+                      Properties:
+                        AccessibleLabel: =Parent.DisplayName
+                        DisplayMode: =Parent.DisplayMode
+                        Mode: ="'TextInputCanvas.Mode'.TextInputModeSingleLine"
+                        Required: =Parent.Required
+                        ValidationState: =If(IsBlank(Parent.Error), "None", "Error")
+                        Value: =dpAsset.Selected.Title
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardKey12.Y + DataCardKey12.Height + 4
+                  - ErrorMessage12:
+                      Control: Text@0.0.51
+                      MetadataKey: ErrorMessage
+                      Properties:
+                        Height: =30
+                        Text: =Parent.Error
+                        Visible: =And(!IsBlank(Parent.Error), Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardValue3.Y + DataCardValue3.Height
+                  - StarVisible12:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldRequired
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Height: =30
+                        Text: ="*"
+                        Visible: =And(Parent.Required, Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =30
+                        Y: =DataCardKey12.Y
+            - Location_DataCard1:
+                Control: TypedDataCard@1.0.7
+                Variant: TextualEdit
+                Properties:
+                  DataField: ="Location"
+                  Default: =ThisItem.Location
+                  DisplayName: =DataSourceInfo([@'Ennis Maintenance Request'],DataSourceInfo.DisplayName,'Location')
+                  MaxLength: =DataSourceInfo([@'Ennis Maintenance Request'], DataSourceInfo.MaxLength, 'Location')
+                  Required: =false
+                  Update: =DataCardValue12.Value
+                  Visible: =false
+                  X: =0
+                  Y: =14
+                Children:
+                  - DataCardKey13:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldName
+                      Properties:
+                        Height: =22
+                        Text: =Parent.DisplayName
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =Parent.Width - 48
+                        Wrap: =false
+                        X: =24
+                        Y: =10
+                  - DataCardValue12:
+                      Control: TextInput@0.0.54
+                      MetadataKey: FieldValue
+                      Properties:
+                        AccessibleLabel: =Parent.DisplayName
+                        DisplayMode: =Parent.DisplayMode
+                        Mode: ="'TextInputCanvas.Mode'.TextInputModeSingleLine"
+                        Required: =Parent.Required
+                        ValidationState: =If(IsBlank(Parent.Error), "None", "Error")
+                        Value: =dpLocation.Selected.Title
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardKey13.Y + DataCardKey13.Height + 4
+                  - ErrorMessage13:
+                      Control: Text@0.0.51
+                      MetadataKey: ErrorMessage
+                      Properties:
+                        Height: =30
+                        Text: =Parent.Error
+                        Visible: =And(!IsBlank(Parent.Error), Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardValue12.Y + DataCardValue12.Height
+                  - StarVisible13:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldRequired
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Height: =30
+                        Text: ="*"
+                        Visible: =And(Parent.Required, Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =30
+                        Y: =DataCardKey13.Y
+            - Tablet Email_DataCard1:
+                Control: TypedDataCard@1.0.7
+                Variant: TextualEdit
+                Properties:
+                  DataField: ="TabletEmail"
+                  Default: =ThisItem.'Tablet Email'
+                  DisplayName: =DataSourceInfo([@'Ennis Maintenance Request'],DataSourceInfo.DisplayName,'TabletEmail')
+                  MaxLength: =DataSourceInfo([@'Ennis Maintenance Request'], DataSourceInfo.MaxLength, 'TabletEmail')
+                  Required: =false
+                  Update: =DataCardValue13.Value
+                  Visible: =false
+                  X: =0
+                  Y: =15
+                Children:
+                  - DataCardKey14:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldName
+                      Properties:
+                        Height: =22
+                        Text: =Parent.DisplayName
+                        Weight: ='TextCanvas.Weight'.Semibold
+                        Width: =Parent.Width - 48
+                        Wrap: =false
+                        X: =24
+                        Y: =10
+                  - DataCardValue13:
+                      Control: TextInput@0.0.54
+                      MetadataKey: FieldValue
+                      Properties:
+                        AccessibleLabel: =Parent.DisplayName
+                        DisplayMode: =Parent.DisplayMode
+                        Mode: ="'TextInputCanvas.Mode'.TextInputModeSingleLine"
+                        Required: =Parent.Required
+                        ValidationState: =If(IsBlank(Parent.Error), "None", "Error")
+                        Value: =varUserDetails.mail
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardKey14.Y + DataCardKey14.Height + 4
+                  - ErrorMessage14:
+                      Control: Text@0.0.51
+                      MetadataKey: ErrorMessage
+                      Properties:
+                        Height: =30
+                        Text: =Parent.Error
+                        Visible: =And(!IsBlank(Parent.Error), Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =Parent.Width - 48
+                        X: =24
+                        Y: =DataCardValue13.Y + DataCardValue13.Height
+                  - StarVisible14:
+                      Control: Text@0.0.51
+                      MetadataKey: FieldRequired
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Height: =30
+                        Text: ="*"
+                        Visible: =And(Parent.Required, Parent.DisplayMode=DisplayMode.Edit)
+                        Width: =30
+                        Y: =DataCardKey14.Y
+      - ButtonCanvas12:
+          Control: Button@0.0.45
+          Properties:
+            Appearance: ='ButtonCanvas.Appearance'.Primary
+            BasePaletteColor: =RGBA(0, 204, 255, 1)
+            BorderRadius: =5
+            DisplayMode: =If((Image4.Visible && Image4_1.Visible && Image4_2.Visible)=true,DisplayMode.Edit,DisplayMode.Disabled)
+            Font: =Font.'Segoe UI'
+            FontColor: =RGBA(255, 255, 255, 1)
+            FontSize: =20
+            Height: =40
+            IconStyle: ='ButtonCanvas.IconStyle'.Outline
+            OnSelect: =SubmitForm(NewMaintenanceRequest);Set(varRequester,"");Set(varResetTimer,true);Set(varRequestTimer,false);Set(varRequester,"");Back()//Navigate(scanBadge_scr,ScreenTransition.UnCover)
+            Text: ="Submit"
+            X: =52
+            Y: =181
+      - TextCanvas19:
+          Control: Text@0.0.51
+          Properties:
+            Align: ='TextCanvas.Align'.Center
+            Font: =Font.'Lato Black'
+            FontColor: =RGBA(106, 122, 127, 1)
+            Height: =44
+            Size: =30
+            Text: ="Maintenance Request Form"
+            Width: =App.Width
+            Y: =15
+      - Timer2:
+          Control: Timer@2.1.0
+          Properties:
+            Duration: =300000
+            OnTimerEnd: =Select(btnCancelRequest)
+            Reset: =varResetTimer
+            Start: =varRequestTimer
+            Visible: =false
+            X: =30
+            Y: =59
+      - btnCancelRequest:
+          Control: Button@0.0.45
+          Properties:
+            BasePaletteColor: =RGBA(0, 204, 255, 1)
+            BorderRadius: =5
+            Font: =Font.'Segoe UI'
+            FontColor: =RGBA(255, 255, 255, 1)
+            FontSize: =20
+            Height: =40
+            OnSelect: |
+              =ResetForm(NewMaintenanceRequest);Set(varRequester,"");Set(varResetTimer,true);Set(varRequestTimer,false);Back() //Navigate(scanBadge_scr,ScreenTransition.UnCover)
+            Text: ="Cancel"
+            X: =52
+            Y: =255
+      - lbCountDown_2:
+          Control: Label@2.5.1
+          Properties:
+            Align: =Align.Center
+            BorderColor: =RGBA(187, 221, 140, 1)
+            Color: =RGBA(255, 0, 0, 1)
+            DisplayMode: =DisplayMode.View
+            Size: =26.04
+            Text: |
+              =Text(DateAdd(DateTimeValue(Today()&" 12:"&"05"&":00"),-Timer2.Value/1000,TimeUnit.Seconds),"mm:ss")
+            Width: =116
+            X: =52
+            Y: =59
+      - ButtonCanvas13:
+          Control: Button@0.0.45
+          Properties:
+            Appearance: ='ButtonCanvas.Appearance'.Secondary
+            Icon: ="ArrowReset"
+            OnSelect: =ResetForm(NewMaintenanceRequest);Set(varRequester,"")
+            Text: ="Reset"
+            X: =1171
+            Y: =56

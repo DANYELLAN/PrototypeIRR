@@ -1,0 +1,101 @@
+# ************************************************************************************************
+# Warning: YAML source code for Canvas Apps should only be used to review changes made within Power Apps Studio and for minor edits (Preview).
+# Use the maker portal to create and edit your Power Apps.
+# 
+# The schema file for Canvas Apps is available at https://go.microsoft.com/fwlink/?linkid=2304907
+# 
+# For more information, visit https://go.microsoft.com/fwlink/?linkid=2292623
+# ************************************************************************************************
+Screens:
+  settingScreen:
+    Properties:
+      Fill: =If(vartheme="Light",Color.Cornsilk,varMainFill)
+    Children:
+      - TextCanvas3:
+          Control: Text@0.0.51
+          Properties:
+            FontColor: =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            Height: =129
+            Size: =30
+            Text: ="Settings"
+            Width: =139
+            X: =522
+            Y: =1
+      - Toggle1:
+          Control: Toggle@1.1.5
+          Properties:
+            AccessibleLabel: =
+            Font: =Font.Arial
+            FontColor: =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            Height: =51
+            Label: ="Light and Dark Mode"
+            OnCheck: =Set(vartheme,"Light")
+            OnUncheck: =Set(vartheme,"Dark")
+            Width: =213
+            X: =60
+            Y: =136
+      - btnMiscTime_4:
+          Control: Classic/Button@2.2.0
+          Properties:
+            BorderColor: =RGBA(79, 90, 94, 1)
+            BorderThickness: =0
+            Color: =RGBA(255, 255, 255, 1)
+            DisabledBorderColor: =RGBA(0, 0, 0, 0)
+            DisabledColor: =ColorFade(Self.Color,-70%)
+            DisabledFill: =ColorFade(Self.Fill,10%)
+            DisplayMode: =If(IsBlank(txtCurrentBadge.Text),DisplayMode.Disabled,DisplayMode.Edit)
+            Fill: =varMainFill2
+            Font: =Font.'Lato Light'
+            Height: =100
+            HoverColor: =RGBA(255, 255, 255, 1)
+            HoverFill: =ColorFade(Self.Fill, 15%)
+            OnSelect: =Back()
+            PaddingTop: =40
+            PressedFill: =ColorFade(Self.Fill, 15%)
+            Text: ="Back"
+            Visible: =true//If(IsBlank(txtCurrentBadge),false,true)
+            Width: =90
+            X: =153
+            Y: =1
+      - iconRefresh_2:
+          Control: Classic/Icon@2.5.0
+          Properties:
+            Color: =RGBA(255, 255, 255, 1)
+            DisplayMode: =DisplayMode.View
+            Height: =25
+            Icon: =Icon.BackArrow
+            Visible: =If(IsBlank(txtCurrentBadge.Text),false,true)
+            Width: =25
+            X: =185
+            Y: =15
+      - btnClearBadge_1:
+          Control: Classic/Button@2.2.0
+          Properties:
+            Color: =RGBA(255, 255, 255, 1)
+            Fill: =RGBA(79, 90, 94, 1)
+            Height: =78
+            HoverColor: =RGBA(255, 255, 255, 1)
+            OnSelect: |-
+              =Set(
+                  varCurrentBadge,
+                  ""
+              );
+              Reset(DatePickerCanvas1_1);
+              Reset(DatePickerCanvas1);
+              Navigate(scanBadge_scr)
+            Text: ="LogOut"
+            Width: =109
+            X: =60
+            Y: =276
+      - btnClearBadge_3:
+          Control: Classic/Button@2.2.0
+          Properties:
+            Color: =RGBA(255, 255, 255, 1)
+            Fill: =RGBA(79, 90, 94, 1)
+            Height: =78
+            HoverColor: =RGBA(255, 255, 255, 1)
+            OnSelect: =Exit()
+            Text: ="Close App"
+            Width: =109
+            X: =60
+            Y: =380

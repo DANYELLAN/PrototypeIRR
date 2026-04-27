@@ -1,0 +1,1564 @@
+# ************************************************************************************************
+# Warning: YAML source code for Canvas Apps should only be used to review changes made within Power Apps Studio and for minor edits (Preview).
+# Use the maker portal to create and edit your Power Apps.
+# 
+# The schema file for Canvas Apps is available at https://go.microsoft.com/fwlink/?linkid=2304907
+# 
+# For more information, visit https://go.microsoft.com/fwlink/?linkid=2292623
+# ************************************************************************************************
+Screens:
+  scanBadge_scr:
+    Properties:
+      BackgroundImage: =splashscreenforapp
+      Fill: =RGBA(0, 0, 0, 0)
+      ImagePosition: =ImagePosition.Stretch
+      OnVisible: |-
+        =Set(
+            varRunReFresh,
+            false
+        );
+        Set(
+            varRunReSet,
+            true
+        );
+        ClearCollect(
+            _RadioChoices,
+            _Shifts,
+            RenameColumns(
+                varDetails,
+                BranchValue,
+                Branch
+            )
+        );
+
+        //Set(varStartDate,DateAdd(Today(),-1,TimeUnit.Days));
+        //Set(varEndDate, Today());
+        //Reset(DatePickerCanvas1);
+        //Reset(DatePickerCanvas1_1);
+    Children:
+      - btnControls_1:
+          Control: Classic/Button@2.2.0
+          Properties:
+            BorderColor: =RGBA(255, 255, 255, 1)
+            BorderThickness: =1
+            Color: =RGBA(255, 255, 255, 1)
+            Fill: =RGBA(49, 49, 87, 0.50)
+            Font: =Font.'Lato Light'
+            Height: =36
+            HoverColor: =RGBA(255, 255, 255, 1)
+            HoverFill: =
+            OnSelect: |+
+              =Set(varCtrlVisible,!varCtrlVisible)
+
+
+              /*If(User().Email="awarner@benoit-inc.com",true,false)
+
+              If(
+                  Or(
+                      User().Email = "awarner@benoit-inc.com",
+                      User().Email = "mstevens@benoit-inc.com",
+                      User().Email = "vdnguyen@benoit-inc.com"
+                  ),
+                  true,
+                  false
+              )*/
+            Text: ="Admin"
+            Visible: =If(User().Email="awarner@benoit-inc.com" ||User().Email = "vdnguyen@benoit-inc.com" ||User().Email = "mstevens@benoit-inc.com",true,false)
+            Width: =90
+            X: =1243
+            Y: =755
+      - TextCanvas11:
+          Control: Text@0.0.51
+          Properties:
+            FontColor: =RGBA(255, 255, 255, 1)
+            FontItalic: =true
+            Text: ="V.1." & _AppVerison
+            X: =1185
+            Y: =755
+      - contMaintenance Request:
+          Control: GroupContainer@1.5.0
+          Variant: ManualLayout
+          Properties:
+            BorderColor: =RGBA(106, 122, 127, 1)
+            BorderThickness: =1
+            DropShadow: =DropShadow.ExtraBold
+            Height: =100
+            RadiusBottomLeft: =50
+            RadiusBottomRight: =50
+            RadiusTopLeft: =50
+            RadiusTopRight: =50
+            Width: =100
+            X: =45
+            Y: =20
+          Children:
+            - Image3:
+                Control: Image@2.2.3
+                Properties:
+                  Height: =75
+                  Image: ='Maintenance Request'
+                  Width: =75
+                  X: =Parent.Width/2-Self.Width/2
+                  Y: =Parent.Height/2-Self.Height/2
+            - ButtonCanvas11:
+                Control: Button@0.0.45
+                Properties:
+                  Appearance: ='ButtonCanvas.Appearance'.Transparent
+                  Height: =100
+                  OnSelect: |
+                    =Set(
+                        varPleaseWait,
+                        true
+                    );
+                    NewForm(NewMaintenanceRequest);
+                    Navigate(
+                        scrMaintenanceRequest,
+                        ScreenTransition.Fade
+                    );
+                    ClearCollect(
+                        colEmployees,
+                        Filter(
+                            Employees,
+                            Status = "Active",
+                            Branches = "Ennis"
+                        )
+                    );
+                    Set(
+                        varRequester,
+                        ""
+                    );
+                    ClearCollect(
+                        colEnnisAssets,
+                        Assets
+                    );
+                    ClearCollect(
+                        colEnnisAssetLocations,
+                        Locations
+                    );
+                    Set(
+                        varRequestTimer,
+                        true
+                    );
+                    Set(
+                        varPleaseWait,
+                        false
+                    );
+                    Set(
+                        varUserDetails,
+                        Office365Users.UserProfileV2(User().Email)
+                    );
+                  Text: =
+                  Width: =100
+      - contScanBadge:
+          Control: GroupContainer@1.5.0
+          Variant: ManualLayout
+          Properties:
+            BorderColor: =RGBA(0, 195, 255, 1)
+            BorderThickness: =1
+            DropShadow: =DropShadow.ExtraBold
+            Fill: =RGBA(0, 0, 0, 0.24)
+            Height: =429
+            RadiusBottomLeft: =20
+            RadiusBottomRight: =20
+            RadiusTopLeft: =20
+            RadiusTopRight: =20
+            Visible: =!callSpinner
+            Width: =429
+            X: |+
+              =(App.Width / 2) + 20
+            Y: =App.Height/2-Self.Height/2
+          Children:
+            - imgQRScan_3:
+                Control: Image@2.2.3
+                Properties:
+                  Height: =170
+                  Image: ='Benoit QR White'
+                  Visible: =true//IsBlank(varCurrentBadge)
+                  Width: =237
+                  X: =96
+                  Y: =23
+            - TextCanvas22:
+                Control: Text@0.0.51
+                Properties:
+                  Align: ='TextCanvas.Align'.Center
+                  Font: =Font.'Lato Black'
+                  FontColor: =RGBA(255, 255, 255, 1)
+                  Height: =42
+                  Size: =25
+                  Text: ="Tap to Scan QR Badge"
+                  Width: =Parent.Width
+                  Y: =277
+            - btnScanBadg_3:
+                Control: BarcodeReader@1.0.25
+                Properties:
+                  BarcodeType: ='BarcodeReader.BarcodeType'.QRCode
+                  BorderFillColor: =RGBA(79, 90, 94, 1)
+                  BorderThickness: =0
+                  DisabledContentColor: =ColorFade(Color.White,-70%)
+                  DisabledFillColor: =ColorFade(varMainFill2,10%)
+                  DisplayMode: |-
+                    =DisplayMode.Edit
+                    //If(IsBlank(txtCurrentBadge.Text),DisplayMode.Edit,DisplayMode.Disabled)
+                  FillColor: =RGBA(0, 0, 0, 0)
+                  Font: =Font.'Lato Light'
+                  FontSize: =15
+                  Height: =429
+                  HoverFillColor: =RGBA(255, 255, 255, 0)
+                  OnScan: =Select(btnOnBarCodeScan);
+                  PaddingTop: =40
+                  ScanningMode: ='BarcodeReader.ScanningMode'.AutomaticallyScan
+                  Text: =
+                  Visible: =true//If(IsBlank(txtCurrentBadge),false,true)
+                  Width: =429
+      - contADPNo:
+          Control: GroupContainer@1.5.0
+          Variant: ManualLayout
+          Properties:
+            BorderColor: =RGBA(0, 195, 255, 1)
+            BorderThickness: =1
+            DropShadow: =DropShadow.ExtraBold
+            Fill: =RGBA(0, 0, 0, 0.24)
+            Height: =429
+            RadiusBottomLeft: =20
+            RadiusBottomRight: =20
+            RadiusTopLeft: =20
+            RadiusTopRight: =20
+            Visible: =!callSpinner
+            Width: =429
+            X: =(App.Width / 2) - Self.Width - 20
+            Y: =App.Height/2-Self.Height/2
+          Children:
+            - TextCanvas22_1:
+                Control: Text@0.0.51
+                Properties:
+                  Align: ='TextCanvas.Align'.Center
+                  Font: =Font.'Lato Black'
+                  FontColor: =RGBA(255, 255, 255, 1)
+                  Height: =42
+                  Size: =25
+                  Text: ="Tap to Enter Badge No."
+                  Width: =Parent.Width
+                  Y: =277
+            - Icon5:
+                Control: Icon@0.0.7
+                Properties:
+                  Height: =140
+                  Icon: ="Person"
+                  IconColor: =RGBA(255, 255, 255, 1)
+                  IconStyle: ='Icon.IconStyle'.Outline
+                  Width: =140
+                  X: =144
+                  Y: =30
+            - TextCanvas24:
+                Control: Text@0.0.51
+                Properties:
+                  Align: ='TextCanvas.Align'.Center
+                  BorderColor: =RGBA(255, 255, 255, 1)
+                  BorderRadius: =8
+                  BorderStyle: =BorderStyle.Solid
+                  BorderThickness: =2
+                  Fill: =RGBA(0, 0, 0, 0.37)
+                  Font: =Font.'Lato Black'
+                  FontColor: =RGBA(255, 255, 255, 1)
+                  Height: =49
+                  Size: =25
+                  Text: ="ADP No."
+                  VerticalAlign: =VerticalAlign.Middle
+                  Width: =182
+                  X: =123
+                  Y: =199
+            - ButtonCanvas38:
+                Control: Button@0.0.45
+                Properties:
+                  Appearance: ='ButtonCanvas.Appearance'.Transparent
+                  Height: =429
+                  OnSelect: |+
+                    =ClearCollect(
+                        colUsers,
+                        RenameColumns(
+                            ShowColumns(
+                                Filter(
+                                    Employees,
+                                    Status = "Active" && Branches = "Ennis" && Machinist = true
+                                ),
+                                ADPEmpNumber,
+                                'First Name',
+                                'Last Name',
+                                'Full Name',
+                                Branches
+                            ),
+                            field_0,
+                            EmpID,
+                            field_2,
+                            'First Name',
+                            field_4,
+                            'Last Name',
+                            Title,
+                            'Full Name',
+                            field_22,
+                            Branch
+                        )
+                    );
+                    Set(signIN,true);
+                  Text: =
+                  Width: =429
+      - AdminControl_1:
+          Control: GroupContainer@1.5.0
+          Variant: ManualLayout
+          Properties:
+            Fill: =RGBA(214, 221, 224, 1)
+            Height: =350
+            Visible: =varCtrlVisible
+            Width: =App.Width
+            Y: =App.Height-Self.Height
+          Children:
+            - btnResetLockScr_1:
+                Control: Classic/Button@2.2.0
+                Properties:
+                  Color: =RGBA(255, 255, 255, 1)
+                  HoverColor: =RGBA(255, 255, 255, 1)
+                  OnSelect: |-
+                    =Set(
+                        varResetScrLock,
+                        true
+                    );
+                    Set(
+                        varProgressBar,
+                        true
+                    );
+                    Set(
+                        varResetScrLock,
+                        false
+                    );
+                    Set(
+                        varProgressBar,
+                        false
+                    )
+                  X: =718
+                  Y: =40
+            - btnRestBadge_1:
+                Control: Classic/Button@2.2.0
+                Properties:
+                  Color: =RGBA(255, 255, 255, 1)
+                  HoverColor: =RGBA(255, 255, 255, 1)
+                  OnSelect: =Set(varCurrentBadge,"")
+                  X: =718
+                  Y: =80
+            - Button13_1:
+                Control: Classic/Button@2.2.0
+                Properties:
+                  BorderColor: =RGBA(255, 255, 255, 1)
+                  Color: =RGBA(255, 255, 255, 1)
+                  HoverColor: =RGBA(255, 255, 255, 1)
+                  OnSelect: =Set(varResetTimer,!varResetTimer)
+                  PaddingRight: =6.51
+                  PaddingTop: =6.51
+                  Text: ="Reset"
+                  Width: =208.28
+                  X: =227
+                  Y: =230
+            - Label14_1:
+                Control: Label@2.5.1
+                Properties:
+                  Align: =Align.Center
+                  BorderColor: =RGBA(255, 255, 0, 1)
+                  BorderThickness: =2
+                  Color: =RGBA(53, 61, 63, 1)
+                  Text: =varResetTimer
+                  Width: =195.26
+                  X: =233
+                  Y: =179
+            - Label18_1:
+                Control: Label@2.5.1
+                Properties:
+                  Align: =Align.Center
+                  BorderColor: =RGBA(255, 255, 0, 1)
+                  BorderThickness: =2
+                  Color: =RGBA(53, 61, 63, 1)
+                  Text: =varTimerActivity
+                  Width: =195.26
+                  X: =233
+                  Y: =131
+            - Button14_1:
+                Control: Classic/Button@2.2.0
+                Properties:
+                  BorderColor: =RGBA(255, 255, 255, 1)
+                  Color: =RGBA(255, 255, 255, 1)
+                  HoverColor: =RGBA(255, 255, 255, 1)
+                  OnSelect: =Set(varTimerActivity,!varTimerActivity)
+                  PaddingRight: =6.51
+                  PaddingTop: =6.51
+                  Text: ="Start"
+                  Width: =208.28
+                  X: =228
+                  Y: =84
+            - btnRR_1:
+                Control: Classic/Button@2.2.0
+                Properties:
+                  BorderColor: =RGBA(255, 255, 255, 1)
+                  Color: =RGBA(255, 255, 255, 1)
+                  HoverColor: =RGBA(255, 255, 255, 1)
+                  OnSelect: |-
+                    =Set(varResetTimer,true);Set(varTimerActivity,false);
+
+
+                    Set(varResetTimer,false);Set(varTimerActivity,true)
+                  PaddingRight: =6.51
+                  PaddingTop: =6.51
+                  Text: ="Reset/Restart"
+                  Width: =208.28
+                  X: =228
+                  Y: =40
+            - ddDuration_1:
+                Control: DropDown@0.0.45
+                Properties:
+                  DefaultSelectedItems: ={Id:varDuration}
+                  Height: =40
+                  Items: =[{Id:1,Value:10000},{Id:2,Value:20000},{Id:3,Value:30000},{Id:4,Value:40000},{Id:5,Value:50000}]
+                  OnChange: =Set(varDuration,Self.Selected.Id)
+                  Width: =91
+                  X: =461
+                  Y: =288
+                Children:
+                  - Id1_1:
+                      Control: DropDownDataField@1.5.0
+                      Variant: textualColumn
+                      IsLocked: true
+                      Properties:
+                        FieldDisplayName: ="Id"
+                        FieldName: ="Id"
+                        FieldType: ="n"
+                        Order: =1
+            - TextCanvas1_2:
+                Control: Text@0.0.51
+                Properties:
+                  Height: =40
+                  Text: =LookUp([{Id:1,Value:10000},{Id:2,Value:20000},{Id:3,Value:30000},{Id:4,Value:40000},{Id:5,Value:50000}],varDuration=Id,Value)
+                  X: =552
+                  Y: =288
+            - ButtonCanvas1_1:
+                Control: Button@0.0.45
+                Properties:
+                  OnSelect: =Set(varDuration,0)
+                  Text: ="Clear Duration"
+                  X: =648
+                  Y: =292
+            - btnScanByPass:
+                Control: Classic/Button@2.2.0
+                Properties:
+                  Color: =RGBA(255, 255, 255, 1)
+                  Fill: =RGBA(79, 90, 94, 1)
+                  Height: =78
+                  HoverColor: =RGBA(255, 255, 255, 1)
+                  OnSelect: |
+                    =Set(
+                        callSpinner,
+                        true
+                    );
+                    Set(
+                        varCtrlVisible,
+                        false
+                    );
+                    Set(
+                        varCurrentBadge,
+                        varADPIn
+                    );
+                    Refresh('Ennis Start and Stop Time Inputs');
+                    ClearCollect(
+                        colEnnisStartStop,
+                        'Ennis Start and Stop Time Inputs'
+                    );
+                    Refresh('Ennis Machinist Time Entry');
+                    ClearCollect(
+                        colEnnisTimeEntry,
+                        FirstN(
+                            Sort(
+                                'Ennis Machinist Time Entry',
+                                LaborDate,
+                                SortOrder.Descending
+                            ),
+                            300
+                        )
+                    );
+                    ClearCollect(
+                        colENTimeCombined,
+                        AddColumns(
+                            colEnnisStartStop,
+                            Source,
+                            "In Progress"
+                        ),
+                        AddColumns(
+                            colEnnisTimeEntry,
+                            Source,
+                            "Submitted"
+                        )
+                    );
+                    ClearCollect(
+                        colFilEmpStartStop,
+                        Filter(
+                            colENTimeCombined,
+                            Value(EmpID) = Value(varUserRecord.EmpID)
+                        )
+                    );
+                    Set(
+                        varRunReFresh,
+                        false
+                    );
+                    Set(
+                        varRunReSet,
+                        true
+                    );
+                    Select(btnRR_1);
+                    ClearCollect(
+                        colProdNumbers,
+                        Distinct(
+                            Filter(
+                                'Production Operations',
+                                (Status = "In Process" || Status = "Planned") && StartsWith(
+                                    ProductionNumber,
+                                    "ewo"
+                                )
+                            ),
+                            ProductionNumber
+                        )
+                    );
+                    Set(
+                        callSpinner,
+                        false
+                    );
+                    Navigate(home_scr,ScreenTransition.Fade);
+                  Text: ="Scan ByPass"
+                  Width: =84
+                  X: =1010
+                  Y: =6
+            - btnClearBadge_2:
+                Control: Classic/Button@2.2.0
+                Properties:
+                  Color: =RGBA(255, 255, 255, 1)
+                  Fill: =RGBA(79, 90, 94, 1)
+                  Height: =78
+                  HoverColor: =RGBA(255, 255, 255, 1)
+                  OnSelect: =Set(varCurrentBadge,"");Reset(dpFilterDate)
+                  Text: ="Clear Badge"
+                  Width: =109
+                  X: =1107
+                  Y: =6
+            - btnRestBadge_2:
+                Control: Classic/Button@2.2.0
+                Properties:
+                  Color: =RGBA(255, 255, 255, 1)
+                  HoverColor: =RGBA(255, 255, 255, 1)
+                  OnSelect: =Navigate(home_scr)
+                  Text: ="home"
+                  X: =850
+                  Y: =168
+            - Container15:
+                Control: GroupContainer@1.5.0
+                Variant: ManualLayout
+                Properties:
+                  BorderColor: =RGBA(0, 0, 0, 0)
+                  BorderStyle: =BorderStyle.None
+                  DropShadow: =DropShadow.Bold
+                  Height: =38
+                  RadiusBottomLeft: =8
+                  RadiusBottomRight: =8
+                  RadiusTopLeft: =8
+                  RadiusTopRight: =8
+                  Width: =132
+                  X: =1058
+                  Y: =234
+                Children:
+                  - btnOnBarCodeScan:
+                      Control: Button@0.0.45
+                      Properties:
+                        Appearance: ='ButtonCanvas.Appearance'.Secondary
+                        BorderColor: =RGBA(174, 208, 221, 0.72)
+                        BorderRadius: =8
+                        BorderStyle: =BorderStyle.Solid
+                        BorderThickness: =1
+                        Height: =38
+                        OnSelect: |-
+                          =Set(
+                              callSpinner,
+                              true
+                          );
+                          ClearCollect(
+                              col_BadgeLogin,
+                              btnScanBadg_3.Barcodes
+                          );
+                          Set(
+                              varADPIn,
+                              Text(Value(Last(col_BadgeLogin).Value))
+                          );
+                          Set(
+                              varBadgeScan,
+                              false
+                          );
+
+                          ClearCollect(
+                              colTimeEntry,
+                              Sort(
+                                  'Machinist Time Entry',
+                                  'Labor Date',
+                                  SortOrder.Descending
+                              )
+                          );
+                          Set(
+                              varUserRecord,
+                              LookUp(
+                                  colUsers,
+                                  Value(varADPIn) = Value(EmpID),
+                                  ThisRecord
+                              )
+                          );
+                          Set(
+                              varUserLocation1,
+                              varUserRecord.Branch
+                          );
+                          Set(
+                              varUser1,
+                              varUserRecord.EmpID
+                          );
+                          Reset(Radio1);
+                          Set(
+                              signIN,
+                              true
+                          );
+                          Set(
+                              varShiftSelect,
+                              true
+                          );
+                          Set(
+                              callSpinner,
+                              false
+                          )
+                          /*
+                          Set(
+                              varUserLocation,
+                              LookUp(
+                                  colUsers,
+                                  EmpID = varCurrentBadge,
+                                  Branch
+                              )
+                          );
+                          Set(
+                              varUser,
+                              LookUp(
+                                  colUsers,
+                                  varCurrentBadge = EmpID,
+                                  'Full Name'
+                              )
+                          );*/
+                          /*
+                          ClearCollect(colEmpTimeEntry,Filter(colTimeEntry,Value(EmployeeID)=Value(varUser1)));
+                          ClearCollect(colProdNumbers, If(
+                              varUsersLocation = "Ennis",
+                              Distinct(
+                                  Filter(
+                                      'Production Operations',
+                                       (Status = "In Process" || Status = "Planned") && StartsWith(ProductionNumber, "ewo")
+                                  ),
+                                  ProductionNumber
+                              ),
+                              Distinct(
+                                  Filter(
+                                      'Production Operations',
+                                      Status = "In Process" && StartsWith(ProductionNumber, "two")
+                                  ),
+                                  ProductionNumber
+                              )
+                          ));
+                          Set(callSpinner,false);
+                          Navigate(scrTimeSht_1,ScreenTransition.Fade);*/
+                        Text: ="On Barcode Scan"
+                        Width: =132
+            - ButtonCanvas26:
+                Control: Button@0.0.45
+                Properties:
+                  OnSelect: |-
+                    =ClearCollect(
+                        colFilEmpStartStop,
+                        Filter(
+                            colEnnisStartStop,
+                            Value(EmpID) = Value(varCurrentBadge)
+                        )
+                    );
+                  X: =529
+                  Y: =40
+            - btnReFreshMachistTime:
+                Control: Button@0.0.45
+                Properties:
+                  OnSelect: =Set(varRunReFresh,true);Set(varRunReSet,false)
+                  Text: ="Refresh Machinist Time"
+                  Width: =174
+                  X: =1016
+                  Y: =308
+            - Timer1_2:
+                Control: Timer@2.1.0
+                Properties:
+                  AutoPause: =false
+                  AutoStart: =true
+                  Color: =RGBA(255, 255, 255, 1)
+                  Duration: =1000
+                  Height: =33
+                  HoverColor: =RGBA(255, 255, 255, 1)
+                  OnTimerEnd: |
+                    =Set(varCurrentTime, Text(Now(), "[$-en-US]hh:mm AM/PM"))
+                  Repeat: =true
+                  Reset: =timersReset
+                  Start: =timersRun
+                  Width: =107
+                  X: =64
+                  Y: =72
+            - ButtonCanvas45:
+                Control: Button@0.0.45
+                Properties:
+                  Appearance: ='ButtonCanvas.Appearance'.Secondary
+                  BorderColor: =RGBA(40, 112, 134, 1)
+                  BorderRadius: =8
+                  BorderStyle: =BorderStyle.Solid
+                  BorderThickness: =1
+                  FontColor: =RGBA(255, 0, 0, 1)
+                  FontWeight: =FontWeight.Bold
+                  Icon: ="Dismiss"
+                  Layout: ='ButtonCanvas.Layout'.IconOnly
+                  OnSelect: =Set(varCtrlVisible,!varCtrlVisible)
+                  Width: =32
+                  X: =AdminControl_1.Width-Self.Width-5
+                  Y: =5
+            - ButtonCanvas1:
+                Control: Button@0.0.45
+                Properties:
+                  OnSelect: |-
+                    =Set(
+                        varRunReFresh,
+                        false
+                    );
+                    Set(
+                        varRunReSet,
+                        true
+                    );
+                  Text: ="Reset"
+                  X: =1200
+                  Y: =126
+            - ButtonCanvas5:
+                Control: Button@0.0.45
+                Properties:
+                  Appearance: ='ButtonCanvas.Appearance'.Transparent
+                  Icon: ="ArrowReset"
+                  Layout: ='ButtonCanvas.Layout'.IconOnly
+                  OnSelect: =Set(timersReset,false)
+                  Width: =32
+                  X: =171
+                  Y: =73
+            - ButtonCanvas9:
+                Control: Button@0.0.45
+                Properties:
+                  Appearance: ='ButtonCanvas.Appearance'.Transparent
+                  Icon: ="Checkmark"
+                  Layout: ='ButtonCanvas.Layout'.IconOnly
+                  OnSelect: =Set(timersRun,true)
+                  Width: =32
+                  X: =32
+                  Y: =72
+            - ReportCkInTimer:
+                Control: Timer@2.1.0
+                Properties:
+                  AutoPause: =false
+                  AutoStart: =true
+                  Duration: =1800000
+                  Height: =47
+                  OnTimerEnd: =
+                  OnTimerStart: |-
+                    =Set(varMessage,LookUp('Communication Stream to Apps',_AppName=AppName));
+
+
+                    Set(
+                        varUserDetails,
+                        Office365Users.UserProfileV2(User().Email)
+                    );
+                    Set(
+                        varUserEmail,
+                        {
+                            '@odata.type': "#Microsoft.Azure.Connectors.SharePoint.SPListExpandedUser",
+                            Claims: "i:0#.f|membership|" & User().Email,
+                            DisplayName: User().FullName,
+                            Department: varUserDetails.department,
+                            JobTitle: varUserDetails.jobTitle,
+                            Picture: Office365Users.UserPhotoV2(User().Email),
+                            Email: User().Email
+                        }
+                    );
+                    Set(
+                        varNow,
+                        Now()
+                    );
+                    Set(
+                        varLocation,
+                        LookUp(
+                            Stations,
+                            EmailTest = User().Email,
+                            'Machine No'
+                        )
+                    );
+                    Set(
+                        varExisting,
+                        LookUp(
+                            'Running Apps Check In',
+                            Title = varLocation
+                        )
+                    );
+                    If(
+                        !IsBlank(varExisting),
+                        Patch(
+                            'Running Apps Check In',
+                            varExisting,
+                            {
+                                'Last Check In': varNow,
+                                'User Email': varUserEmail,
+                                'App ID':_AppID,
+                                'App Name':_AppName,
+                                'App Version':_AppVerison
+                            }
+                        ),
+                        Patch(
+                            'Running Apps Check In',
+                            Defaults('Running Apps Check In'),
+                            {
+                                Title: varLocation,
+                                'Last Check In': varNow,
+                                'User Email': varUserEmail,
+                                'App ID':_AppID,
+                                'App Name':_AppName,
+                                'App Version':_AppVerison
+                            }
+                        )
+                    )
+                  Repeat: =true
+                  Size: =10
+                  Text: ="Running CkIn " & Text(Time(0, 0, Self.Value/1000), "hh:mm:ss")
+                  Width: =103
+                  X: =11
+                  Y: =200
+      - contShiftSelect:
+          Control: GroupContainer@1.5.0
+          Variant: ManualLayout
+          Properties:
+            Fill: =RGBA(0, 0, 0, 0.46)
+            Height: =800
+            Visible: =signIN
+            Width: =1333
+          Children:
+            - Container22_1:
+                Control: GroupContainer@1.5.0
+                Variant: ManualLayout
+                Properties:
+                  BorderColor: =RGBA(180, 214, 250, 1)
+                  BorderThickness: =2
+                  DropShadow: =DropShadow.ExtraBold
+                  Fill: =If(vartheme="Light",Color.WhiteSmoke, /*varMainFill3*/RGBA(65, 90, 119, .85))
+                  Height: =610
+                  RadiusBottomLeft: =30
+                  RadiusBottomRight: =30
+                  RadiusTopLeft: =30
+                  RadiusTopRight: =30
+                  Width: =744
+                  X: =App.Width/2-Self.Width/2
+                  Y: =App.Height/2-Self.Height/2
+                Children:
+                  - ButtonCanvas28_2:
+                      Control: Button@0.0.45
+                      Properties:
+                        Appearance: ='ButtonCanvas.Appearance'.Secondary
+                        FontSize: =25
+                        Height: =66
+                        Icon: ="Open"
+                        OnSelect: |-
+                          =Reset(Radio1);
+                          Set(
+                              varShiftSelect,
+                              true
+                          )
+                        Text: ="GO"
+                        Width: =112
+                        X: =617
+                        Y: =438
+                  - Container27:
+                      Control: GroupContainer@1.5.0
+                      Variant: ManualLayout
+                      Properties:
+                        BorderColor: =RGBA(0, 0, 0, 0)
+                        BorderStyle: =BorderStyle.None
+                        DropShadow: =DropShadow.None
+                        Height: =498
+                        Width: =371
+                        X: =Container22_1.Width/2-Self.Width/2
+                        Y: =Container22_1.Height-Self.Height-10
+                      Children:
+                        - ButtonCanvas33_10:
+                            Control: Button@0.0.45
+                            Properties:
+                              Appearance: ='ButtonCanvas.Appearance'.Secondary
+                              BorderColor: =RGBA(180, 214, 250, 1)
+                              BorderRadius: =15
+                              BorderStyle: =BorderStyle.Solid
+                              BorderThickness: =2
+                              FontSize: =60
+                              FontWeight: =FontWeight.Bold
+                              Height: =120
+                              IconStyle: ='ButtonCanvas.IconStyle'.Filled
+                              OnSelect: |-
+                                =Set(
+                                    varADPIn,
+                                    If(
+                                        IsBlank(varADPIn),
+                                        Self.Text,
+                                        varADPIn & Self.Text
+                                    )
+                                );
+                                Set(
+                                    varUserRecord,
+                                    LookUp(
+                                        colUsers,
+                                        varADPIn = EmpID,
+                                        ThisRecord
+                                    )
+                                )
+                              Text: ="1"
+                              Width: =120
+                        - ButtonCanvas33_11:
+                            Control: Button@0.0.45
+                            Properties:
+                              Appearance: ='ButtonCanvas.Appearance'.Secondary
+                              BorderColor: =RGBA(180, 214, 250, 1)
+                              BorderRadius: =15
+                              BorderStyle: =BorderStyle.Solid
+                              BorderThickness: =2
+                              FontSize: =60
+                              FontWeight: =FontWeight.Bold
+                              Height: =120
+                              IconStyle: ='ButtonCanvas.IconStyle'.Filled
+                              OnSelect: |-
+                                =Set(
+                                    varADPIn,
+                                    If(
+                                        IsBlank(varADPIn),
+                                        Self.Text,
+                                        varADPIn & Self.Text
+                                    )
+                                );
+                                Set(
+                                    varUserRecord,
+                                    LookUp(
+                                        colUsers,
+                                        varADPIn = EmpID,
+                                        ThisRecord
+                                    )
+                                )
+                              Text: ="2"
+                              Width: =120
+                              X: =125
+                        - ButtonCanvas33_12:
+                            Control: Button@0.0.45
+                            Properties:
+                              Appearance: ='ButtonCanvas.Appearance'.Secondary
+                              BorderColor: =RGBA(180, 214, 250, 1)
+                              BorderRadius: =15
+                              BorderStyle: =BorderStyle.Solid
+                              BorderThickness: =2
+                              FontSize: =60
+                              FontWeight: =FontWeight.Bold
+                              Height: =120
+                              IconStyle: ='ButtonCanvas.IconStyle'.Filled
+                              OnSelect: |-
+                                =Set(
+                                    varADPIn,
+                                    If(
+                                        IsBlank(varADPIn),
+                                        Self.Text,
+                                        varADPIn & Self.Text
+                                    )
+                                );
+                                Set(
+                                    varUserRecord,
+                                    LookUp(
+                                        colUsers,
+                                        varADPIn = EmpID,
+                                        ThisRecord
+                                    )
+                                )
+                              Text: ="3"
+                              Width: =120
+                              X: =250
+                        - ButtonCanvas33_13:
+                            Control: Button@0.0.45
+                            Properties:
+                              Appearance: ='ButtonCanvas.Appearance'.Secondary
+                              BorderColor: =RGBA(180, 214, 250, 1)
+                              BorderRadius: =15
+                              BorderStyle: =BorderStyle.Solid
+                              BorderThickness: =2
+                              FontSize: =60
+                              FontWeight: =FontWeight.Bold
+                              Height: =120
+                              IconStyle: ='ButtonCanvas.IconStyle'.Filled
+                              OnSelect: |-
+                                =Set(
+                                    varADPIn,
+                                    If(
+                                        IsBlank(varADPIn),
+                                        Self.Text,
+                                        varADPIn & Self.Text
+                                    )
+                                );
+                                Set(
+                                    varUserRecord,
+                                    LookUp(
+                                        colUsers,
+                                        varADPIn = EmpID,
+                                        ThisRecord
+                                    )
+                                )
+                              Text: ="4"
+                              Width: =120
+                              Y: =125
+                        - ButtonCanvas33_14:
+                            Control: Button@0.0.45
+                            Properties:
+                              Appearance: ='ButtonCanvas.Appearance'.Secondary
+                              BorderColor: =RGBA(180, 214, 250, 1)
+                              BorderRadius: =15
+                              BorderStyle: =BorderStyle.Solid
+                              BorderThickness: =2
+                              FontSize: =60
+                              FontWeight: =FontWeight.Bold
+                              Height: =120
+                              IconStyle: ='ButtonCanvas.IconStyle'.Filled
+                              OnSelect: |-
+                                =Set(
+                                    varADPIn,
+                                    If(
+                                        IsBlank(varADPIn),
+                                        Self.Text,
+                                        varADPIn & Self.Text
+                                    )
+                                );
+                                Set(
+                                    varUserRecord,
+                                    LookUp(
+                                        colUsers,
+                                        varADPIn = EmpID,
+                                        ThisRecord
+                                    )
+                                )
+                              Text: ="5"
+                              Width: =120
+                              X: =125
+                              Y: =125
+                        - ButtonCanvas33_15:
+                            Control: Button@0.0.45
+                            Properties:
+                              Appearance: ='ButtonCanvas.Appearance'.Secondary
+                              BorderColor: =RGBA(180, 214, 250, 1)
+                              BorderRadius: =15
+                              BorderStyle: =BorderStyle.Solid
+                              BorderThickness: =2
+                              FontSize: =60
+                              FontWeight: =FontWeight.Bold
+                              Height: =120
+                              IconStyle: ='ButtonCanvas.IconStyle'.Filled
+                              OnSelect: |-
+                                =Set(
+                                    varADPIn,
+                                    If(
+                                        IsBlank(varADPIn),
+                                        Self.Text,
+                                        varADPIn & Self.Text
+                                    )
+                                );
+                                Set(
+                                    varUserRecord,
+                                    LookUp(
+                                        colUsers,
+                                        varADPIn = EmpID,
+                                        ThisRecord
+                                    )
+                                )
+                              Text: ="6"
+                              Width: =120
+                              X: =250
+                              Y: =125
+                        - ButtonCanvas33_16:
+                            Control: Button@0.0.45
+                            Properties:
+                              Appearance: ='ButtonCanvas.Appearance'.Secondary
+                              BorderColor: =RGBA(180, 214, 250, 1)
+                              BorderRadius: =15
+                              BorderStyle: =BorderStyle.Solid
+                              BorderThickness: =2
+                              FontSize: =60
+                              FontWeight: =FontWeight.Bold
+                              Height: =120
+                              IconStyle: ='ButtonCanvas.IconStyle'.Filled
+                              OnSelect: |-
+                                =Set(
+                                    varADPIn,
+                                    If(
+                                        IsBlank(varADPIn),
+                                        Self.Text,
+                                        varADPIn & Self.Text
+                                    )
+                                );
+                                Set(
+                                    varUserRecord,
+                                    LookUp(
+                                        colUsers,
+                                        varADPIn = EmpID,
+                                        ThisRecord
+                                    )
+                                )
+                              Text: ="7"
+                              Width: =120
+                              Y: =250
+                        - ButtonCanvas33_17:
+                            Control: Button@0.0.45
+                            Properties:
+                              Appearance: ='ButtonCanvas.Appearance'.Secondary
+                              BorderColor: =RGBA(180, 214, 250, 1)
+                              BorderRadius: =15
+                              BorderStyle: =BorderStyle.Solid
+                              BorderThickness: =2
+                              FontSize: =60
+                              FontWeight: =FontWeight.Bold
+                              Height: =120
+                              IconStyle: ='ButtonCanvas.IconStyle'.Filled
+                              OnSelect: |-
+                                =Set(
+                                    varADPIn,
+                                    If(
+                                        IsBlank(varADPIn),
+                                        Self.Text,
+                                        varADPIn & Self.Text
+                                    )
+                                );
+                                Set(
+                                    varUserRecord,
+                                    LookUp(
+                                        colUsers,
+                                        varADPIn = EmpID,
+                                        ThisRecord
+                                    )
+                                )
+                              Text: ="8"
+                              Width: =120
+                              X: =125
+                              Y: =250
+                        - ButtonCanvas33_18:
+                            Control: Button@0.0.45
+                            Properties:
+                              Appearance: ='ButtonCanvas.Appearance'.Secondary
+                              BorderColor: =RGBA(180, 214, 250, 1)
+                              BorderRadius: =15
+                              BorderStyle: =BorderStyle.Solid
+                              BorderThickness: =2
+                              FontSize: =60
+                              FontWeight: =FontWeight.Bold
+                              Height: =120
+                              IconStyle: ='ButtonCanvas.IconStyle'.Filled
+                              OnSelect: |-
+                                =Set(
+                                    varADPIn,
+                                    If(
+                                        IsBlank(varADPIn),
+                                        Self.Text,
+                                        varADPIn & Self.Text
+                                    )
+                                );
+                                Set(
+                                    varUserRecord,
+                                    LookUp(
+                                        colUsers,
+                                        varADPIn = EmpID,
+                                        ThisRecord
+                                    )
+                                )
+                              Text: ="9"
+                              Width: =120
+                              X: =250
+                              Y: =250
+                        - ButtonCanvas33_19:
+                            Control: Button@0.0.45
+                            Properties:
+                              Appearance: ='ButtonCanvas.Appearance'.Secondary
+                              BorderColor: =RGBA(180, 214, 250, 1)
+                              BorderRadius: =15
+                              BorderStyle: =BorderStyle.Solid
+                              BorderThickness: =2
+                              FontSize: =60
+                              FontWeight: =FontWeight.Bold
+                              Height: =120
+                              IconStyle: ='ButtonCanvas.IconStyle'.Filled
+                              OnSelect: |-
+                                =Set(
+                                    varADPIn,
+                                    If(
+                                        IsBlank(varADPIn),
+                                        Self.Text,
+                                        varADPIn & Self.Text
+                                    )
+                                );
+                                Set(
+                                    varUserRecord,
+                                    LookUp(
+                                        colUsers,
+                                        varADPIn = EmpID,
+                                        ThisRecord
+                                    )
+                                )
+                              Text: ="0"
+                              Width: =120
+                              X: =125
+                              Y: =375
+                  - TextCanvas25:
+                      Control: Text@0.0.51
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Font: =Font.'Lato Black'
+                        FontColor: =RGBA(255, 255, 0, 1)
+                        Height: =69
+                        Size: =40
+                        Text: |-
+                          =varUserRecord.'Full Name' &" # " &varADPIn
+                        VerticalAlign: =VerticalAlign.Middle
+                        Visible: =!IsBlank(varADPIn)
+                        Weight: ='TextCanvas.Weight'.Bold
+                        Width: =Container22_1.Width
+                        Y: =1
+                  - ButtonCanvas28_1:
+                      Control: Button@0.0.45
+                      Properties:
+                        Appearance: ='ButtonCanvas.Appearance'.Transparent
+                        Font: =Font.'Lato Black'
+                        FontColor: =RGBA(255, 0, 0, 1)
+                        FontSize: =50
+                        FontWeight: =FontWeight.Bold
+                        Height: =65
+                        Icon: ="Dismiss"
+                        IconStyle: ='ButtonCanvas.IconStyle'.Filled
+                        Layout: ='ButtonCanvas.Layout'.IconOnly
+                        OnSelect: =Set(signIN,false);Set(varADPIn,Blank())
+                        Text: =
+                        Width: =65
+                        X: =674
+                        Y: =5
+                  - ButtonCanvas37_1:
+                      Control: Button@0.0.45
+                      Properties:
+                        Appearance: ='ButtonCanvas.Appearance'.Secondary
+                        FontColor: =RGBA(0, 0, 0, 1)
+                        FontSize: =25
+                        Height: =66
+                        Icon: ="ArrowReset"
+                        IconStyle: ='ButtonCanvas.IconStyle'.Filled
+                        Layout: ='ButtonCanvas.Layout'.IconBefore
+                        OnSelect: |-
+                          =Set(varADPIn,Blank());
+                          Set(varUserRecord,Blank())
+                        Text: ="Reset"
+                        Width: =112
+                        X: =617
+                        Y: =102
+            - contShiftSelect1:
+                Control: GroupContainer@1.5.0
+                Variant: ManualLayout
+                Properties:
+                  DropShadow: =DropShadow.ExtraBold
+                  Fill: =RGBA(0, 0, 0, 0.88)
+                  Height: =652
+                  RadiusBottomLeft: =20
+                  RadiusBottomRight: =20
+                  RadiusTopLeft: =20
+                  RadiusTopRight: =20
+                  Visible: =varShiftSelect
+                  Width: =993
+                  X: =190
+                  Y: =65
+                Children:
+                  - Radio1:
+                      Control: Classic/Radio@2.3.0
+                      Properties:
+                        Align: =Align.Center
+                        Color: =RGBA(255, 255, 255, 1)
+                        Font: =Font.'Lato Black'
+                        Height: =174
+                        HoverColor: =
+                        HoverFill: =
+                        Items: =ShowColumns(Filter(_RadioChoices, OptionStep = 1),Title)
+                        Items.Value: =Title
+                        OnChange: |-
+                          =Set(
+                              varShift,
+                              Switch(
+                                  Radio1.Selected.Title,
+                                  "Day Shift",
+                                  40,
+                                  "Night Shift",
+                                  41
+                              )
+                          );
+                        PressedColor: =
+                        PressedFill: =
+                        RadioSize: =50
+                        Size: =25
+                        Width: =269
+                        X: =contShiftSelect1.Width/2-Self.Width/2
+                        Y: =105
+                  - TextCanvas5:
+                      Control: Text@0.0.51
+                      Properties:
+                        Align: ='TextCanvas.Align'.Center
+                        Font: =Font.'Lato Black'
+                        FontColor: =RGBA(255, 255, 255, 1)
+                        Height: =65
+                        Size: =30
+                        Text: ="Please Select your Shift!"
+                        VerticalAlign: =VerticalAlign.Middle
+                        Width: =993
+                  - ButtonCanvas28_3:
+                      Control: Button@0.0.45
+                      Properties:
+                        Appearance: ='ButtonCanvas.Appearance'.Secondary
+                        BorderColor: =RGBA(180, 214, 250, 1)
+                        BorderRadius: =10
+                        BorderStyle: =BorderStyle.Solid
+                        BorderThickness: =3
+                        DisplayMode: =Switch(IsBlank(Radio1.Selected),true,DisplayMode.Disabled,DisplayMode.Edit)
+                        Font: =Font.'Lato Black'
+                        FontSize: =25
+                        Height: =66
+                        Icon: ="Open"
+                        OnSelect: |
+                          =Set(
+                              callSpinner,
+                              true
+                          );
+                          Set(
+                              varShift,
+                              Switch(
+                                  Radio1.Selected.Title,
+                                  "Day Shift",
+                                  40,
+                                  "Night Shift",
+                                  41
+                              )
+                          );
+                          Set(
+                              signIN,
+                              false
+                          );
+                          If(
+                              IsBlank(
+                                  LookUp(
+                                      colUsers,
+                                      EmpID = varADPIn
+                                  )
+                              ),
+                              Set(
+                                  varADPIn,
+                                  Blank()
+                              );
+                              Notify(
+                                  "Employee ID not found",
+                                  NotificationType.Error
+                              ),
+                              /**** Employee Found Start Process ****/
+                              Set(
+                                  varUserRecord,
+                                  LookUp(
+                                      colUsers,
+                                      varADPIn = EmpID,
+                                      ThisRecord
+                                  )
+                              );
+                              Set(
+                                  varUserLocation1,
+                                  varUserRecord.Branch
+                              );
+                              Set(
+                                  varUser1,
+                                  varUserRecord.EmpID
+                              );
+                              Set(
+                                  varADPIn,
+                                  Blank()
+                              );
+                              Set(
+                                  varShiftSelect,
+                                  false
+                              );
+                              Set(
+                                  varRunReFresh,
+                                  true
+                              );
+                              Set(
+                                  varRunReSet,
+                                  false
+                              );
+                              Navigate(
+                                  scrTimeSht_1,
+                                  ScreenTransition.Fade
+                              );
+                              Set(
+                                  varInspectionTimer,
+                                  true
+                              )
+                          );
+                        Text: ="GO"
+                        Width: =112
+                        X: =contShiftSelect1.Width/2-Self.Width/2
+                        Y: =342
+                  - ButtonCanvas39:
+                      Control: Button@0.0.45
+                      Properties:
+                        Appearance: ='ButtonCanvas.Appearance'.Secondary
+                        BorderColor: =RGBA(180, 214, 250, 1)
+                        BorderRadius: =8
+                        BorderStyle: =BorderStyle.Solid
+                        BorderThickness: =2
+                        Font: =Font.'Lato Black'
+                        FontSize: =18
+                        Icon: ="Dismiss"
+                        OnSelect: =Reset(Radio1);Set(varShiftSelect,false)
+                        Text: ="Cancel"
+                        X: =contShiftSelect1.Width-Self.Width-5
+                        Y: =5
+      - Label10_12:
+          Control: Label@2.5.1
+          Properties:
+            Align: =Align.Center
+            BorderColor: =RGBA(214, 221, 224, 1)
+            BorderStyle: =BorderStyle.None
+            Color: =If(vartheme="Light",Color.Black, Color.Yellow)
+            FontWeight: =FontWeight.Bold
+            Size: =20
+            Text: |-
+              =
+              varCurrentTime
+              //TimeValue(Now(),"en-us")
+            Width: =165
+            X: =1168
+            Y: =61
+      - lbStation_4:
+          Control: Label@2.5.1
+          Properties:
+            Align: =Align.Center
+            Color: =RGBA(255, 255, 0, 1)
+            Font: =Font.'Lato Light'
+            FontWeight: =FontWeight.Bold
+            Height: =76
+            Size: =20
+            Text: =varMachineNo
+            Width: =conStation_2.Width
+            X: =App.Width-Self.Width
+      - contPleaseWait:
+          Control: GroupContainer@1.5.0
+          Variant: ManualLayout
+          Properties:
+            Fill: =RGBA(0, 0, 0, 0.74)
+            Height: =App.Height
+            Visible: =varPleaseWait
+            Width: =App.Width
+          Children:
+            - TextCanvas23:
+                Control: Text@0.0.51
+                Properties:
+                  Align: ='TextCanvas.Align'.Center
+                  Font: =Font.'Segoe UI'
+                  FontColor: =RGBA(255, 255, 255, 1)
+                  Height: =75
+                  Size: =50
+                  Text: ="Please wait while we load the data......"
+                  Width: =App.Width
+                  Y: =App.Height/2-Self.Height/2
+      - Spinner:
+          Control: GroupContainer@1.5.0
+          Variant: ManualLayout
+          Properties:
+            Fill: =RGBA(255, 255, 255, 1)
+            Height: =App.Height
+            Visible: =callSpinner
+            Width: =App.Width
+          Children:
+            - Image3_3:
+                Control: Image@2.2.3
+                Properties:
+                  BorderColor: =RGBA(0, 0, 0, 0)
+                  BorderStyle: =BorderStyle.None
+                  BorderThickness: =2
+                  DisabledBorderColor: =RGBA(0, 0, 0, 0)
+                  DisabledFill: =RGBA(0, 0, 0, 0)
+                  FocusedBorderThickness: =4
+                  HoverBorderColor: =RGBA(0, 0, 0, 0)
+                  HoverFill: =RGBA(0, 0, 0, 0)
+                  Image: ='Main Scene'
+                  PressedBorderColor: =RGBA(0, 0, 0, 0)
+                  PressedFill: =RGBA(0, 0, 0, 0)
+                  X: =App.Width/2-Self.Width/2
+                  Y: =App.Height/2
+            - Image4_3:
+                Control: Image@2.2.3
+                Properties:
+                  BorderColor: =RGBA(0, 0, 0, 0)
+                  BorderStyle: =BorderStyle.None
+                  BorderThickness: =2
+                  DisabledBorderColor: =RGBA(0, 0, 0, 0)
+                  DisabledFill: =RGBA(0, 0, 0, 0)
+                  FocusedBorderThickness: =4
+                  Height: =131
+                  HoverBorderColor: =RGBA(0, 0, 0, 0)
+                  HoverFill: =RGBA(0, 0, 0, 0)
+                  Image: ='BenoitLogoRegistered-Red'
+                  PressedBorderColor: =RGBA(0, 0, 0, 0)
+                  PressedFill: =RGBA(0, 0, 0, 0)
+                  Width: =329
+                  X: =App.Width/2-Self.Width/2
+                  Y: =187
+            - TextCanvas9_1:
+                Control: Text@0.0.51
+                Properties:
+                  Align: ='TextCanvas.Align'.Center
+                  Height: =47
+                  Size: =20
+                  Text: '="Please wait while we gather data . . . . . ." '
+                  Weight: ='TextCanvas.Weight'.Semibold
+                  Width: =445
+                  X: =App.Width/2-Self.Width/2
+                  Y: =App.Height/2+100
+            - ButtonCanvas3:
+                Control: Button@0.0.45
+                Properties:
+                  Appearance: ='ButtonCanvas.Appearance'.Transparent
+                  FontColor: =RGBA(255, 0, 0, 1)
+                  FontWeight: =FontWeight.Bold
+                  Icon: ="Dismiss"
+                  Layout: ='ButtonCanvas.Layout'.IconOnly
+                  OnSelect: =Set(callSpinner,false)
+                  Text: ="X"
+                  X: =1237
+      - Timer1_1:
+          Control: Timer@2.1.0
+          Properties:
+            AutoStart: =true
+            Duration: =300000
+            OnTimerEnd: |-
+              =If(
+                  varLastDate <> Today()-1,
+                  Set(varStartDate, DateAdd(Today(), -1, TimeUnit.Days));
+                  Set(varEndDate, DateAdd(Today(), 2, TimeUnit.Days));
+                  Set(varLastDate, DateAdd(Today(), -1, TimeUnit.Days));
+                  Reset(DatePickerCanvas1);
+                  Reset(DatePickerCanvas1_1)
+              )
+            Repeat: =true
+            Visible: =false
+            X: =1156
+            Y: =744

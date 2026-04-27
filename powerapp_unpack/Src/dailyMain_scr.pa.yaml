@@ -1,0 +1,217 @@
+# ************************************************************************************************
+# Warning: YAML source code for Canvas Apps should only be used to review changes made within Power Apps Studio and for minor edits (Preview).
+# Use the maker portal to create and edit your Power Apps.
+# 
+# The schema file for Canvas Apps is available at https://go.microsoft.com/fwlink/?linkid=2304907
+# 
+# For more information, visit https://go.microsoft.com/fwlink/?linkid=2292623
+# ************************************************************************************************
+Screens:
+  dailyMain_scr:
+    Properties:
+      Fill: =If(vartheme="Light",Color.Cornsilk,varMainFill)
+    Children:
+      - oilAirLub:
+          Control: Classic/CheckBox@2.1.0
+          Properties:
+            Color: =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            Size: =16
+            Text: ="Oil Air Lubrication - Look/Clean"
+            Width: =505
+            X: =40
+            Y: =284
+      - pneuDev:
+          Control: Classic/CheckBox@2.1.0
+          Properties:
+            Color: |+
+              =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            Size: =16
+            Text: ="Pneumatic Device - Look/Check"
+            Width: =505
+            X: =40
+            Y: =493
+      - obsWindow:
+          Control: Classic/CheckBox@2.1.0
+          Properties:
+            Color: |+
+              =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            Size: =16
+            Text: ="Observation Window"
+            Width: =505
+            X: =609
+            Y: =420
+      - machineCham:
+          Control: Classic/CheckBox@2.1.0
+          Properties:
+            Color: |+
+              =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            Size: =16
+            Text: ="Machine Chamber - Clean"
+            Width: =505
+            X: =40
+            Y: =349
+      - chuck:
+          Control: Classic/CheckBox@2.1.0
+          Properties:
+            Color: |+
+              =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            Size: =16
+            Text: ="Chuck - Clean/Warmup/Grease"
+            Width: =505
+            X: =40
+            Y: =425
+      - lubUnit:
+          Control: Classic/CheckBox@2.1.0
+          Properties:
+            Color: |+
+              =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            Size: =16
+            Text: ="Lubricating Unit - Look/Clean"
+            Width: =521
+            X: =609
+            Y: =284
+      - coolUnit:
+          Control: Classic/CheckBox@2.1.0
+          Properties:
+            Color: |+
+              =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            Size: =16
+            Text: ="Coolant Unit Look/Clean"
+            Width: =505
+            X: =40
+            Y: =556
+      - oilChill:
+          Control: Classic/CheckBox@2.1.0
+          Properties:
+            Color: |+
+              =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            Size: =16
+            Text: ="Oil Chiller - Look/Clean"
+            Width: =505
+            X: =609
+            Y: =556
+      - chipConv:
+          Control: Classic/CheckBox@2.1.0
+          Properties:
+            Color: |+
+              =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            Size: =16
+            Text: ="Chip Conveyor"
+            Width: =505
+            X: =609
+            Y: =490
+      - noteInput:
+          Control: Classic/TextInput@2.3.2
+          Properties:
+            Default: =""
+            Height: =62
+            Width: =764
+            X: =119
+            Y: =709
+      - hydraUnit:
+          Control: Classic/CheckBox@2.1.0
+          Properties:
+            Color: |+
+              =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            OnCheck: =true
+            OnUncheck: =true
+            Size: =16
+            Text: ="Hydraulic Unit - Look/Clean"
+            Width: =505
+            X: =609
+            Y: =349
+      - Label2_1:
+          Control: Label@2.5.1
+          Properties:
+            Align: =Align.Center
+            Color: |+
+              =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            Text: ="Check each unit, update List, And enter name"
+            Width: =976
+            X: =119
+            Y: =40
+      - submitBut:
+          Control: Classic/Button@2.2.0
+          Properties:
+            Color: =RGBA(255, 255, 255, 1)
+            FontWeight: =FontWeight.Bold
+            HoverColor: =RGBA(255, 255, 255, 1)
+            OnSelect: "=/*If(\n    IsBlank(operatorName.SelectedText),\n    Notify(\"Please Select your nmae\", NotificationType.Error),\n    IsBlank(cncDrop.Selected.Value),\n    Notify(\"Please Enter in Machine Number\", NotificationType.Error),\n    coolUnit.Value = false ||\n    lubUnit.Value = false ||\n    oilAirLub.Value = false ||\n    machineCham.Value = false ||\n    chuck.Value = false ||\n    obsWindow.Value = false ||\n    pneuDev.Value = false ||\n    chipConv.Value = false ||\n    oilChill.Value = false ||\n    hydraUnit.Value = false,\n\n    \n     If any checkbox is false, navigate to a new screen \n    Navigate(popUpScreen),\n\n     If all checkboxes are checked, execute the following code */\n    Patch(\n        'CNC Pre-Use/Daily Checklist',\n        Defaults('CNC Pre-Use/Daily Checklist'),\n        {\n            'CNC/Operator': opName.Text,\n            'Lubricating Unit - Look/Clean': lubUnit.Value,\n            'Oil Air Lubricating Unit': oilAirLub.Value,\n            'Machine Chamber - clean': machineCham.Value,\n            'Chuck - clean/warmup/grease': chuck.Value,\n            'Observation Window - clean': obsWindow.Value,\n            'Pneumatic Device - look/checks': pneuDev.Value,\n            'Coolant Unit - look/check': coolUnit.Value,\n            'Chip Conveyors - clean': chipConv.Value,\n            'Oil Chiller - look/clean': oilChill.Value,\n            'Hydraulic Unit - look/clean': hydraUnit.Value,\n            'Machine Number': {Value:cncNumber.Text},\n            Notes: noteInput.Text\n            \n        }\n    );\n\n    Notify(\"Form Successfully Updated\", NotificationType.Success);\n\n    /* Reset controls after Patch operation */\n    Reset(chipConv);\n    Reset(oilChill);\n    Reset(chipConv);\n    Reset(coolUnit);\n    Reset(lubUnit);\n    Reset(chuck);\n    Reset(machineCham);\n    Reset(obsWindow);\n    Reset(pneuDev);\n    Reset(oilAirLub);\n    Reset(noteInput);\n    Reset(hydraUnit);\n    Navigate(home_scr)\n\n"
+            Text: ="Submit"
+            X: =1046
+            Y: =731
+      - Label4_1:
+          Control: Label@2.5.1
+          Properties:
+            Color: |+
+              =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            FontWeight: =FontWeight.Bold
+            Height: =85
+            Text: |-
+              ="Note any: Damage, Leaks, or Repairs"
+            Width: =188
+            X: =119
+            Y: =615
+      - cncNumber:
+          Control: Label@2.5.1
+          Properties:
+            Align: =Align.Center
+            Color: =RGBA(255, 255, 255, 1)
+            Font: =Font.'Lato Light'
+            FontWeight: =FontWeight.Bold
+            Height: =conStation.Height
+            Size: =35
+            Text: =LookUp(Stations,EmailTest = User().Email,'Machine No')
+            Width: =conStation.Width
+            X: =1153
+      - opName:
+          Control: Classic/TextInput@2.3.2
+          Properties:
+            Align: =Align.Center
+            Color: =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+            Default: |-
+              =LookUp(Users,varCurrentBadge='Employee ID','Employee Name')
+
+              //LookUp(Users,varCurrentBadge='Employee ID',Concatenate('Employee Ref. No.',"-",'Employee Name'))
+            DisplayMode: =DisplayMode.View
+            Fill: =RGBA(0, 0, 0, 0)
+            Font: =Font.'Lato Light'
+            FontWeight: =FontWeight.Semibold
+            Height: =43
+            PaddingRight: =6.51
+            PaddingTop: =6.51
+            RadiusBottomLeft: =10
+            RadiusBottomRight: =10
+            RadiusTopLeft: =10
+            RadiusTopRight: =10
+            Size: =20
+            Width: =345
+            X: =40
+            Y: =141
+      - Arrow1:
+          Control: Arrow@2.3.0
+          Variant: BackArrow
+          Properties:
+            OnSelect: =Back()
+            X: =20
+            Y: =12
+      - messagebar_7:
+          Control: GroupContainer@1.5.0
+          Variant: ManualLayout
+          Properties:
+            Fill: =RGBA(255, 234, 166, 1)
+            Height: =52
+            Visible: =varMessage.MessageActive=true && varMessage.'App Version'<>_AppVerison
+            Width: =1333
+            Y: =150
+          Children:
+            - TextCanvas17_7:
+                Control: Text@0.0.51
+                Properties:
+                  Align: ='TextCanvas.Align'.Center
+                  Font: =Font.'Segoe UI'
+                  FontColor: =RGBA(0, 0, 0, 1)
+                  Height: =50
+                  Size: =35
+                  Text: =varMessage.Message
+                  Width: =1333

@@ -1,0 +1,202 @@
+# ************************************************************************************************
+# Warning: YAML source code for Canvas Apps should only be used to review changes made within Power Apps Studio and for minor edits (Preview).
+# Use the maker portal to create and edit your Power Apps.
+# 
+# The schema file for Canvas Apps is available at https://go.microsoft.com/fwlink/?linkid=2304907
+# 
+# For more information, visit https://go.microsoft.com/fwlink/?linkid=2292623
+# ************************************************************************************************
+Screens:
+  sopScreen:
+    Properties:
+      BackgroundImage: ='Screenshot_20221208-192313_Gallery'
+      ImagePosition: =ImagePosition.Stretch
+    Children:
+      - cbDepart:
+          Control: ComboBox@0.0.51
+          Properties:
+            DefaultSelectedItems: ={Id:131,Result:"All Departments"}
+            Height: =40
+            InputTextPlaceholder: ="Department"
+            Items: |+
+              =ForAll(Distinct('Standard Operating Procedures',Department.Value), {Result: ThisRecord.Value})
+            Width: =297
+            X: =256
+            Y: =86
+          Children:
+            - Result2:
+                Control: ComboBoxDataField@1.5.0
+                Variant: textualColumn
+                IsLocked: true
+                Properties:
+                  FieldDisplayName: ="Result"
+                  FieldName: ="Result"
+                  FieldType: ="s"
+                  Order: =1
+      - PdfViewer1:
+          Control: PDFViewer@2.5.0
+          Properties:
+            DisplayMode: =DisplayMode.View
+            Document: |+
+              =Substitute(operation_sop_gal.Selected.Thumbnail.Large,"/thumbnail","/pdf")
+            Height: =783
+            Visible: |-
+              =true
+              //varSOPPDFViewer
+            Width: =754
+            X: =579
+            Y: =17
+      - pdfExitBackground:
+          Control: HtmlViewer@2.1.0
+          Properties:
+            DisabledBorderColor: =RGBA(56, 56, 56, 1)
+            Font: =Font.'Open Sans'
+            Height: =147
+            HtmlText: |-
+              ="<div style='background: linear-gradient(90deg, rgba(140,204,237,1) 0%, rgba(168,27,34,1) 100%); 
+              box-shadow: 1px 2px 22px 0px rgba(89,87,87,0.85);
+              margin: 20px; 
+              width: 220px; 
+              height: 80px; 
+              border-radius: 30px'>
+              </div>"
+            OnSelect: |+
+              =If(varSOPPDFViewer = true && !Parent.Printing, true, false)
+            Visible: |+
+              =If(varSOPPDFViewer = true && !Parent.Printing, true, false)
+            Width: =256
+            Y: =127
+      - pdfExitContainer:
+          Control: GroupContainer@1.5.0
+          Variant: ManualLayout
+          Properties:
+            DropShadow: =DropShadow.ExtraBold
+            Height: =113
+            Visible: |+
+              =If(varSOPPDFViewer = true && !Parent.Printing, true, false)
+            Width: =256
+            Y: =138
+      - pdfExit_1:
+          Control: Button@0.0.45
+          Properties:
+            Appearance: ='ButtonCanvas.Appearance'.Transparent
+            BasePaletteColor: =RGBA(0, 0, 0, 1)
+            Font: =Font.Georgia
+            FontColor: =RGBA(255, 255, 255, 1)
+            FontSize: =25
+            FontWeight: =FontWeight.Semibold
+            Height: =65
+            OnSelect: =Set(varSOPPDFViewer,false)
+            Text: ="Back"
+            Visible: |+
+              =If(varSOPPDFViewer = true && !Parent.Printing, true, false)
+            Width: =225
+            X: =8
+            Y: =157
+      - pdfExitContainer_1:
+          Control: GroupContainer@1.5.0
+          Variant: ManualLayout
+          Properties:
+            DropShadow: =DropShadow.ExtraBold
+            Height: =113
+            Visible: |+
+              =If(varSOPPDFViewer = true && !Parent.Printing, true, false)
+            Width: =256
+            Y: =263
+      - pdfExitBackground_1:
+          Control: HtmlViewer@2.1.0
+          Properties:
+            DisabledBorderColor: =RGBA(56, 56, 56, 1)
+            Font: =Font.'Open Sans'
+            Height: =147
+            HtmlText: |-
+              ="<div style='background: linear-gradient(90deg, rgba(140,204,237,1) 0%, rgba(168,27,34,1) 100%); 
+              box-shadow: 1px 2px 22px 0px rgba(89,87,87,0.85);
+              margin: 20px; 
+              width: 220px; 
+              height: 80px; 
+              border-radius: 30px'>
+              </div>"
+            OnSelect: |+
+              =If(varSOPPDFViewer = true && !Parent.Printing, true, false)
+            Visible: |+
+              =If(varSOPPDFViewer = true && !Parent.Printing, true, false)
+            Width: =256
+            Y: =252
+      - printButton:
+          Control: Classic/Icon@2.5.0
+          Properties:
+            DisabledBorderColor: =RGBA(255, 255, 255, 1)
+            Icon: =Icon.Print
+            OnSelect: =Print()
+            Visible: |+
+              =If(varSOPPDFViewer = true && !Parent.Printing, true, false)
+            X: =102
+            Y: =284
+      - btnCancel_1:
+          Control: Classic/Button@2.2.0
+          Properties:
+            BorderColor: =RGBA(79, 90, 94, 1)
+            BorderThickness: =0
+            Color: =RGBA(255, 255, 255, 1)
+            DisabledBorderColor: =RGBA(0, 0, 0, 0)
+            DisabledColor: =ColorFade(Self.Color,-70%)
+            DisabledFill: =ColorFade(Self.Fill,10%)
+            DisplayMode: =If(IsBlank(txtCurrentBadge.Text),DisplayMode.Disabled,DisplayMode.Edit)
+            Fill: =varMainFill2
+            Font: =Font.'Lato Light'
+            Height: =100
+            HoverColor: =RGBA(255, 255, 255, 1)
+            HoverFill: =ColorFade(Self.Fill, 15%)
+            OnSelect: =Navigate(scrTimeSht,ScreenTransition.UnCover);Set(varAddNew,true);Set(varAddNew,false);UpdateContext({varQty:""});Set(varNumbers,!varNumbers);
+            PaddingTop: =40
+            PressedFill: =ColorFade(Self.Fill, 15%)
+            Text: ="Cancel"
+            Visible: =true//If(IsBlank(txtCurrentBadge),false,true)
+            Width: =90
+            Y: =117
+      - icoClock_5:
+          Control: Classic/Icon@2.5.0
+          Properties:
+            Color: =RGBA(255, 255, 255, 1)
+            DisplayMode: =DisplayMode.View
+            Height: =33
+            Icon: =Icon.CancelBadge
+            OnSelect: =Navigate(scrTimeSht)
+            Visible: =If(IsBlank(txtCurrentBadge.Text),false,true)
+            Width: =32
+            X: =131
+            Y: =17
+      - icoClock_6:
+          Control: Classic/Icon@2.5.0
+          Properties:
+            Color: =RGBA(255, 255, 255, 1)
+            DisplayMode: =DisplayMode.View
+            Height: =33
+            Icon: =Icon.ArrowLeft
+            OnSelect: =Navigate(scrAddNew)
+            Visible: =If(IsBlank(txtCurrentBadge.Text),false,true)
+            Width: =32
+            X: =29
+            Y: =17
+      - backButton:
+          Control: Classic/Button@2.2.0
+          Properties:
+            BorderColor: =RGBA(79, 90, 94, 1)
+            BorderThickness: =0
+            Color: =RGBA(255, 255, 255, 1)
+            DisabledBorderColor: =RGBA(0, 0, 0, 0)
+            DisabledColor: =ColorFade(Self.Color,-70%)
+            DisabledFill: =ColorFade(Self.Fill,10%)
+            DisplayMode: =
+            Fill: =varMainFill2
+            Font: =Font.'Lato Light'
+            Height: =100
+            HoverColor: =RGBA(255, 255, 255, 1)
+            HoverFill: =ColorFade(Self.Fill, 15%)
+            OnSelect: =Back()
+            PaddingTop: =40
+            PressedFill: =ColorFade(Self.Fill, 15%)
+            Text: ="Back"
+            Visible: =true//If(IsBlank(txtCurrentBadge),false,true)
+            Width: =90

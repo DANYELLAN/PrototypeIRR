@@ -101,6 +101,21 @@ function incrementPipeNumber(pipeNumber) {
   return text.length > nextValue.length ? nextValue.padStart(text.length, "0") : nextValue;
 }
 
+function formatPipeStatusResult(status, attemptStatus = "", requiresManagerApproval = false) {
+  const normalizedAttempt = String(attemptStatus || "").trim().toLowerCase();
+  if (normalizedAttempt === "approved" || requiresManagerApproval) return "Pass With Approval";
+  if (normalizedAttempt === "passed") return "Pass";
+  if (normalizedAttempt === "rework") return "Re-work";
+  if (normalizedAttempt === "scrapped") return "Scrapped";
+
+  const normalized = String(status || "").trim().toLowerCase();
+  if (normalized === "completed") return "Pass";
+  if (normalized === "rework") return "Re-work";
+  if (normalized === "scrapped") return "Scrapped";
+  if (normalized === "in_progress") return "In Progress";
+  return status ? String(status) : "";
+}
+
 function countDecimalPlaces(value) {
   if (value === null || value === undefined || value === "") return 0;
   const text = String(value);
@@ -144,6 +159,7 @@ function buildNumericEntryConfig(element) {
     tailLength: 2,
     tailPlaceholder: reference.slice(-2),
     fullPlaceholder: reference,
+    decimals,
   };
 }
 
@@ -174,62 +190,134 @@ function renderTable(rows) {
   `;
 }
 
-function renderPipeHistoryResults(rows, canDelete = false) {
-  if (!rows?.length) return "<p>No records found.</p>";
+function renderPipeHistorySheets(groups, { inspectorName = "", locationName = "", canManage = false } = {}) {
+  if (!groups?.length) return "<p>No records found.</p>";
   return `
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Production Number</th>
-            <th>Connection Type / Operation Description</th>
-            <th>Pipe Number</th>
-            <th>Status</th>
-            <th>Latest Attempt</th>
-            <th>Updated</th>
-            <th>Report</th>
-            ${canDelete ? "<th>Admin</th>" : ""}
-          </tr>
-        </thead>
-        <tbody>
-          ${rows
-            .map(
-              (row) => `
-                <tr>
-                  <td>${escapeHtml(row.production_number)}</td>
-                  <td>${escapeHtml(row.operation_description)}</td>
-                  <td>${escapeHtml(row.pipe_number)}</td>
-                  <td>${escapeHtml(row.current_status)}</td>
-                  <td>
-                    <div>${escapeHtml(row.latest_attempt_no)}</div>
-                    ${renderScopeBadge(row.latest_inspection_scope)}
-                  </td>
-                  <td>${escapeHtml(formatDateValue(row.updated_at))}</td>
-                  <td><a class="button secondary compact-button" href="/report/pipe/${encodeURIComponent(row.id)}">View Full Report</a></td>
-                  ${
-                    canDelete
-                      ? `<td><div class="admin-actions">${
-                          `<a class="button secondary compact-button" href="/workflow/history/edit/${encodeURIComponent(row.id)}">Edit</a>`
-                        }${
-                          row.current_status === "in_progress"
-                            ? `<form method="post" action="/workflow/history/reset" onsubmit="return confirm('Reset this in-progress pipe inspection? The unfinished attempt will be removed and the pipe will roll back to its last resolved state.');">
-                                 <input type="hidden" name="pipeUnitId" value="${escapeHtml(row.id)}" />
-                                 <button class="button warning compact-button" type="submit">Reset In-Progress</button>
-                               </form>`
-                            : ""
-                        }${
-                          `<form method="post" action="/workflow/history/delete" onsubmit="return confirm('Delete this pipe inspection and all related attempts, measurements, and NCR records?');">
-                             <input type="hidden" name="pipeUnitId" value="${escapeHtml(row.id)}" />
-                             <button class="button danger compact-button" type="submit">Delete</button>
-                           </form>`
-                        }</div></td>`
-                      : ""
-                  }
-                </tr>`,
-            )
-            .join("")}
-        </tbody>
-      </table>
+    <form id="pipe-history-sheet-delete-form" method="post" action="/workflow/history/delete">
+      <input type="hidden" id="pipe-history-sheet-delete-pipe-unit-id" name="pipeUnitId" value="" />
+    </form>
+    <div class="pipe-history-sheet-list">
+      ${groups
+        .map((group) => {
+          const drawing = group.recipeDefinition?.drawing || "";
+          const connectionType = group.recipeDefinition?.connection_type || group.operationDescription || "";
+          const reportTitle = group.recipeDefinition?.source_report || group.recipeDefinition?.recipe_name || "";
+          return `
+            <details class="table-card pipe-history-entry">
+              <summary class="pipe-history-summary">
+                <span class="pipe-history-summary-label"><strong>Workorder #:</strong> ${escapeHtml(group.productionNumber)}</span>
+                <span class="pipe-history-summary-label"><strong>Connection Type:</strong> ${escapeHtml(connectionType)}</span>
+                <span class="pipe-history-summary-label"><strong>Connections:</strong> ${escapeHtml(String(group.columns.length))}</span>
+              </summary>
+              <div class="inspection-sheet-meta pipe-history-sheet-meta">
+                <div class="inspection-sheet-meta-row">
+                  <div><strong>Date:</strong> ${escapeHtml(formatDateValue(group.latestUpdatedAt || new Date()))}</div>
+                  <div><strong>Drawing #:</strong> ${escapeHtml(drawing)}</div>
+                  <div><strong>Machine #:</strong> ${escapeHtml(locationName || "")}</div>
+                </div>
+                <div class="inspection-sheet-meta-row">
+                  <div><strong>Inspector:</strong> ${escapeHtml(inspectorName || "")}</div>
+                  <div><strong>Workorder #:</strong> ${escapeHtml(group.productionNumber)}</div>
+                  <div><strong>Connection Type:</strong> ${escapeHtml(connectionType)}</div>
+                </div>
+              </div>
+              ${reportTitle ? `<p class="pipe-history-report-title">${escapeHtml(reportTitle)}</p>` : ""}
+              <div class="table-wrap inspection-sheet-wrap">
+                <table class="inspection-sheet-table pipe-history-sheet-table">
+                  <thead>
+                    <tr>
+                      <th class="inspection-col-num">#</th>
+                      <th>Element</th>
+                      <th>DWG DIM</th>
+                      <th>Gauge</th>
+                      ${group.columns
+                        .map(
+                          (column) => `<th
+                            class="inspection-col-history ${canManage ? "history-column-action" : ""}"
+                            ${canManage ? `data-history-pipe-id="${escapeHtml(column.pipeUnitId)}" data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}" title="Click to edit this saved pipe. Right-click to delete it."` : ""}
+                          >Connection # ${escapeHtml(column.pipeNumber || "")}</th>`,
+                        )
+                        .join("")}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${group.rows
+                      .map((row) => {
+                        const rowClass =
+                          row.frequency === "rotating"
+                            ? "inspection-sheet-row-rotating"
+                            : row.frequency === "every_pipe"
+                              ? "inspection-sheet-row-active"
+                              : "";
+                        return `<tr class="${rowClass}">
+                          <td class="inspection-col-num">${escapeHtml(row.element_sequence)}</td>
+                          <td>${escapeHtml(row.element_description)}</td>
+                          <td>${escapeHtml(row.dwg_dim || "")}</td>
+                          <td>${escapeHtml(row.gauge || "")}</td>
+                          ${group.columns
+                            .map((column) => {
+                              const measurement = column.measurementsBySequence?.get(Number(row.element_sequence));
+                              return `<td
+                                class="inspection-history-cell ${canManage ? "history-column-action " : ""}${measurement ? "inspection-history-cell-filled" : "inspection-history-cell-empty"}"
+                                ${canManage ? `data-history-pipe-id="${escapeHtml(column.pipeUnitId)}" data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}" title="Click to edit this saved pipe. Right-click to delete it."` : ""}
+                              >${escapeHtml(measurement?.measured_value ?? "")}</td>`;
+                            })
+                            .join("")}
+                        </tr>`;
+                      })
+                      .join("")}
+                  </tbody>
+                  <tfoot>
+                    <tr class="inspection-result-row">
+                      <td class="inspection-col-num inspection-result-label-piece inspection-result-label-num"></td>
+                      <td class="inspection-result-label-piece inspection-result-label-main"><strong>Inspection Result</strong></td>
+                      <td class="inspection-result-label-piece inspection-result-label-dwg"></td>
+                      <td class="inspection-result-label-piece inspection-result-label-gauge"></td>
+                      ${group.columns
+                        .map((column) => {
+                          const resultLabel = formatPipeStatusResult(
+                            column.status,
+                            column.attemptStatus,
+                            column.requiresManagerApproval,
+                          );
+                          return `<td
+                            class="inspection-history-result-cell ${canManage ? "history-column-action" : ""}"
+                            ${canManage ? `data-history-pipe-id="${escapeHtml(column.pipeUnitId)}" data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}" title="Click to edit this saved pipe. Right-click to delete it."` : ""}
+                          >${escapeHtml(resultLabel)}</td>`;
+                        })
+                        .join("")}
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              <div class="pipe-history-entry-actions">
+                ${group.columns
+                  .map(
+                    (column) => `
+                      <div class="pipe-history-entry-action-row">
+                        <span class="pipe-history-entry-action-label">Connection # ${escapeHtml(column.pipeNumber || "")}</span>
+                        <a class="button secondary compact-button" href="/report/pipe/${encodeURIComponent(column.pipeUnitId)}">View Full Report</a>
+                        ${canManage ? `<a class="button secondary compact-button" href="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}">Edit</a>` : ""}
+                        ${canManage && column.status === "in_progress"
+                          ? `<form method="post" action="/workflow/history/reset" onsubmit="return confirm('Reset this in-progress pipe inspection? The unfinished attempt will be removed and the pipe will roll back to its last resolved state.');">
+                               <input type="hidden" name="pipeUnitId" value="${escapeHtml(column.pipeUnitId)}" />
+                               <button class="button warning compact-button" type="submit">Reset In-Progress</button>
+                             </form>`
+                          : ""}
+                        ${canManage
+                          ? `<form method="post" action="/workflow/history/delete" onsubmit="return confirm('Delete this pipe inspection and all related attempts, measurements, and NCR records?');">
+                               <input type="hidden" name="pipeUnitId" value="${escapeHtml(column.pipeUnitId)}" />
+                               <button class="button danger compact-button" type="submit">Delete</button>
+                             </form>`
+                          : ""}
+                      </div>`,
+                  )
+                  .join("")}
+              </div>
+            </details>
+          `;
+        })
+        .join("")}
     </div>
   `;
 }
@@ -282,8 +370,36 @@ function renderMeasurementMeta(element) {
   return meta.map((item) => `<span class="pill">${escapeHtml(item)}</span>`).join("");
 }
 
-function renderInspectionInputControl(element) {
+function buildCarriedValueConfig(element, priorMeasuredValue, numericEntryConfig = null) {
+  if (priorMeasuredValue === null || priorMeasuredValue === undefined || priorMeasuredValue === "") return null;
+  if (element.capture_type === "boolean") {
+    const normalized = String(priorMeasuredValue).trim().toLowerCase();
+    return {
+      checked: ["yes", "y", "pass", "true", "1"].includes(normalized),
+      hiddenValue: ["yes", "y", "pass", "true", "1"].includes(normalized) ? "Yes" : "No",
+    };
+  }
+
+  const text = String(priorMeasuredValue).trim();
+  if (numericEntryConfig) {
+    const numericValue = Number(text);
+    if (!Number.isNaN(numericValue)) {
+      const formattedValue = formatNumericReference(numericValue, numericEntryConfig.decimals);
+      return {
+        fullValue: formattedValue,
+        shortTail: formattedValue.slice(-numericEntryConfig.tailLength),
+      };
+    }
+  }
+  return {
+    fullValue: text,
+    shortTail: text.slice(-2),
+  };
+}
+
+function renderInspectionInputControl(element, priorMeasuredValue = null) {
   const numericEntryConfig = element.capture_type === "boolean" ? null : buildNumericEntryConfig(element);
+  const carriedValue = buildCarriedValueConfig(element, priorMeasuredValue, numericEntryConfig);
   if (element.capture_type === "boolean") {
     return `<label class="measurement-checkbox-row inspection-table-checkbox">
       <input
@@ -291,9 +407,10 @@ function renderInspectionInputControl(element) {
         class="measurement-input measurement-checkbox"
         data-capture-type="boolean"
         data-full-target="element_full_${element.element_sequence}"
+        ${carriedValue?.checked ? "checked" : ""}
       />
       <span>Pass</span>
-      <input type="hidden" id="element_full_${element.element_sequence}" name="element_${element.element_sequence}" value="No" />
+      <input type="hidden" id="element_full_${element.element_sequence}" name="element_${element.element_sequence}" value="${escapeHtml(carriedValue?.hiddenValue || "No")}" />
     </label>`;
   }
 
@@ -309,15 +426,16 @@ function renderInspectionInputControl(element) {
         data-tail-length="${escapeHtml(numericEntryConfig.tailLength)}"
         data-full-target="element_full_${element.element_sequence}"
         placeholder="${escapeHtml(numericEntryConfig.tailPlaceholder)}"
+        value="${escapeHtml(carriedValue?.shortTail || "")}"
         inputmode="numeric"
         maxlength="${escapeHtml(numericEntryConfig.tailLength)}"
         required
       />
-      <input type="hidden" id="element_full_${element.element_sequence}" name="element_${element.element_sequence}" value="" />
+      <input type="hidden" id="element_full_${element.element_sequence}" name="element_${element.element_sequence}" value="${escapeHtml(carriedValue?.fullValue || "")}" />
     </div>`;
   }
 
-  return `<input class="measurement-input inspection-table-input" data-capture-type="numeric" data-min="${escapeHtml(element.min ?? "")}" data-max="${escapeHtml(element.max ?? "")}" placeholder="${escapeHtml(element.nominal ?? "")}" name="element_${element.element_sequence}" required />`;
+  return `<input class="measurement-input inspection-table-input" data-capture-type="numeric" data-min="${escapeHtml(element.min ?? "")}" data-max="${escapeHtml(element.max ?? "")}" placeholder="${escapeHtml(element.nominal ?? "")}" value="${escapeHtml(carriedValue?.fullValue || "")}" name="element_${element.element_sequence}" required />`;
 }
 
 function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, selection, sessionRecord, inspectorName, historyColumns = [] }) {
@@ -327,6 +445,9 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
   const drawing = recipeDefinition?.drawing || "";
   const locationName = sessionRecord?.location_name || "";
   const currentPipeNumber = activeInspection?.pipe_number || selection.pipeNumber || "";
+  const previousMeasurementsBySequence = historyColumns.length
+    ? historyColumns[historyColumns.length - 1].measurementsBySequence
+    : new Map();
   const loadPipeFormId = "load-pipe-form";
   const connectionCellForm = `
     <div class="connection-header-entry">
@@ -360,6 +481,9 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
         <input type="hidden" name="recipeName" value="${escapeHtml(selection.recipeName || "")}" />
         <input type="hidden" name="inspectionScope" value="${escapeHtml(selection.inspectionScope || "standard")}" />
       </form>
+      <form id="worksheet-history-delete-form" method="post" action="/workflow/history/delete">
+        <input type="hidden" id="worksheet-history-delete-pipe-unit-id" name="pipeUnitId" value="" />
+      </form>
       <form method="post" action="/workflow/complete" class="form-grid">
         <div class="inspection-sheet-meta">
           <div class="inspection-sheet-meta-row">
@@ -381,7 +505,16 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
                 <th>Element</th>
                 <th>DWG DIM</th>
                 <th>Gauge</th>
-                ${historyColumns.map((column) => `<th class="inspection-col-history">Connection # ${escapeHtml(column.pipe_number || "")}</th>`).join("")}
+                ${historyColumns
+                  .map(
+                    (column) => `<th
+                      class="inspection-col-history history-column-action"
+                      data-history-pipe-id="${escapeHtml(column.pipeUnitId)}"
+                      data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}"
+                      title="Click to edit this saved pipe. Right-click to delete it."
+                    >Connection # ${escapeHtml(column.pipe_number || "")}</th>`,
+                  )
+                  .join("")}
                 <th class="inspection-col-measure inspection-col-current">${connectionCellForm}</th>
               </tr>
             </thead>
@@ -402,13 +535,18 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
                     ${historyColumns
                       .map((column) => {
                         const historicalMeasurement = column.measurementsBySequence?.get(Number(row.element_sequence));
-                        return `<td class="inspection-history-cell ${historicalMeasurement ? "inspection-history-cell-filled" : "inspection-history-cell-empty"}">${escapeHtml(historicalMeasurement?.measured_value ?? "")}</td>`;
+                        return `<td
+                          class="inspection-history-cell history-column-action ${historicalMeasurement ? "inspection-history-cell-filled" : "inspection-history-cell-empty"}"
+                          data-history-pipe-id="${escapeHtml(column.pipeUnitId)}"
+                          data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}"
+                          title="Click to edit this saved pipe. Right-click to delete it."
+                        >${escapeHtml(historicalMeasurement?.measured_value ?? "")}</td>`;
                       })
                       .join("")}
                     <td class="inspection-measure-cell">
                       ${
                         planned
-                          ? renderInspectionInputControl(planned)
+                          ? renderInspectionInputControl(planned, previousMeasurementsBySequence.get(Number(row.element_sequence))?.measured_value ?? null)
                           : activeInspection
                             ? `<span class="inspection-sheet-not-due">${escapeHtml(row.frequency === "rotating" ? "Rotating" : "")}</span>`
                             : `<span class="inspection-sheet-not-due"></span>`
@@ -420,7 +558,25 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
             </tbody>
             <tfoot>
               <tr class="inspection-result-row">
-                <td colspan="${4 + historyColumns.length}"><strong>Inspection Result</strong></td>
+                <td class="inspection-col-num inspection-result-label-piece inspection-result-label-num"></td>
+                <td class="inspection-result-label-piece inspection-result-label-main"><strong>Inspection Result</strong></td>
+                <td class="inspection-result-label-piece inspection-result-label-dwg"></td>
+                <td class="inspection-result-label-piece inspection-result-label-gauge"></td>
+                ${historyColumns
+                  .map((column) => {
+                    const resultLabel = formatPipeStatusResult(
+                      column.status,
+                      column.attemptStatus,
+                      column.requiresManagerApproval,
+                    );
+                    return `<td
+                      class="inspection-history-result-cell history-column-action"
+                      data-history-pipe-id="${escapeHtml(column.pipeUnitId)}"
+                      data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}"
+                      title="Click to edit this saved pipe. Right-click to delete it."
+                    >${escapeHtml(resultLabel)}</td>`;
+                  })
+                  .join("")}
                 <td class="inspection-result-cell">
                   <div id="inspection-table-result" class="inspection-table-result pending">
                     <span id="inspection-table-result-text"></span>
@@ -450,6 +606,9 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
               <div class="field"><label>Manager Name</label><input id="manager-name-input" name="manager_name" /></div>
               <div class="field"><label>Reason</label><input id="manager-reason-input" name="manager_reason" /></div>
             </div>
+            <div class="actions approval-modal-actions">
+              <button type="submit" class="button">Submit Approval</button>
+            </div>
           </div>
         </div>
         <div id="failure-fields" class="failure-fields hidden">
@@ -458,7 +617,7 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
           <div class="field"><label>Immediate Containment</label><textarea name="immediate_containment"></textarea></div>
         </div>
         <div class="field"><label>Attempt Notes</label><textarea name="notes"></textarea></div>
-        <div class="actions">${activeInspection ? `<button class="button" type="submit">Complete Inspection</button>` : ""}</div>
+        <div class="actions">${activeInspection ? `<button id="complete-inspection-button" class="button" type="submit">Complete Inspection</button>` : ""}</div>
       </form>
     </section>
   `;
@@ -692,6 +851,42 @@ function layout({ title, sidebar, content, theme = "Light" }) {
         })();
 
         (function () {
+          const inspectionSheetWrap = document.querySelector(".inspection-sheet-wrap");
+          if (inspectionSheetWrap) {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                inspectionSheetWrap.scrollLeft = inspectionSheetWrap.scrollWidth;
+              });
+            });
+          }
+
+          const historyActionCells = document.querySelectorAll(".history-column-action");
+          const historyDeleteForm = document.getElementById("worksheet-history-delete-form");
+          const historyDeletePipeInput = document.getElementById("worksheet-history-delete-pipe-unit-id");
+
+          historyActionCells.forEach((cell) => {
+            cell.addEventListener("click", (event) => {
+              const editUrl = cell.dataset.editUrl;
+              if (!editUrl) return;
+              if (!window.confirm("Edit this saved pipe record?")) {
+                event.preventDefault();
+                return;
+              }
+              window.location.href = editUrl;
+            });
+
+            cell.addEventListener("contextmenu", (event) => {
+              const pipeUnitId = cell.dataset.historyPipeId;
+              if (!pipeUnitId || !historyDeleteForm || !historyDeletePipeInput) return;
+              event.preventDefault();
+              if (!window.confirm("Delete this saved pipe inspection and all related attempts, measurements, and NCR records?")) {
+                return;
+              }
+              historyDeletePipeInput.value = pipeUnitId;
+              historyDeleteForm.submit();
+            });
+          });
+
           const inputs = document.querySelectorAll(".measurement-input");
           const modeSelects = document.querySelectorAll(".recipe-mode-select");
           if (modeSelects.length) {
@@ -719,7 +914,11 @@ function layout({ title, sidebar, content, theme = "Light" }) {
           const managerApprovalModal = document.getElementById("manager-approval-modal");
           const managerNameInput = document.getElementById("manager-name-input");
           const managerReasonInput = document.getElementById("manager-reason-input");
+          const completeInspectionButton = document.getElementById("complete-inspection-button");
           const approvalCloseButtons = document.querySelectorAll("[data-approval-close]");
+          const focusableMeasurementInputs = Array.from(
+            document.querySelectorAll(".measurement-short-input, .inspection-table-input, .measurement-checkbox"),
+          );
 
           const setApprovalModalVisible = (visible) => {
             if (!managerApprovalModal) return;
@@ -781,8 +980,16 @@ function layout({ title, sidebar, content, theme = "Light" }) {
                 resultDetail.textContent = "";
               } else if (anyFail) {
                 resultPanel.classList.add("fail");
-                resultText.textContent = "Fail";
-                resultDetail.textContent = "Choose re-work or pass with approval.";
+                if (failureActionSelect && failureActionSelect.value === "manager_approved") {
+                  resultText.textContent = "Pass with Approval";
+                  resultDetail.textContent = "Enter the manager name and reason, then submit the approval.";
+                } else if (failureActionSelect && failureActionSelect.value === "rework") {
+                  resultText.textContent = "Re-work";
+                  resultDetail.textContent = "This failed inspection will be sent to re-work when submitted.";
+                } else {
+                  resultText.textContent = "Fail";
+                  resultDetail.textContent = "Choose re-work or pass with approval.";
+                }
               } else {
                 resultPanel.classList.add("pass");
                 resultText.textContent = "Pass";
@@ -812,6 +1019,13 @@ function layout({ title, sidebar, content, theme = "Light" }) {
                 if (managerNameInput) managerNameInput.value = "";
                 if (managerReasonInput) managerReasonInput.value = "";
               }
+            }
+
+            if (completeInspectionButton) {
+              completeInspectionButton.classList.toggle(
+                "hidden",
+                Boolean(failureActionSelect && failureActionSelect.value === "manager_approved"),
+              );
             }
           };
 
@@ -863,8 +1077,29 @@ function layout({ title, sidebar, content, theme = "Light" }) {
           };
 
           inputs.forEach((element) => {
+            if (element.classList.contains("measurement-short-input") || element.classList.contains("inspection-table-input")) {
+              element.addEventListener("focus", () => {
+                if (typeof element.select === "function") {
+                  element.select();
+                }
+              });
+            }
+
             ["input", "change", "blur"].forEach((eventName) => {
               element.addEventListener(eventName, () => evaluate(element));
+            });
+
+            element.addEventListener("keydown", (event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              const currentIndex = focusableMeasurementInputs.indexOf(element);
+              const nextInput = currentIndex >= 0 ? focusableMeasurementInputs[currentIndex + 1] : null;
+              if (nextInput) {
+                nextInput.focus();
+                if (typeof nextInput.select === "function" && !nextInput.classList.contains("measurement-checkbox")) {
+                  nextInput.select();
+                }
+              }
             });
             evaluate(element);
           });
@@ -1167,14 +1402,17 @@ app.get("/workflow/inspection", async (req, res, next) => {
       return true;
     });
     const historyColumns = [];
-    for (const pipeRow of historySourceRows.slice(-4)) {
+    for (const pipeRow of historySourceRows) {
       const attempts = await callBridge("get_pipe_attempt_history", { pipe_unit_id: pipeRow.id });
       const latestAttempt = attempts[0];
       if (!latestAttempt) continue;
       const measurements = await callBridge("get_attempt_measurements", { attempt_id: latestAttempt.id });
       historyColumns.push({
+        pipeUnitId: pipeRow.id,
         pipe_number: pipeRow.pipe_number,
         status: pipeRow.current_status,
+        attemptStatus: latestAttempt.status,
+        requiresManagerApproval: Boolean(latestAttempt.requires_manager_approval),
         measurementsBySequence: new Map(measurements.map((item) => [Number(item.element_sequence), item])),
       });
     }
@@ -1183,9 +1421,9 @@ app.get("/workflow/inspection", async (req, res, next) => {
       ${renderWorkflowHeader(req)}
       ${renderNotice(req.session.notice)}
       ${renderWorkflowNav("/workflow/inspection")}
-      <section class="card">
-        <h2 class="section-title">Inspection Entry</h2>
-        <form method="get" action="/workflow/inspection" class="form-grid" id="inspection-selection-form">
+      <details class="card inspection-entry-panel"${showWorksheet ? "" : " open"}>
+        <summary class="section-title">Inspection Entry</summary>
+        <form method="get" action="/workflow/inspection" class="form-grid inspection-entry-form" id="inspection-selection-form">
           <div class="field"><label>Production Number / WO</label><select name="productionNumber" onchange="this.form.recipeName.value=''; this.form.submit();">${renderOptions(productionNumbers, selection.productionNumber, (item) => item, (item) => item)}</select></div>
           <div class="inspection-entry-inline-row">
             <div class="field"><label>Size</label><input name="sizeLabel" value="${escapeHtml(selection.sizeLabel)}" oninput="this.form.recipeName.value='';" /></div>
@@ -1200,6 +1438,7 @@ app.get("/workflow/inspection", async (req, res, next) => {
             <button class="button workflow-action-button" type="submit" formaction="/workflow/start" formmethod="post">Start Inspection</button>
           </div>
         </form>
+      </details>
         ${
           existingPipe
             ? existingPipe.current_status === "in_progress"
@@ -1244,7 +1483,6 @@ app.get("/workflow/inspection", async (req, res, next) => {
           historyColumns,
         }) : ""}
         ${history.length ? `<h3 class="section-title">Pipe History</h3>${renderTable(history)}` : ""}
-      </section>
     `;
 
     req.session.notice = null;
@@ -1258,7 +1496,7 @@ app.get("/workflow/history", async (req, res, next) => {
   try {
     if (!req.session.inspector || !req.session.sessionRecord) return res.redirect("/");
     const inspector = req.session.inspector;
-    const canDelete = Boolean(req.session.canAccessAdmin);
+    const canManage = Boolean(req.session.inspector);
     const allPipeRows = await callBridge("search_pipe_units", {
       branch: inspector.branch,
       production_number: null,
@@ -1293,7 +1531,7 @@ app.get("/workflow/history", async (req, res, next) => {
           <div class="field"><label>Filter Scope</label><select name="historyScope"><option value=""></option><option value="standard" ${req.query.historyScope === "standard" ? "selected" : ""}>Standard Inspection</option><option value="full" ${req.query.historyScope === "full" ? "selected" : ""}>Full Inspection</option></select></div>
           <div class="actions"><button class="button" type="submit">Search Pipe History</button></div>
         </form>
-        ${renderPipeHistoryResults(pipeRows, canDelete)}
+        ${renderPipeHistoryResults(pipeRows, canManage)}
       </section>
     `;
     req.session.notice = null;
@@ -1306,11 +1544,6 @@ app.get("/workflow/history", async (req, res, next) => {
 app.get("/workflow/history/edit/:pipeUnitId", async (req, res, next) => {
   try {
     if (!req.session.inspector || !req.session.sessionRecord) return res.redirect("/");
-    if (!req.session.canAccessAdmin) {
-      req.session.notice = { kind: "warning", message: "Only admin users can edit pipe records." };
-      return res.redirect("/workflow/history");
-    }
-
     const pipeRow = await callBridge("get_pipe_unit_by_id", { pipe_unit_id: req.params.pipeUnitId });
     if (!pipeRow) {
       req.session.notice = { kind: "warning", message: "That pipe inspection could not be found." };
@@ -1348,11 +1581,6 @@ app.get("/workflow/history/edit/:pipeUnitId", async (req, res, next) => {
 app.post("/workflow/history/edit/:pipeUnitId", async (req, res, next) => {
   try {
     if (!req.session.inspector || !req.session.sessionRecord) return res.redirect("/");
-    if (!req.session.canAccessAdmin) {
-      req.session.notice = { kind: "warning", message: "Only admin users can edit pipe records." };
-      return res.redirect("/workflow/history");
-    }
-
     await callBridge("update_pipe_unit", {
       pipe_unit_id: req.params.pipeUnitId,
       production_number: req.body.production_number,
@@ -1380,11 +1608,6 @@ app.post("/workflow/history/edit/:pipeUnitId", async (req, res, next) => {
 app.post("/workflow/history/delete", async (req, res, next) => {
   try {
     if (!req.session.inspector || !req.session.sessionRecord) return res.redirect("/");
-    if (!req.session.canAccessAdmin) {
-      req.session.notice = { kind: "warning", message: "Only admin users can delete in-progress inspections." };
-      return res.redirect("/workflow/history");
-    }
-
     const pipeUnitId = req.body.pipeUnitId;
     if (!pipeUnitId) {
       req.session.notice = { kind: "warning", message: "No pipe inspection was selected for deletion." };
@@ -1405,11 +1628,6 @@ app.post("/workflow/history/delete", async (req, res, next) => {
 app.post("/workflow/history/reset", async (req, res, next) => {
   try {
     if (!req.session.inspector || !req.session.sessionRecord) return res.redirect("/");
-    if (!req.session.canAccessAdmin) {
-      req.session.notice = { kind: "warning", message: "Only admin users can reset in-progress inspections." };
-      return res.redirect("/workflow/history");
-    }
-
     const pipeUnitId = req.body.pipeUnitId;
     if (!pipeUnitId) {
       req.session.notice = { kind: "warning", message: "No in-progress pipe inspection was selected for reset." };

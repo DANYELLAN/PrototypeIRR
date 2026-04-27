@@ -1,0 +1,152 @@
+# ************************************************************************************************
+# Warning: YAML source code for Canvas Apps should only be used to review changes made within Power Apps Studio and for minor edits (Preview).
+# Use the maker portal to create and edit your Power Apps.
+# 
+# The schema file for Canvas Apps is available at https://go.microsoft.com/fwlink/?linkid=2304907
+# 
+# For more information, visit https://go.microsoft.com/fwlink/?linkid=2292623
+# ************************************************************************************************
+Screens:
+  contactIT_scr:
+    Properties:
+      Fill: =If(vartheme="Light",Color.Cornsilk,varMainFill)
+    Children:
+      - itcomments_txt:
+          Control: Classic/TextInput@2.3.2
+          Properties:
+            Default: =""
+            Height: =89
+            HintText: ="What issues are you having"
+            Width: =658
+            X: =328
+            Y: =548
+      - Container8:
+          Control: GroupContainer@1.5.0
+          Variant: ManualLayout
+          Properties:
+            Height: =800
+            Width: =1333
+          Children:
+            - ddTechnicalCats:
+                Control: Classic/DropDown@2.3.1
+                Properties:
+                  ChevronFill: =RGBA(255, 255, 255, 1)
+                  ChevronHoverFill: =RGBA(255, 255, 255, 1)
+                  Height: =42
+                  Items: =Filter(tblTechnicalSupportCategories, CategoryID in [1,2,9])
+                  Items.Value: =TechnicalCategory
+                  PressedColor: =RGBA(255, 255, 255, 1)
+                  SelectionColor: =RGBA(255, 255, 255, 1)
+                  Width: =425
+                  X: =80
+                  Y: =235
+            - txtUEmail:
+                Control: Classic/TextInput@2.3.2
+                Properties:
+                  Default: =User().Email
+                  X: =977
+                  Y: =15
+            - Label10_3:
+                Control: Label@2.5.1
+                Properties:
+                  Color: =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+                  Height: =41
+                  Text: ="Select Technical Category:"
+                  Width: =328
+                  X: =80
+                  Y: =181
+            - btnSendSupport:
+                Control: Classic/Button@2.2.0
+                Properties:
+                  Color: =RGBA(255, 255, 255, 1)
+                  ContentLanguage: =
+                  HoverColor: =RGBA(255, 255, 255, 1)
+                  OnSelect: |-
+                    =ITSupportAutomatedTaskUpdater.Run(txtUEmail.Text,ddTechnicalCats.Selected.'Technical Category',txtIssue.Text,currentUser.Text);
+                    Set(varShowTechSupportForm,false);
+                    Set(showSettings,false);
+                    Set(hideSettings,false);
+                    Notify("Form has been submitted", NotificationType.Success);
+                    Navigate(home_scr)
+                  Text: ="Send Request"
+                  X: =616
+                  Y: =673
+            - txtIssue:
+                Control: Classic/TextInput@2.3.2
+                Properties:
+                  Default: =
+                  Height: =341
+                  HintText: ="Describe Issue Here."
+                  Mode: =TextMode.MultiLine
+                  Width: =1232
+                  X: =80
+                  Y: =302
+            - Container20:
+                Control: GroupContainer@1.5.0
+                Variant: ManualLayout
+                Properties:
+                  Fill: =Color.DarkRed
+                  Height: =71
+                  Width: =1333
+                Children:
+                  - Label22:
+                      Control: Label@2.5.1
+                      Properties:
+                        Color: =Color.White
+                        Height: =37
+                        Text: ="BENOIT IT SUPPORT REQUEST FORM"
+                        Width: =321
+                        X: =496
+                        Y: =20
+            - Button3_5:
+                Control: Classic/Button@2.2.0
+                Properties:
+                  Color: =RGBA(255, 255, 255, 1)
+                  HoverColor: =RGBA(255, 255, 255, 1)
+                  OnSelect: |-
+                    =Set(varShowTechSupportForm,false);
+                    Set(showSettings,false);
+                    Set(hideSettings,true);
+                    Navigate(home_scr)
+                  Text: ="Cancel"
+                  X: =1152
+                  Y: =129
+            - currentUser:
+                Control: Classic/TextInput@2.3.2
+                Properties:
+                  Align: =Align.Center
+                  Color: =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+                  Default: |-
+                    =LookUp(Users,varCurrentBadge='Employee ID','Employee Name')
+
+                    //LookUp(Users,varCurrentBadge='Employee ID',Concatenate('Employee Ref. No.',"-",'Employee Name'))
+                  DisplayMode: =DisplayMode.View
+                  Fill: =RGBA(0, 0, 0, 0)
+                  Font: =Font.Lato
+                  Height: =37
+                  PaddingRight: =6.51
+                  PaddingTop: =6.51
+                  RadiusBottomLeft: =10
+                  RadiusBottomRight: =10
+                  RadiusTopLeft: =10
+                  RadiusTopRight: =10
+                  Width: =156
+                  X: =80
+                  Y: =126
+            - Label10_4:
+                Control: Label@2.5.1
+                Properties:
+                  Color: =If(vartheme="Light",Color.Black, Color.WhiteSmoke)
+                  Height: =34
+                  Text: |-
+                    ="CNC: " & LookUp(Stations,EmailTest = User().Email,'Machine No')
+                  Width: =89
+                  X: =288
+                  Y: =129
+      - Arrow1_3:
+          Control: Arrow@2.3.0
+          Variant: BackArrow
+          Properties:
+            OnSelect: =Back()
+            X: =20
+            Y: =12

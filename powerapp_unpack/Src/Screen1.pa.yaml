@@ -1,0 +1,150 @@
+# ************************************************************************************************
+# Warning: YAML source code for Canvas Apps should only be used to review changes made within Power Apps Studio and for minor edits (Preview).
+# Use the maker portal to create and edit your Power Apps.
+# 
+# The schema file for Canvas Apps is available at https://go.microsoft.com/fwlink/?linkid=2304907
+# 
+# For more information, visit https://go.microsoft.com/fwlink/?linkid=2292623
+# ************************************************************************************************
+Screens:
+  Screen1:
+    Children:
+      - DataTable1:
+          Control: DataTable@1.0.3
+          Properties:
+            Items: =Sort(colTimeEntry,labordate,SortOrder.Descending)
+            Width: =1283
+            Y: =218
+          Children:
+            - Status_Column1:
+                Control: DataTableColumn@1.0.1
+                Variant: Textual
+                IsLocked: true
+                Properties:
+                  FieldDisplayName: ="Status"
+                  FieldName: ="Status"
+                  Order: =1
+                  Text: =ThisItem.Status.Value
+            - StartTime_Column1:
+                Control: DataTableColumn@1.0.1
+                Variant: Textual
+                IsLocked: true
+                Properties:
+                  FieldDisplayName: ="StartTime"
+                  FieldName: ="StartTime"
+                  Order: =2
+                  Text: =ThisItem.StartTime
+            - StopTime_Column1:
+                Control: DataTableColumn@1.0.1
+                Variant: Textual
+                IsLocked: true
+                Properties:
+                  FieldDisplayName: ="StopTime"
+                  FieldName: ="StopTime"
+                  Order: =3
+                  Text: =ThisItem.StopTime
+            - labordate_Column1:
+                Control: DataTableColumn@1.0.1
+                Variant: Textual
+                IsLocked: true
+                Properties:
+                  FieldDisplayName: ="labordate"
+                  FieldName: ="labordate"
+                  Order: =4
+                  Text: =ThisItem.labordate
+            - Production_x0020_Nbr_x002e__Column1:
+                Control: DataTableColumn@1.0.1
+                Variant: Textual
+                IsLocked: true
+                Properties:
+                  FieldDisplayName: ="Production_x0020_Nbr_x002e_"
+                  FieldName: ="Production_x0020_Nbr_x002e_"
+                  Order: =5
+                  Text: =ThisItem.Production_x0020_Nbr_x002e_
+            - Machine_x0020__x0023__Column1:
+                Control: DataTableColumn@1.0.1
+                Variant: Textual
+                IsLocked: true
+                Properties:
+                  FieldDisplayName: ="Machine_x0020__x0023_"
+                  FieldName: ="Machine_x0020__x0023_"
+                  Order: =6
+                  Text: =ThisItem.Machine_x0020__x0023_
+            - operationid_Column1:
+                Control: DataTableColumn@1.0.1
+                Variant: Textual
+                IsLocked: true
+                Properties:
+                  FieldDisplayName: ="operationid"
+                  FieldName: ="operationid"
+                  Order: =7
+                  Text: =ThisItem.operationid
+            - opidentifier_Column1:
+                Control: DataTableColumn@1.0.1
+                Variant: Textual
+                IsLocked: true
+                Properties:
+                  FieldDisplayName: ="opidentifier"
+                  FieldName: ="opidentifier"
+                  Order: =8
+                  Text: =ThisItem.opidentifier
+            - Time_Column1:
+                Control: DataTableColumn@1.0.1
+                Variant: Textual
+                IsLocked: true
+                Properties:
+                  FieldDisplayName: ="Time"
+                  FieldName: ="Time"
+                  Order: =9
+                  Text: =ThisItem.Time
+            - Qty_Column1:
+                Control: DataTableColumn@1.0.1
+                Variant: Textual
+                IsLocked: true
+                Properties:
+                  FieldDisplayName: ="Qty"
+                  FieldName: ="Qty"
+                  Order: =10
+                  Text: =ThisItem.Qty
+            - Tran_x0020_Description_Column1:
+                Control: DataTableColumn@1.0.1
+                Variant: Textual
+                IsLocked: true
+                Properties:
+                  FieldDisplayName: ="Tran_x0020_Description"
+                  FieldName: ="Tran_x0020_Description"
+                  Order: =11
+                  Text: =ThisItem.Tran_x0020_Description
+            - Employee_x0020_ID_Column1:
+                Control: DataTableColumn@1.0.1
+                Variant: Textual
+                IsLocked: true
+                Properties:
+                  FieldDisplayName: ="Employee_x0020_ID"
+                  FieldName: ="Employee_x0020_ID"
+                  Order: =12
+                  Text: =ThisItem.Employee_x0020_ID
+            - EmployeeNo_Column1:
+                Control: DataTableColumn@1.0.1
+                Variant: Textual
+                IsLocked: true
+                Properties:
+                  FieldDisplayName: ="EmployeeNo"
+                  FieldName: ="EmployeeNo"
+                  Order: =13
+                  Text: =ThisItem.EmployeeNo
+            - empname_Column1:
+                Control: DataTableColumn@1.0.1
+                Variant: Textual
+                IsLocked: true
+                Properties:
+                  FieldDisplayName: ="empname"
+                  FieldName: ="empname"
+                  Order: =14
+                  Text: =ThisItem.empname
+      - ButtonCanvas16:
+          Control: Button@0.0.45
+          Properties:
+            OnSelect: =ClearCollect(colTimeEntry, Sort('Machinist Time Entry','Labor Date',SortOrder.Descending))
+            X: =40
+            Y: =40
