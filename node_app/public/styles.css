@@ -898,7 +898,7 @@ details summary::-webkit-details-marker {
   --sheet-col-element: 270px;
   --sheet-col-dwg: 170px;
   --sheet-col-gauge: 120px;
-  --sheet-col-connection: 150px;
+  --sheet-col-connection: 190px;
   width: max-content;
   border-collapse: separate;
   border-spacing: 0;
@@ -1117,9 +1117,9 @@ details summary::-webkit-details-marker {
 .inspection-sheet-table th.inspection-col-current,
 .inspection-sheet-table td.inspection-measure-cell,
 .inspection-sheet-table td.inspection-result-cell {
-  min-width: 150px;
-  width: 150px;
-  max-width: 150px;
+  min-width: var(--sheet-col-connection);
+  width: var(--sheet-col-connection);
+  max-width: var(--sheet-col-connection);
 }
 
 .report-card {
@@ -1190,6 +1190,186 @@ details summary::-webkit-details-marker {
 .report-connection,
 .report-notes {
   margin-top: 1rem;
+}
+
+.pipe-history-sheet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.pipe-history-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  cursor: pointer;
+}
+
+.pipe-history-summary-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.pipe-history-report-title {
+  margin: 0.65rem 0 0.85rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.pipe-history-entry-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin-top: 0.9rem;
+}
+
+.pipe-history-entry-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+
+.pipe-history-entry-action-label {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pipe-history-connection-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  width: 100%;
+}
+
+.pipe-history-connection-label {
+  min-width: 0;
+  font-size: 0.84rem;
+  text-align: center;
+}
+
+.pipe-history-entry-action-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.pipe-history-entry-action-buttons form {
+  margin: 0;
+}
+
+.pipe-history-action-button {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  min-height: 2.35rem;
+  padding: 0.55rem 0.95rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pipe-history-action-menu {
+  position: relative;
+  display: inline-block;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+.pipe-history-action-menu[open] {
+  z-index: 10;
+}
+
+.pipe-history-table-action-menu[open] {
+  z-index: 12;
+}
+
+.pipe-history-action-menu-toggle {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.95rem;
+  min-width: 1.95rem;
+  height: 1.95rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text-soft);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  box-shadow: 0 1px 2px rgba(16, 29, 24, 0.08);
+}
+
+.pipe-history-action-menu-toggle:hover {
+  background: #ffffff;
+  color: var(--text);
+  border-color: rgba(34, 69, 60, 0.24);
+}
+
+.pipe-history-action-menu-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.pipe-history-action-menu-panel {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  min-width: 12rem;
+  padding: 0.45rem;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  box-shadow: 0 18px 36px rgba(16, 29, 24, 0.14);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.pipe-history-action-menu-panel form {
+  margin: 0;
+}
+
+.pipe-history-action-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 2.35rem;
+  padding: 0.55rem 0.8rem;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pipe-history-action-menu-item:hover {
+  background: rgba(34, 69, 60, 0.08);
+}
+
+.pipe-history-action-menu-item.warning {
+  color: #9a6500;
+}
+
+.pipe-history-action-menu-item.danger {
+  color: #b52a2a;
 }
 
 .report-attempt-header {

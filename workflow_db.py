@@ -2,6 +2,7 @@ import json
 import hashlib
 import hmac
 import os
+import re
 from datetime import datetime, time
 
 from psycopg2.extras import RealDictCursor
@@ -123,6 +124,15 @@ CREATE TABLE IF NOT EXISTS app_recipe_elements (
     UNIQUE (recipe_header_id, element_sequence)
 );
 
+CREATE TABLE IF NOT EXISTS app_entry_options (
+    id BIGSERIAL PRIMARY KEY,
+    branch TEXT,
+    option_type TEXT NOT NULL,
+    option_value TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (branch, option_type, option_value)
+);
+
 CREATE TABLE IF NOT EXISTS pipe_units (
     id BIGSERIAL PRIMARY KEY,
     production_number TEXT NOT NULL,
@@ -188,6 +198,8 @@ CREATE TABLE IF NOT EXISTS ncr_reports (
 DEFAULT_LOCATIONS = (
     ("Machine 1", "QMS", "M1", "station-machine-1", "machine"),
     ("Machine 2", "QMS", "M2", "station-machine-2", "machine"),
+    ("Machine 3", "QMS", "M3", "station-machine-3", "machine"),
+    ("Machine 4", "QMS", "M4", "station-machine-4", "machine"),
     ("Floating Tablet", "QMS", None, "tablet", "tablet"),
 )
 DEFAULT_ALWAYS_INSPECT_COUNT = get_env_int("RECIPE_ALWAYS_INSPECT_COUNT", 9)
@@ -242,6 +254,7 @@ DEFAULT_GAUGE_OPTIONS = [
     "T-Mic/Caliper",
     "Lead Gauge",
 ]
+ENTRY_OPTION_TYPES = {"size", "weight", "connection"}
 
 
 def initialize_workflow_schema():
@@ -413,6 +426,7 @@ def _recipe_definition_from_local(header_row, element_rows):
 
     return {
         "recipe_name": header_row["recipe_name"],
+        "display_name": _format_digital_irr_name(header_row["recipe_name"], header_row["drawing"]),
         "connection_type": header_row["connection_type"],
         "recipe_version": header_row["recipe_version"],
         "drawing": header_row["drawing"],
@@ -424,6 +438,14 @@ def _recipe_definition_from_local(header_row, element_rows):
         ],
         "elements": elements,
     }
+
+
+def _format_digital_irr_name(recipe_name, drawing):
+    name = str(recipe_name or "").strip()
+    drawing_value = str(drawing or "").strip()
+    if name and drawing_value:
+        return f"{name} ({drawing_value})"
+    return name or drawing_value
 
 
 def _parse_json_value(value):
@@ -465,10 +487,27 @@ def get_locations():
     """Return active locations for the login screen."""
     return _fetch_all_dicts(
         """
-        SELECT id, location_name, branch, machine_code, device_type
-        FROM app_locations
-        WHERE is_active = TRUE
-        ORDER BY location_name
+        SELECT
+            loc.id,
+            loc.location_name,
+            loc.branch,
+            loc.machine_code,
+            loc.device_type,
+            active_sess.id AS active_session_id,
+            active_sess.inspector_name AS active_inspector_name,
+            active_sess.logged_in_at AS active_logged_in_at,
+            CASE WHEN active_sess.id IS NULL THEN FALSE ELSE TRUE END AS is_locked
+        FROM app_locations loc
+        LEFT JOIN LATERAL (
+            SELECT sess.id, sess.inspector_name, sess.logged_in_at
+            FROM inspector_sessions sess
+            WHERE sess.location_id = loc.id
+              AND sess.logged_out_at IS NULL
+            ORDER BY sess.logged_in_at DESC
+            LIMIT 1
+        ) active_sess ON TRUE
+        WHERE loc.is_active = TRUE
+        ORDER BY loc.location_name
         """
     )
 
@@ -724,6 +763,114 @@ def get_connection_types(production_number, branch=None):
     return results
 
 
+def _extract_inspection_entry_parts(operation_description):
+    """Best-effort parse of size, weight, and connection from a work-order description."""
+    text = str(operation_description or "").strip()
+    if not text:
+        return {"size": None, "weight": None, "connection": None}
+
+    size_match = re.search(r"Size:\s*([^,]+)", text, re.IGNORECASE)
+    weight_match = re.search(r"Weight:\s*([^,]+)", text, re.IGNORECASE)
+    connection_match = re.search(r"Connection:\s*(.+?)(?:\s+(?:Pin|Box)\b|\s+as\s+Per\b|$)", text, re.IGNORECASE)
+
+    return {
+        "size": size_match.group(1).strip() if size_match else None,
+        "weight": weight_match.group(1).strip() if weight_match else None,
+        "connection": connection_match.group(1).strip() if connection_match else None,
+    }
+
+
+def remember_inspection_entry_values(branch=None, size_label=None, weight_label=None, connection_label=None):
+    """Persist typed inspection entry values so they can appear as future options."""
+    values = {
+        "size": str(size_label or "").strip(),
+        "weight": str(weight_label or "").strip(),
+        "connection": str(connection_label or "").strip(),
+    }
+
+    rows = [(branch, option_type, option_value) for option_type, option_value in values.items() if option_value]
+    if not rows:
+        return {"saved": 0}
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            for row in rows:
+                cursor.execute(
+                    """
+                    INSERT INTO app_entry_options (branch, option_type, option_value)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (branch, option_type, option_value) DO NOTHING
+                    """,
+                    row,
+                )
+        connection.commit()
+        return {"saved": len(rows)}
+    finally:
+        connection.close()
+
+
+def get_inspection_entry_options(branch=None):
+    """Return typeable dropdown options for size, weight, and connection."""
+    size_options = set()
+    weight_options = set()
+    connection_options = set()
+
+    for order in get_open_work_orders(branch):
+        parsed = _extract_inspection_entry_parts(order.get("operation_description"))
+        if parsed["size"]:
+            size_options.add(parsed["size"])
+        if parsed["weight"]:
+            weight_options.add(parsed["weight"])
+        if parsed["connection"]:
+            connection_options.add(parsed["connection"])
+
+    local_recipe_rows = _fetch_all_dicts(
+        """
+        SELECT size_label, weight_label, grade_label
+        FROM app_recipe_headers
+        WHERE is_active = TRUE
+          AND (%s IS NULL OR branch = %s OR branch IS NULL OR branch = '')
+        ORDER BY updated_at DESC
+        """,
+        (branch, branch),
+    )
+    for row in local_recipe_rows:
+        if row.get("size_label"):
+            size_options.add(str(row["size_label"]).strip())
+        if row.get("weight_label"):
+            weight_options.add(str(row["weight_label"]).strip())
+        if row.get("grade_label"):
+            connection_options.add(str(row["grade_label"]).strip())
+
+    saved_option_rows = _fetch_all_dicts(
+        """
+        SELECT option_type, option_value
+        FROM app_entry_options
+        WHERE (%s IS NULL OR branch = %s OR branch IS NULL OR branch = '')
+        ORDER BY option_type ASC, option_value ASC
+        """,
+        (branch, branch),
+    )
+    for row in saved_option_rows:
+        option_type = str(row.get("option_type") or "").strip().lower()
+        option_value = str(row.get("option_value") or "").strip()
+        if not option_value:
+            continue
+        if option_type == "size":
+            size_options.add(option_value)
+        elif option_type == "weight":
+            weight_options.add(option_value)
+        elif option_type == "connection":
+            connection_options.add(option_value)
+
+    return {
+        "size_options": sorted(size_options),
+        "weight_options": sorted(weight_options),
+        "connection_options": sorted(connection_options),
+    }
+
+
 def get_recipe_builder_options(branch=None):
     """Return dropdown options for the admin recipe builder."""
     recipe_rows = _fetch_all_dicts(
@@ -838,11 +985,18 @@ def find_recipe_candidates(operation_description, branch=None):
         (operation_description, branch),
     )
     if alias_matches:
-        return [{"recipe_name": row["recipe_name"], "match_type": "alias"} for row in alias_matches]
+        return [
+            {
+                "recipe_name": row["recipe_name"],
+                "display_name": row["recipe_name"],
+                "match_type": "alias",
+            }
+            for row in alias_matches
+        ]
 
     local_recipe_rows = _fetch_all_dicts(
         """
-        SELECT recipe_name, connection_type, branch
+        SELECT recipe_name, connection_type, branch, drawing
         FROM app_recipe_headers
         WHERE is_active = TRUE
         ORDER BY updated_at DESC, recipe_name ASC
@@ -883,7 +1037,7 @@ def find_recipe_candidates(operation_description, branch=None):
         }
         score = len(tokens.intersection(recipe_tokens))
         if score:
-            scored.append((score, recipe_name))
+            scored.append((score, recipe_name, _format_digital_irr_name(recipe_name, recipe.get("drawing"))))
             seen.add(recipe_name)
 
     for row in recipe_rows:
@@ -904,13 +1058,22 @@ def find_recipe_candidates(operation_description, branch=None):
         }
         score = len(tokens.intersection(recipe_tokens))
         if score:
-            scored.append((score, recipe_name))
+            drawing = None
+            recipe_json = recipe.get("recipe_json")
+            if isinstance(recipe_json, dict):
+                drawing = recipe_json.get("drawing")
+            scored.append((score, recipe_name, _format_digital_irr_name(recipe_name, drawing)))
             seen.add(recipe_name)
 
     scored.sort(key=lambda item: (-item[0], item[1]))
     return [
-        {"recipe_name": recipe_name, "match_type": "token", "score": score}
-        for score, recipe_name in scored[:5]
+        {
+            "recipe_name": recipe_name,
+            "display_name": display_name,
+            "match_type": "token",
+            "score": score,
+        }
+        for score, recipe_name, display_name in scored[:5]
     ]
 
 
@@ -990,6 +1153,7 @@ def get_recipe_elements(recipe_name, branch=None):
                 )
             return {
                 "recipe_name": recipe["recipe_name"],
+                "display_name": _format_digital_irr_name(recipe["recipe_name"], recipe_json.get("drawing")),
                 "connection_type": recipe.get("connection_type"),
                 "recipe_version": recipe.get("recipe_version"),
                 "drawing": recipe_json.get("drawing"),
@@ -1007,6 +1171,7 @@ def get_recipe_elements(recipe_name, branch=None):
             element["element_sequence"] = index
         return {
             "recipe_name": recipe_name,
+            "display_name": _format_digital_irr_name(recipe_name, None),
             "connection_type": None,
             "recipe_version": None,
             "drawing": None,
@@ -2073,6 +2238,23 @@ def create_inspector_session(inspector, shift, location, cnc_operator):
     connection = get_db_connection()
     try:
         with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+            if location and location.get("id"):
+                cursor.execute(
+                    """
+                    SELECT sess.inspector_name
+                    FROM inspector_sessions sess
+                    WHERE sess.location_id = %s
+                      AND sess.logged_out_at IS NULL
+                    ORDER BY sess.logged_in_at DESC
+                    LIMIT 1
+                    """,
+                    (location.get("id"),),
+                )
+                active_lock = cursor.fetchone()
+                if active_lock:
+                    locked_by = active_lock.get("inspector_name") or "another inspector"
+                    raise ValueError(f"{location.get('location_name')} is currently in use by {locked_by}.")
+
             cursor.execute(
                 """
                 INSERT INTO inspector_sessions (
@@ -2119,5 +2301,45 @@ def close_inspector_session(session_id):
                 (session_id,),
             )
         connection.commit()
+    finally:
+        connection.close()
+
+
+def unlock_location(location_id):
+    """Force-close any active session on a location so the machine becomes available again."""
+    connection = get_db_connection()
+    try:
+        with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute(
+                """
+                SELECT id, location_name
+                FROM app_locations
+                WHERE id = %s
+                """,
+                (location_id,),
+            )
+            location = cursor.fetchone()
+            if not location:
+                raise ValueError("That machine or location could not be found.")
+
+            cursor.execute(
+                """
+                UPDATE inspector_sessions
+                SET logged_out_at = NOW()
+                WHERE location_id = %s
+                  AND logged_out_at IS NULL
+                RETURNING id, inspector_name, logged_in_at
+                """,
+                (location_id,),
+            )
+            unlocked_sessions = cursor.fetchall()
+
+        connection.commit()
+        return {
+            "location_id": location_id,
+            "location_name": location["location_name"],
+            "unlocked_count": len(unlocked_sessions),
+            "sessions": unlocked_sessions,
+        }
     finally:
         connection.close()

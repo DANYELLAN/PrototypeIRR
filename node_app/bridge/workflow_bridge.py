@@ -20,6 +20,7 @@ from workflow_db import (  # noqa: E402
     get_connection_types,
     get_cnc_operators,
     get_employee_by_adp,
+    get_inspection_entry_options,
     get_locations,
     get_manager_candidates,
     get_ncr_reports,
@@ -31,6 +32,7 @@ from workflow_db import (  # noqa: E402
     get_pipe_unit,
     get_recipe_elements,
     list_local_recipes,
+    remember_inspection_entry_values,
     has_manager_pin,
     initialize_workflow_schema,
     is_admin_user,
@@ -42,6 +44,7 @@ from workflow_db import (  # noqa: E402
     update_local_recipe,
     update_pipe_unit,
     update_ncr_report,
+    unlock_location,
 )
 
 
@@ -104,10 +107,21 @@ def main():
             return _result(
                 get_connection_types(payload.get("production_number"), payload.get("branch"))
             )
+        if action == "get_inspection_entry_options":
+            return _result(get_inspection_entry_options(payload.get("branch")))
         if action == "find_recipe_candidates":
             return _result(
                 find_recipe_candidates(
                     payload.get("operation_description"), payload.get("branch")
+                )
+            )
+        if action == "remember_inspection_entry_values":
+            return _result(
+                remember_inspection_entry_values(
+                    branch=payload.get("branch"),
+                    size_label=payload.get("size_label"),
+                    weight_label=payload.get("weight_label"),
+                    connection_label=payload.get("connection_label"),
                 )
             )
         if action == "get_recipe_elements":
@@ -187,6 +201,8 @@ def main():
         if action == "close_inspector_session":
             close_inspector_session(payload.get("session_id"))
             return _result({"closed": True})
+        if action == "unlock_location":
+            return _result(unlock_location(payload.get("location_id")))
     except Exception as exc:
         _error(exc)
 

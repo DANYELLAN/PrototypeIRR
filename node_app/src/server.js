@@ -42,9 +42,44 @@ function renderOptions(items, selectedValue, getValue, getLabel) {
     .join("");
 }
 
+function renderLocationOptions(locations, selectedValue = null) {
+  return locations
+    .map((item) => {
+      const value = item.id;
+      const selected = String(selectedValue ?? "") === String(value) ? "selected" : "";
+      const disabled = item.is_locked ? "disabled" : "";
+      const lockedSuffix = item.is_locked
+        ? ` (In Use${item.active_inspector_name ? ` - ${item.active_inspector_name}` : ""})`
+        : "";
+      return `<option value="${escapeHtml(value)}" ${selected} ${disabled}>${escapeHtml(`${item.location_name}${lockedSuffix}`)}</option>`;
+    })
+    .join("");
+}
+
 function renderNotice(notice) {
   if (!notice) return "";
   return `<div class="notice ${escapeHtml(notice.kind || "info")}">${escapeHtml(notice.message)}</div>`;
+}
+
+function renderLockedLocationRows(locations) {
+  if (!locations.length) {
+    return `<tr><td colspan="4">No machines are currently locked.</td></tr>`;
+  }
+  return locations
+    .map(
+      (location) => `<tr>
+        <td>${escapeHtml(location.location_name)}</td>
+        <td>${escapeHtml(location.active_inspector_name || "Unknown")}</td>
+        <td>${escapeHtml(formatDateValue(location.active_logged_in_at))}</td>
+        <td>
+          <form method="post" action="/admin/unlock-location" onsubmit="return confirm('Unlock ${escapeHtml(location.location_name)} and release its current session?');">
+            <input type="hidden" name="location_id" value="${escapeHtml(location.id)}" />
+            <button class="button compact-button" type="submit">Unlock Machine</button>
+          </form>
+        </td>
+      </tr>`,
+    )
+    .join("");
 }
 
 function summarizeRefreshError(error) {
@@ -76,6 +111,13 @@ function formatDateValue(value) {
   const day = String(date.getDate()).padStart(2, "0");
   const year = String(date.getFullYear());
   return `${month}/${day}/${year}`;
+}
+
+function formatDigitalIrrName(name, drawing = "") {
+  const irrName = String(name || "").trim();
+  const drawingValue = String(drawing || "").trim();
+  if (irrName && drawingValue) return `${irrName} (${drawingValue})`;
+  return irrName || drawingValue;
 }
 
 function formatCellValue(header, value) {
@@ -199,9 +241,10 @@ function renderPipeHistorySheets(groups, { inspectorName = "", locationName = ""
     <div class="pipe-history-sheet-list">
       ${groups
         .map((group) => {
-          const drawing = group.recipeDefinition?.drawing || "";
-          const connectionType = group.recipeDefinition?.connection_type || group.operationDescription || "";
-          const reportTitle = group.recipeDefinition?.source_report || group.recipeDefinition?.recipe_name || "";
+  const drawing = group.recipeDefinition?.drawing || "";
+  const digitalIrrName = group.recipeDefinition?.display_name || formatDigitalIrrName(group.recipeDefinition?.recipe_name || "", drawing);
+  const connectionType = group.recipeDefinition?.connection_type || group.operationDescription || "";
+  const reportTitle = group.recipeDefinition?.source_report || digitalIrrName || "";
           return `
             <details class="table-card pipe-history-entry">
               <summary class="pipe-history-summary">
@@ -235,7 +278,38 @@ function renderPipeHistorySheets(groups, { inspectorName = "", locationName = ""
                           (column) => `<th
                             class="inspection-col-history ${canManage ? "history-column-action" : ""}"
                             ${canManage ? `data-history-pipe-id="${escapeHtml(column.pipeUnitId)}" data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}" title="Click to edit this saved pipe. Right-click to delete it."` : ""}
-                          >Connection # ${escapeHtml(column.pipeNumber || "")}</th>`,
+                          >
+                            <div class="pipe-history-connection-header">
+                              <span class="pipe-history-connection-label">Connection # ${escapeHtml(column.pipeNumber || "")}</span>
+                              <details class="pipe-history-action-menu pipe-history-table-action-menu">
+                                <summary class="pipe-history-action-menu-toggle" aria-label="Connection actions">⋮</summary>
+                                <div class="pipe-history-action-menu-panel">
+                                  <a class="pipe-history-action-menu-item" href="/report/pipe/${encodeURIComponent(column.pipeUnitId)}">View Full Report</a>
+                                  ${
+                                    canManage
+                                      ? `<a class="pipe-history-action-menu-item" href="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}">Edit</a>`
+                                      : ""
+                                  }
+                                  ${
+                                    canManage && column.status === "in_progress"
+                                      ? `<form method="post" action="/workflow/history/reset" onsubmit="return confirm('Reset this in-progress pipe inspection? The unfinished attempt will be removed and the pipe will roll back to its last resolved state.');">
+                                           <input type="hidden" name="pipeUnitId" value="${escapeHtml(column.pipeUnitId)}" />
+                                           <button class="pipe-history-action-menu-item warning" type="submit">Reset In-Progress</button>
+                                         </form>`
+                                      : ""
+                                  }
+                                  ${
+                                    canManage
+                                      ? `<form method="post" action="/workflow/history/delete" onsubmit="return confirm('Delete this pipe inspection and all related attempts, measurements, and NCR records?');">
+                                           <input type="hidden" name="pipeUnitId" value="${escapeHtml(column.pipeUnitId)}" />
+                                           <button class="pipe-history-action-menu-item danger" type="submit">Delete</button>
+                                         </form>`
+                                      : ""
+                                  }
+                                </div>
+                              </details>
+                            </div>
+                          </th>`,
                         )
                         .join("")}
                     </tr>
@@ -289,30 +363,6 @@ function renderPipeHistorySheets(groups, { inspectorName = "", locationName = ""
                     </tr>
                   </tfoot>
                 </table>
-              </div>
-              <div class="pipe-history-entry-actions">
-                ${group.columns
-                  .map(
-                    (column) => `
-                      <div class="pipe-history-entry-action-row">
-                        <span class="pipe-history-entry-action-label">Connection # ${escapeHtml(column.pipeNumber || "")}</span>
-                        <a class="button secondary compact-button" href="/report/pipe/${encodeURIComponent(column.pipeUnitId)}">View Full Report</a>
-                        ${canManage ? `<a class="button secondary compact-button" href="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}">Edit</a>` : ""}
-                        ${canManage && column.status === "in_progress"
-                          ? `<form method="post" action="/workflow/history/reset" onsubmit="return confirm('Reset this in-progress pipe inspection? The unfinished attempt will be removed and the pipe will roll back to its last resolved state.');">
-                               <input type="hidden" name="pipeUnitId" value="${escapeHtml(column.pipeUnitId)}" />
-                               <button class="button warning compact-button" type="submit">Reset In-Progress</button>
-                             </form>`
-                          : ""}
-                        ${canManage
-                          ? `<form method="post" action="/workflow/history/delete" onsubmit="return confirm('Delete this pipe inspection and all related attempts, measurements, and NCR records?');">
-                               <input type="hidden" name="pipeUnitId" value="${escapeHtml(column.pipeUnitId)}" />
-                               <button class="button danger compact-button" type="submit">Delete</button>
-                             </form>`
-                          : ""}
-                      </div>`,
-                  )
-                  .join("")}
               </div>
             </details>
           `;
@@ -443,6 +493,7 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
   const planMap = new Map(plan.map((element) => [Number(element.element_sequence), element]));
   const rows = recipeDefinition?.elements?.length ? recipeDefinition.elements : plan;
   const drawing = recipeDefinition?.drawing || "";
+  const digitalIrrName = recipeDefinition?.display_name || formatDigitalIrrName(recipeDefinition?.recipe_name || "", drawing);
   const locationName = sessionRecord?.location_name || "";
   const currentPipeNumber = activeInspection?.pipe_number || selection.pipeNumber || "";
   const previousMeasurementsBySequence = historyColumns.length
@@ -469,7 +520,7 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
       }</p>
       ${
         activeInspection && !plan.length
-          ? renderNotice({ kind: "warning", message: "This attempt has no measurement plan yet. Go back to the selection above and make sure a recipe is selected before preparing the inspection." })
+          ? renderNotice({ kind: "warning", message: "This attempt has no measurement plan yet. Go back to the selection above and make sure a Digital IRR is selected before preparing the inspection." })
           : ""
       }
       <form id="${loadPipeFormId}" method="post" action="/workflow/start">
@@ -863,9 +914,22 @@ function layout({ title, sidebar, content, theme = "Light" }) {
           const historyActionCells = document.querySelectorAll(".history-column-action");
           const historyDeleteForm = document.getElementById("worksheet-history-delete-form");
           const historyDeletePipeInput = document.getElementById("worksheet-history-delete-pipe-unit-id");
+          const historyActionMenus = document.querySelectorAll(".pipe-history-action-menu, .pipe-history-action-menu-toggle, .pipe-history-action-menu-panel");
+
+          historyActionMenus.forEach((element) => {
+            element.addEventListener("click", (event) => {
+              event.stopPropagation();
+            });
+            element.addEventListener("contextmenu", (event) => {
+              event.stopPropagation();
+            });
+          });
 
           historyActionCells.forEach((cell) => {
             cell.addEventListener("click", (event) => {
+              if (event.target.closest(".pipe-history-action-menu")) {
+                return;
+              }
               const editUrl = cell.dataset.editUrl;
               if (!editUrl) return;
               if (!window.confirm("Edit this saved pipe record?")) {
@@ -876,6 +940,9 @@ function layout({ title, sidebar, content, theme = "Light" }) {
             });
 
             cell.addEventListener("contextmenu", (event) => {
+              if (event.target.closest(".pipe-history-action-menu")) {
+                return;
+              }
               const pipeUnitId = cell.dataset.historyPipeId;
               if (!pipeUnitId || !historyDeleteForm || !historyDeletePipeInput) return;
               event.preventDefault();
@@ -1228,7 +1295,7 @@ app.get("/", async (req, res, next) => {
             </div>
             <div class="field">
               <label>Location / Machine</label>
-              <select name="location_id">${renderOptions(locations, null, (item) => item.id, (item) => item.location_name)}</select>
+              <select name="location_id">${renderLocationOptions(locations)}</select>
             </div>
             <div class="actions"><button class="button" type="submit">Find Inspector</button></div>
           </form>
@@ -1268,6 +1335,17 @@ app.post("/login/find", async (req, res, next) => {
     }
     const locations = await callBridge("get_locations");
     const location = locations.find((item) => String(item.id) === String(req.body.location_id));
+    if (!location) {
+      req.session.notice = { kind: "warning", message: "Please select a valid machine or location." };
+      return res.redirect("/");
+    }
+    if (location.is_locked) {
+      req.session.notice = {
+        kind: "warning",
+        message: `${location.location_name} is currently unavailable${location.active_inspector_name ? ` because it is in use by ${location.active_inspector_name}` : ""}.`,
+      };
+      return res.redirect("/");
+    }
     const isAdmin = await callBridge("is_admin_user", { employee: inspector });
     const isManager = await callBridge("is_manager_or_supervisor", { employee: inspector });
     req.session.roleLabel = isManager ? "Manager/Supervisor" : isAdmin ? "Admin Access Only" : "Inspector";
@@ -1353,8 +1431,17 @@ app.get("/workflow/inspection", async (req, res, next) => {
       inspectionScope: req.query.inspectionScope || req.session.selection?.inspectionScope || "standard",
     };
     req.session.selection = selection;
+    if (selection.sizeLabel || selection.weightLabel || selection.connectionLabel) {
+      await callBridge("remember_inspection_entry_values", {
+        branch: inspector.branch,
+        size_label: selection.sizeLabel,
+        weight_label: selection.weightLabel,
+        connection_label: selection.connectionLabel,
+      });
+    }
 
     const workOrders = await callBridge("get_open_work_orders", { branch: inspector.branch });
+    const entryOptions = await callBridge("get_inspection_entry_options", { branch: inspector.branch });
     const productionNumbers = [...new Set(workOrders.map((item) => item.production_number))].sort();
     if (!selection.productionNumber && productionNumbers.length) {
       selection.productionNumber = productionNumbers[0];
@@ -1426,15 +1513,18 @@ app.get("/workflow/inspection", async (req, res, next) => {
         <form method="get" action="/workflow/inspection" class="form-grid inspection-entry-form" id="inspection-selection-form">
           <div class="field"><label>Production Number / WO</label><select name="productionNumber" onchange="this.form.recipeName.value=''; this.form.submit();">${renderOptions(productionNumbers, selection.productionNumber, (item) => item, (item) => item)}</select></div>
           <div class="inspection-entry-inline-row">
-            <div class="field"><label>Size</label><input name="sizeLabel" value="${escapeHtml(selection.sizeLabel)}" oninput="this.form.recipeName.value='';" /></div>
-            <div class="field"><label>Weight</label><input name="weightLabel" value="${escapeHtml(selection.weightLabel)}" oninput="this.form.recipeName.value='';" /></div>
-            <div class="field"><label>Connection</label><input name="connectionLabel" value="${escapeHtml(selection.connectionLabel)}" oninput="this.form.recipeName.value='';" /></div>
+            <div class="field"><label>Size</label><input name="sizeLabel" list="size-options" value="${escapeHtml(selection.sizeLabel)}" oninput="this.form.recipeName.value='';" /></div>
+            <div class="field"><label>Weight</label><input name="weightLabel" list="weight-options" value="${escapeHtml(selection.weightLabel)}" oninput="this.form.recipeName.value='';" /></div>
+            <div class="field"><label>Connection</label><input name="connectionLabel" list="connection-options" value="${escapeHtml(selection.connectionLabel)}" oninput="this.form.recipeName.value='';" /></div>
             <div class="field"><label>Box / Pin</label><select name="endType" onchange="this.form.recipeName.value='';"><option value=""></option><option value="BOX" ${selection.endType === "BOX" ? "selected" : ""}>Box</option><option value="PIN" ${selection.endType === "PIN" ? "selected" : ""}>Pin</option></select></div>
           </div>
-          <div class="field"><label>Recipe</label><select name="recipeName"><option value=""></option>${renderOptions(recipeCandidates, selection.recipeName, (item) => item.recipe_name, (item) => item.recipe_name)}</select></div>
+          <datalist id="size-options">${(entryOptions?.size_options || []).map((item) => `<option value="${escapeHtml(item)}"></option>`).join("")}</datalist>
+          <datalist id="weight-options">${(entryOptions?.weight_options || []).map((item) => `<option value="${escapeHtml(item)}"></option>`).join("")}</datalist>
+          <datalist id="connection-options">${(entryOptions?.connection_options || []).map((item) => `<option value="${escapeHtml(item)}"></option>`).join("")}</datalist>
+          <div class="field"><label>Digital IRR</label><select name="recipeName"><option value=""></option>${renderOptions(recipeCandidates, selection.recipeName, (item) => item.recipe_name, (item) => item.display_name || item.recipe_name)}</select></div>
           <div class="field"><label>Inspection Scope</label><select name="inspectionScope"><option value="standard" ${selection.inspectionScope === "full" ? "" : "selected"}>Standard Inspection</option><option value="full" ${selection.inspectionScope === "full" ? "selected" : ""}>Full Inspection</option></select></div>
           <div class="actions">
-            <button class="button secondary" type="submit">Load Recipe Options</button>
+            <button class="button secondary" type="submit">Load Digital IRR Options</button>
             <button class="button workflow-action-button" type="submit" formaction="/workflow/start" formmethod="post">Start Inspection</button>
           </div>
         </form>
@@ -1458,21 +1548,21 @@ app.get("/workflow/inspection", async (req, res, next) => {
         ${
           recipeDefinition
             ? `<section class="card nested-card">
-                 <h3 class="section-title">Recipe Summary</h3>
+                 <h3 class="section-title">Digital IRR Summary</h3>
                  <div class="badges">
-                   ${recipeDefinition.recipe_name ? `<span class="pill">${escapeHtml(recipeDefinition.recipe_name)}</span>` : ""}
+                   ${digitalIrrName ? `<span class="pill">${escapeHtml(digitalIrrName)}</span>` : ""}
                    ${recipeDefinition.connection_type ? `<span class="pill">Connection: ${escapeHtml(recipeDefinition.connection_type)}</span>` : ""}
                    ${recipeDefinition.drawing ? `<span class="pill">Drawing: ${escapeHtml(recipeDefinition.drawing)}</span>` : ""}
                    ${recipeDefinition.source_report ? `<span class="pill">Report: ${escapeHtml(recipeDefinition.source_report)}</span>` : ""}
                  </div>
                </section>
                <details>
-                 <summary>Recipe Elements Preview</summary>
+                 <summary>Digital IRR Elements Preview</summary>
                  ${renderTable(
                    recipeDefinition.elements.map(({ item_id, capture_type, ...element }) => element),
                  )}
                </details>`
-            : renderNotice({ kind: "warning", message: "Select a connection and recipe before preparing the inspection." })
+            : renderNotice({ kind: "warning", message: "Select a connection and Digital IRR before preparing the inspection." })
         }
         ${showWorksheet ? renderCurrentAttemptWorksheet({
           activeInspection,
@@ -1515,6 +1605,83 @@ app.get("/workflow/history", async (req, res, next) => {
       status: req.query.historyStatus || null,
       inspection_scope: req.query.historyScope || null,
     });
+    const pipeHistoryGroupsMap = new Map();
+    for (const pipeRow of pipeRows) {
+      const groupKey = `${pipeRow.production_number || ""}||${pipeRow.operation_description || ""}`;
+      if (!pipeHistoryGroupsMap.has(groupKey)) {
+        pipeHistoryGroupsMap.set(groupKey, {
+          productionNumber: pipeRow.production_number || "",
+          operationDescription: pipeRow.operation_description || "",
+          latestUpdatedAt: pipeRow.updated_at || pipeRow.created_at || null,
+          pipeRows: [],
+        });
+      }
+      const group = pipeHistoryGroupsMap.get(groupKey);
+      group.pipeRows.push(pipeRow);
+      const updatedAt = pipeRow.updated_at || pipeRow.created_at || null;
+      if (updatedAt && (!group.latestUpdatedAt || new Date(updatedAt) > new Date(group.latestUpdatedAt))) {
+        group.latestUpdatedAt = updatedAt;
+      }
+    }
+
+    const pipeHistoryGroups = [];
+    for (const group of pipeHistoryGroupsMap.values()) {
+      const recipeCandidates = await callBridge("find_recipe_candidates", {
+        operation_description: group.operationDescription,
+        branch: inspector.branch,
+      });
+      const recipeName =
+        recipeCandidates?.length
+          ? (typeof recipeCandidates[0] === "string" ? recipeCandidates[0] : recipeCandidates[0].recipe_name)
+          : null;
+      const recipeDefinition = recipeName
+        ? await callBridge("get_recipe_elements", { recipe_name: recipeName, branch: inspector.branch })
+        : null;
+
+      const measurementRowsBySequence = new Map();
+      const sortedPipeRows = [...group.pipeRows].sort((a, b) =>
+        String(a.pipe_number).localeCompare(String(b.pipe_number), undefined, { numeric: true, sensitivity: "base" }),
+      );
+      const columns = [];
+      for (const pipeRow of sortedPipeRows) {
+        const attempts = await callBridge("get_pipe_attempt_history", { pipe_unit_id: pipeRow.id });
+        const latestAttempt = attempts[0];
+        if (!latestAttempt) continue;
+        const measurements = await callBridge("get_attempt_measurements", { attempt_id: latestAttempt.id });
+        measurements.forEach((measurement) => {
+          const sequence = Number(measurement.element_sequence);
+          if (!measurementRowsBySequence.has(sequence)) {
+            measurementRowsBySequence.set(sequence, {
+              element_sequence: measurement.element_sequence,
+              element_description: measurement.element_description,
+              dwg_dim: measurement.dwg_dim,
+              gauge: measurement.gauge,
+              frequency: "",
+            });
+          }
+        });
+        columns.push({
+          pipeUnitId: pipeRow.id,
+          pipeNumber: pipeRow.pipe_number,
+          status: pipeRow.current_status,
+          attemptStatus: latestAttempt.status,
+          requiresManagerApproval: Boolean(latestAttempt.requires_manager_approval),
+          measurementsBySequence: new Map(measurements.map((item) => [Number(item.element_sequence), item])),
+        });
+      }
+
+      pipeHistoryGroups.push({
+        productionNumber: group.productionNumber,
+        operationDescription: group.operationDescription,
+        latestUpdatedAt: group.latestUpdatedAt,
+        recipeDefinition,
+        rows:
+          recipeDefinition?.elements?.length
+            ? recipeDefinition.elements
+            : [...measurementRowsBySequence.values()].sort((a, b) => Number(a.element_sequence) - Number(b.element_sequence)),
+        columns,
+      });
+    }
     const content = `
       ${renderWorkflowHeader(req)}
       ${renderNotice(req.session.notice)}
@@ -1531,7 +1698,11 @@ app.get("/workflow/history", async (req, res, next) => {
           <div class="field"><label>Filter Scope</label><select name="historyScope"><option value=""></option><option value="standard" ${req.query.historyScope === "standard" ? "selected" : ""}>Standard Inspection</option><option value="full" ${req.query.historyScope === "full" ? "selected" : ""}>Full Inspection</option></select></div>
           <div class="actions"><button class="button" type="submit">Search Pipe History</button></div>
         </form>
-        ${renderPipeHistoryResults(pipeRows, canManage)}
+        ${renderPipeHistorySheets(pipeHistoryGroups, {
+          inspectorName: req.session.inspector?.name || "",
+          locationName: req.session.sessionRecord?.location_name || "",
+          canManage,
+        })}
       </section>
     `;
     req.session.notice = null;
@@ -1739,6 +1910,7 @@ app.get("/report/pipe/:pipeUnitId", async (req, res, next) => {
                         <p class="worksheet-title">${
                           escapeHtml(
                             attempt.recipeDefinition?.source_report ||
+                            attempt.recipeDefinition?.display_name ||
                             attempt.recipeDefinition?.connection_type ||
                             attempt.recipe_name ||
                             "INSPECTION REPORT",
@@ -1822,7 +1994,7 @@ app.get("/report/pipe/:pipeUnitId", async (req, res, next) => {
                     <div class="worksheet-footer-note">${
                       escapeHtml(
                         attempt.recipeDefinition?.sampling_plan?.rule ||
-                        "Review the recorded measurements above against the recipe and drawing requirements for this connection.",
+                        "Review the recorded measurements above against the Digital IRR and drawing requirements for this connection.",
                       )
                     }</div>
                     <div class="signature-grid">
@@ -1901,6 +2073,12 @@ app.post("/workflow/start", async (req, res, next) => {
     req.session.showInspectionSheet = true;
     const inspector = req.session.inspector;
     const sessionRecord = req.session.sessionRecord;
+    await callBridge("remember_inspection_entry_values", {
+      branch: inspector?.branch,
+      size_label: selection.sizeLabel,
+      weight_label: selection.weightLabel,
+      connection_label: selection.connectionLabel,
+    });
     const lookupDescription = buildInspectionConnectionLabel(selection);
     if (!lookupDescription) {
       req.session.notice = { kind: "warning", message: "Enter size, weight, connection, and Box/Pin before starting an inspection." };
@@ -1926,14 +2104,14 @@ app.post("/workflow/start", async (req, res, next) => {
       recipeName = recipeCandidates[0].recipe_name;
     }
     if (!recipeName) {
-      req.session.notice = { kind: "warning", message: "Load and choose a recipe before starting the inspection." };
+      req.session.notice = { kind: "warning", message: "Load and choose a Digital IRR before starting the inspection." };
       return res.redirect("/workflow/inspection");
     }
     selection.recipeName = recipeName;
     req.session.selection = selection;
     const recipeDefinition = await callBridge("get_recipe_elements", { recipe_name: recipeName, branch: inspector.branch });
     if (!recipeDefinition?.elements?.length) {
-      req.session.notice = { kind: "warning", message: "The selected recipe does not have any elements to inspect." };
+      req.session.notice = { kind: "warning", message: "The selected Digital IRR does not have any elements to inspect." };
       return res.redirect("/workflow/inspection");
     }
     const activeInspection = await callBridge("create_inspection_attempt", {
@@ -2066,9 +2244,9 @@ app.get("/admin", async (req, res, next) => {
       req.session.notice = { kind: "warning", message: "Admin tools are available only to managers, supervisors, and IT." };
       return res.redirect("/workflow");
     }
-    const managers = await callBridge("get_manager_candidates", { branch: inspector.branch });
     const builderOptions = await callBridge("get_recipe_builder_options", { branch: inspector.branch });
     const localRecipes = await callBridge("list_local_recipes", { branch: inspector.branch });
+    const lockedLocations = (await callBridge("get_locations")).filter((item) => item.is_locked);
     const content = `
       <section class="hero">
         <h1>Inspection Run Report Admin</h1>
@@ -2079,16 +2257,27 @@ app.get("/admin", async (req, res, next) => {
       </section>
       ${renderNotice(req.session.notice)}
       <section class="card">
-        <h2 class="section-title">Manager PIN Setup</h2>
-        <form method="post" action="/admin/manager-pin" class="form-grid">
-          <div class="field"><label>Manager</label><select name="manager_item_id">${renderOptions(managers, null, (item) => item.item_id, (item) => item.name)}</select></div>
-          <div class="field"><label>New PIN</label><input type="password" name="pin" /></div>
-          <div class="actions"><button class="button" type="submit">Save Manager PIN</button></div>
-        </form>
+        <h2 class="section-title">Machine Locks</h2>
+        <p>Release a machine if a session was left open unexpectedly.</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Machine</th>
+                <th>In Use By</th>
+                <th>Locked Since</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${renderLockedLocationRows(lockedLocations)}
+            </tbody>
+          </table>
+        </div>
       </section>
       <section class="card">
-        <h2 class="section-title">Build Recipe</h2>
-        <p>Create an app-managed recipe with up to 25 inspection elements. Saved recipes are immediately available to the inspection workflow.</p>
+        <h2 class="section-title">Build Digital IRR</h2>
+        <p>Create an app-managed Digital IRR with up to 25 inspection elements. Saved Digital IRRs are immediately available to the inspection workflow.</p>
         <form method="post" action="/admin/recipes" class="form-grid">
           <div class="form-grid two">
             <div class="field"><label>Size</label><input name="size_label" placeholder='2.875' required /></div>
@@ -2115,16 +2304,16 @@ app.get("/admin", async (req, res, next) => {
               </tbody>
             </table>
           </div>
-          <div class="actions"><button class="button" type="submit">Save Recipe</button></div>
+          <div class="actions"><button class="button" type="submit">Save Digital IRR</button></div>
         </form>
       </section>
       <section class="card">
-        <h2 class="section-title">Local Recipes</h2>
+        <h2 class="section-title">Local Digital IRRs</h2>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Recipe</th>
+                <th>Digital IRR</th>
                 <th>Connection</th>
                 <th>Drawing</th>
                 <th>Source Report</th>
@@ -2136,7 +2325,7 @@ app.get("/admin", async (req, res, next) => {
               ${localRecipes
                 .map(
                   (recipe) => `<tr>
-                    <td>${escapeHtml(recipe.recipe_name)}</td>
+                    <td>${escapeHtml(formatDigitalIrrName(recipe.recipe_name, recipe.drawing))}</td>
                     <td>${escapeHtml(recipe.connection_type)}</td>
                     <td>${escapeHtml(recipe.drawing)}</td>
                     <td>${escapeHtml(recipe.source_report)}</td>
@@ -2157,12 +2346,21 @@ app.get("/admin", async (req, res, next) => {
   }
 });
 
-app.post("/admin/manager-pin", async (req, res, next) => {
+app.post("/admin/unlock-location", async (req, res, next) => {
   try {
-    const managers = await callBridge("get_manager_candidates", { branch: req.session.inspector.branch });
-    const manager = managers.find((item) => String(item.item_id) === String(req.body.manager_item_id));
-    await callBridge("set_manager_pin", { manager_employee: manager, pin: req.body.pin });
-    req.session.notice = { kind: "success", message: `Manager PIN saved for ${manager.name}.` };
+    if (!req.session.inspector) return res.redirect("/");
+    if (!req.session.canAccessAdmin) {
+      req.session.notice = { kind: "warning", message: "Only admin users can unlock machines." };
+      return res.redirect("/workflow/inspection");
+    }
+    const result = await callBridge("unlock_location", { location_id: req.body.location_id });
+    req.session.notice = {
+      kind: "success",
+      message:
+        result?.unlocked_count > 0
+          ? `${result.location_name} was unlocked and is available again.`
+          : `${result.location_name} was already available.`,
+    };
     res.redirect("/admin");
   } catch (error) {
     next(error);
@@ -2204,28 +2402,28 @@ app.get("/admin/recipes/:recipeHeaderId/edit", async (req, res, next) => {
   try {
     if (!req.session.inspector) return res.redirect("/");
     if (!req.session.canAccessAdmin) {
-      req.session.notice = { kind: "warning", message: "Only admin users can edit local recipes." };
+      req.session.notice = { kind: "warning", message: "Only admin users can edit local Digital IRRs." };
       return res.redirect("/admin");
     }
 
     const recipe = await callBridge("get_local_recipe_by_id", { recipe_header_id: req.params.recipeHeaderId });
     if (!recipe) {
-      req.session.notice = { kind: "warning", message: "That local recipe could not be found." };
+      req.session.notice = { kind: "warning", message: "That local Digital IRR could not be found." };
       return res.redirect("/admin");
     }
     const builderOptions = await callBridge("get_recipe_builder_options", { branch: req.session.inspector.branch });
 
     const content = `
       <section class="hero">
-        <h1>Edit Local Recipe</h1>
-        <p>Adjust recipe details, drawing numbers, and inspected elements for this app-managed recipe.</p>
+        <h1>Edit Local Digital IRR</h1>
+        <p>Adjust Digital IRR details, drawing numbers, and inspected elements for this app-managed record.</p>
         <div class="badges">
           <a class="badge" href="/admin">Back to Admin Tools</a>
         </div>
       </section>
       ${renderNotice(req.session.notice)}
       <section class="card">
-        <h2 class="section-title">Edit Recipe</h2>
+        <h2 class="section-title">Edit Digital IRR</h2>
         <form method="post" action="/admin/recipes/${encodeURIComponent(recipe.id)}/edit" class="form-grid">
           <div class="form-grid two">
             <div class="field"><label>Size</label><input name="size_label" value="${escapeHtml(recipe.size_label || "")}" required /></div>
@@ -2253,14 +2451,14 @@ app.get("/admin/recipes/:recipeHeaderId/edit", async (req, res, next) => {
             </table>
           </div>
           <div class="actions">
-            <button class="button" type="submit">Save Recipe Changes</button>
+            <button class="button" type="submit">Save Digital IRR Changes</button>
             <a class="button secondary" href="/admin">Cancel</a>
           </div>
         </form>
       </section>
     `;
     req.session.notice = null;
-    res.send(layout({ title: "Edit Local Recipe", sidebar: baseSidebar(req), content, theme: req.session.themeMode }));
+    res.send(layout({ title: "Edit Local Digital IRR", sidebar: baseSidebar(req), content, theme: req.session.themeMode }));
   } catch (error) {
     next(error);
   }
@@ -2310,10 +2508,10 @@ app.post("/admin/recipes", async (req, res, next) => {
       },
     });
 
-    req.session.notice = { kind: "success", message: `Local recipe saved: ${recipe.recipe_name}.` };
+    req.session.notice = { kind: "success", message: `Local Digital IRR saved: ${formatDigitalIrrName(recipe.display_name || recipe.recipe_name, recipe.drawing)}.` };
     res.redirect("/admin");
   } catch (error) {
-    req.session.notice = { kind: "warning", message: error.message || "Unable to save that recipe." };
+    req.session.notice = { kind: "warning", message: error.message || "Unable to save that Digital IRR." };
     res.redirect("/admin");
   }
 });
@@ -2363,10 +2561,10 @@ app.post("/admin/recipes/:recipeHeaderId/edit", async (req, res, next) => {
       },
     });
 
-    req.session.notice = { kind: "success", message: `Local recipe updated: ${recipe.recipe_name}.` };
+    req.session.notice = { kind: "success", message: `Local Digital IRR updated: ${formatDigitalIrrName(recipe.display_name || recipe.recipe_name, recipe.drawing)}.` };
     res.redirect("/admin");
   } catch (error) {
-    req.session.notice = { kind: "warning", message: error.message || "Unable to update that local recipe." };
+    req.session.notice = { kind: "warning", message: error.message || "Unable to update that local Digital IRR." };
     res.redirect(`/admin/recipes/${encodeURIComponent(req.params.recipeHeaderId)}/edit`);
   }
 });
