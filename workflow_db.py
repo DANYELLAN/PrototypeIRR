@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS app_recipe_headers (
     connection_type TEXT NOT NULL,
     size_label TEXT,
     weight_label TEXT,
+    first_article_label TEXT,
     grade_label TEXT,
     connector_type TEXT,
     drawing TEXT,
@@ -141,6 +142,7 @@ CREATE TABLE IF NOT EXISTS pipe_units (
     branch TEXT,
     current_status TEXT NOT NULL DEFAULT 'pending',
     latest_attempt_no INTEGER NOT NULL DEFAULT 0,
+    published_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (production_number, operation_description, pipe_number)
@@ -267,6 +269,18 @@ def initialize_workflow_schema():
                 """
                 ALTER TABLE inspection_attempts
                 ADD COLUMN IF NOT EXISTS inspection_scope TEXT NOT NULL DEFAULT 'standard'
+                """
+            )
+            cursor.execute(
+                """
+                ALTER TABLE pipe_units
+                ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ
+                """
+            )
+            cursor.execute(
+                """
+                ALTER TABLE app_recipe_headers
+                ADD COLUMN IF NOT EXISTS first_article_label TEXT
                 """
             )
             for location_name, branch, machine_code, device_name, device_type in DEFAULT_LOCATIONS:
@@ -481,6 +495,40 @@ def _count_decimal_places(value):
     if "." not in text:
         return 0
     return len(text.split(".")[1].rstrip("0")) or 0
+
+
+def _format_decimal(value, decimals=None, trim=True):
+    if value is None:
+        return ""
+    if decimals is None:
+        decimals = _count_decimal_places(value)
+    text = f"{float(value):.{decimals}f}" if decimals > 0 else str(int(float(value)))
+    return text.rstrip("0").rstrip(".") if trim and "." in text else text
+
+
+def _normalize_tolerance_digits(value):
+    text = str(value or "").strip()
+    if text.startswith("."):
+        text = text[1:]
+    elif text.startswith("0."):
+        text = text.split(".", 1)[1]
+    text = text.strip()
+    if not text or not text.isdigit():
+        return ""
+    return text
+
+
+def _parse_decimal_tail(value):
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("Missing decimal value.")
+    if text.startswith("."):
+        return float(f"0{text}"), len(text[1:].rstrip("0")) or 0
+    if text.startswith("0."):
+        return float(text), len(text.split(".", 1)[1].rstrip("0")) or 0
+    if text.isdigit():
+        return float(f"0.{text}"), len(text.rstrip("0")) or 0
+    return float(text), _count_decimal_places(text)
 
 
 def get_locations():
@@ -910,7 +958,10 @@ def get_recipe_builder_options(branch=None):
         "gauge_options": sorted(item for item in gauge_options if item),
         "measurement_modes": [
             {"value": "nominal_tolerance", "label": "Nominal +/- Tolerance"},
+            {"value": "asymmetric_tolerance", "label": "Nominal + / - Tolerance"},
             {"value": "range", "label": "Range"},
+            {"value": "max_limit", "label": "Less Than or Equal To"},
+            {"value": "min_limit", "label": "Greater Than or Equal To"},
             {"value": "deviation", "label": "+/- From Zero"},
             {"value": "visual", "label": "Visual / SOP"},
         ],
@@ -946,7 +997,7 @@ def get_local_recipe_by_id(recipe_header_id):
     header = _fetch_one_dict(
         """
         SELECT id, branch, recipe_name, connection_type, size_label, weight_label,
-               grade_label, connector_type, drawing, source_report, recipe_version,
+               first_article_label, grade_label, connector_type, drawing, source_report, recipe_version,
                created_by, created_at, updated_at
         FROM app_recipe_headers
         WHERE id = %s
@@ -1025,8 +1076,6 @@ def find_recipe_candidates(operation_description, branch=None):
         recipe_name = recipe["recipe_name"]
         if not recipe_name or recipe_name in seen:
             continue
-        if branch and recipe["branch"] not in {None, "", branch}:
-            continue
         comparable_text = " ".join(
             value
             for value in [recipe_name, recipe.get("connection_type")]
@@ -1085,11 +1134,10 @@ def get_recipe_elements(recipe_name, branch=None):
         FROM app_recipe_headers
         WHERE recipe_name = %s
           AND is_active = TRUE
-          AND (%s IS NULL OR branch = %s OR branch IS NULL OR branch = '')
         ORDER BY updated_at DESC NULLS LAST, id DESC
         LIMIT 1
         """,
-        (recipe_name, branch, branch),
+        (recipe_name,),
     )
     if local_header:
         local_elements = _fetch_all_dicts(
@@ -1194,9 +1242,9 @@ def create_local_recipe(recipe_payload):
                 """
                 INSERT INTO app_recipe_headers (
                     branch, recipe_name, connection_type, size_label, weight_label,
-                    grade_label, connector_type, drawing, source_report, created_by
+                    first_article_label, grade_label, connector_type, drawing, source_report, created_by
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
@@ -1205,6 +1253,7 @@ def create_local_recipe(recipe_payload):
                     processed_payload["connection_type"],
                     processed_payload["size_label"] or None,
                     processed_payload["weight_label"] or None,
+                    processed_payload["first_article_label"] or None,
                     processed_payload["grade_label"] or None,
                     processed_payload["connector_type"] or None,
                     processed_payload["drawing"] or None,
@@ -1251,6 +1300,7 @@ def _prepare_local_recipe_payload(recipe_payload):
     branch = str(recipe_payload.get("branch") or "").strip()
     size_label = str(recipe_payload.get("size_label") or "").strip()
     weight_label = str(recipe_payload.get("weight_label") or "").strip()
+    first_article_label = str(recipe_payload.get("first_article_label") or "").strip()
     grade_label = str(recipe_payload.get("grade_label") or "").strip()
     connector_type = str(recipe_payload.get("connector_type") or "").strip()
     drawing = str(recipe_payload.get("drawing") or "").strip()
@@ -1258,7 +1308,7 @@ def _prepare_local_recipe_payload(recipe_payload):
     created_by = str(recipe_payload.get("created_by") or "").strip()
     rows = recipe_payload.get("rows") or []
 
-    connection_parts = [part for part in [size_label, weight_label, grade_label, connector_type] if part]
+    connection_parts = [part for part in [size_label, weight_label, first_article_label, grade_label, connector_type] if part]
     connection_type = " ".join(connection_parts).strip()
     if not connection_type:
         raise ValueError("Size, weight, grade, and connector type are required to build the recipe name.")
@@ -1278,7 +1328,7 @@ def _prepare_local_recipe_payload(recipe_payload):
 
         if not element_description:
             continue
-        if measurement_mode not in {"nominal_tolerance", "range", "deviation", "visual"}:
+        if measurement_mode not in {"nominal_tolerance", "asymmetric_tolerance", "range", "max_limit", "min_limit", "deviation", "visual"}:
             raise ValueError(f"Element {index} is missing a valid measurement mode.")
         if not gauge and measurement_mode != "visual":
             raise ValueError(f"Element {index} is missing a gauge.")
@@ -1292,7 +1342,7 @@ def _prepare_local_recipe_payload(recipe_payload):
 
         if measurement_mode == "nominal_tolerance":
             nominal = float(str(row.get("nominal_value") or "").strip())
-            tolerance_digits = str(row.get("tolerance_digits") or "").strip()
+            tolerance_digits = _normalize_tolerance_digits(row.get("tolerance_digits"))
             tolerance_decimal_places = int(str(row.get("tolerance_decimal_places") or "3").strip())
             if not tolerance_digits:
                 raise ValueError(f"Element {index} needs tolerance digits.")
@@ -1301,14 +1351,44 @@ def _prepare_local_recipe_payload(recipe_payload):
             max_value = nominal + tolerance_value
             value_format = "decimal"
             dwg_dim = f"{nominal:.{tolerance_decimal_places}f} +/- .{'0' * max(tolerance_decimal_places - len(tolerance_digits), 0)}{tolerance_digits}"
+        elif measurement_mode == "asymmetric_tolerance":
+            nominal = float(str(row.get("nominal_value") or "").strip())
+            plus_tolerance_text = str(row.get("plus_tolerance") or "").strip()
+            minus_tolerance_text = str(row.get("minus_tolerance") or "").strip()
+            plus_tolerance, plus_tolerance_decimals = _parse_decimal_tail(plus_tolerance_text)
+            minus_tolerance, minus_tolerance_decimals = _parse_decimal_tail(minus_tolerance_text)
+            if plus_tolerance < 0 or minus_tolerance < 0:
+                raise ValueError(f"Element {index} tolerance values must be zero or greater.")
+            min_value = nominal - minus_tolerance
+            max_value = nominal + plus_tolerance
+            value_format = "decimal"
+            nominal_decimals = _count_decimal_places(nominal)
+            tolerance_decimals = max(plus_tolerance_decimals, minus_tolerance_decimals)
+            decimals = max(
+                nominal_decimals,
+                tolerance_decimals,
+            )
+            dwg_dim = (
+                f"{_format_decimal(nominal, decimals)} "
+                f"+{_format_decimal(plus_tolerance, tolerance_decimals, trim=False)} / "
+                f"-{_format_decimal(minus_tolerance, tolerance_decimals, trim=False)}"
+            )
         elif measurement_mode == "range":
             min_value = float(str(row.get("range_min") or "").strip())
             max_value = float(str(row.get("range_max") or "").strip())
             value_format = "decimal"
             decimals = max(_count_decimal_places(min_value), _count_decimal_places(max_value))
             dwg_dim = f"{min_value:.{decimals}f} - {max_value:.{decimals}f}"
+        elif measurement_mode == "max_limit":
+            max_value = float(str(row.get("limit_max") or "").strip())
+            value_format = "decimal"
+            dwg_dim = f"<= {_format_decimal(max_value)}"
+        elif measurement_mode == "min_limit":
+            min_value = float(str(row.get("limit_min") or "").strip())
+            value_format = "decimal"
+            dwg_dim = f">= {_format_decimal(min_value)}"
         elif measurement_mode == "deviation":
-            tolerance_digits = str(row.get("tolerance_digits") or "").strip()
+            tolerance_digits = _normalize_tolerance_digits(row.get("tolerance_digits"))
             tolerance_decimal_places = int(str(row.get("tolerance_decimal_places") or "3").strip())
             if not tolerance_digits:
                 raise ValueError(f"Element {index} needs tolerance digits.")
@@ -1343,6 +1423,7 @@ def _prepare_local_recipe_payload(recipe_payload):
         "branch": branch,
         "size_label": size_label,
         "weight_label": weight_label,
+        "first_article_label": first_article_label,
         "grade_label": grade_label,
         "connector_type": connector_type,
         "drawing": drawing,
@@ -1381,6 +1462,7 @@ def update_local_recipe(recipe_header_id, recipe_payload):
                     connection_type = %s,
                     size_label = %s,
                     weight_label = %s,
+                    first_article_label = %s,
                     grade_label = %s,
                     connector_type = %s,
                     drawing = %s,
@@ -1394,6 +1476,7 @@ def update_local_recipe(recipe_header_id, recipe_payload):
                     processed_payload["connection_type"],
                     processed_payload["size_label"] or None,
                     processed_payload["weight_label"] or None,
+                    processed_payload["first_article_label"] or None,
                     processed_payload["grade_label"] or None,
                     processed_payload["connector_type"] or None,
                     processed_payload["drawing"] or None,
@@ -1646,7 +1729,7 @@ def get_attempt_measurements(attempt_id):
     )
 
 
-def search_pipe_units(branch=None, production_number=None, pipe_number=None, status=None, inspection_scope=None):
+def search_pipe_units(branch=None, production_number=None, pipe_number=None, status=None, inspection_scope=None, published_only=False):
     """Search pipe units with optional filters."""
     clauses = ["1 = 1"]
     params = []
@@ -1666,11 +1749,13 @@ def search_pipe_units(branch=None, production_number=None, pipe_number=None, sta
     if inspection_scope:
         clauses.append("latest_attempt.inspection_scope = %s")
         params.append(inspection_scope)
+    if published_only:
+        clauses.append("pu.published_at IS NOT NULL")
 
     return _fetch_all_dicts(
         f"""
         SELECT pu.id, pu.production_number, pu.operation_description, pu.pipe_number,
-               pu.branch, pu.current_status, pu.latest_attempt_no, pu.created_at, pu.updated_at,
+               pu.branch, pu.current_status, pu.latest_attempt_no, pu.published_at, pu.created_at, pu.updated_at,
                latest_attempt.inspection_scope AS latest_inspection_scope
         FROM pipe_units pu
         LEFT JOIN inspection_attempts latest_attempt
@@ -1966,7 +2051,12 @@ def create_inspection_attempt(
                             "resumed_attempt": True,
                         }
 
-                if previous_status in {"completed", "rework"}:
+                if previous_status in {"completed", "scrapped"}:
+                    raise ValueError(
+                        "This pipe number is not a re-work and can not be re-entered. Please check the entered pipe number."
+                    )
+
+                if previous_status == "rework":
                     attempt_no = pipe_unit["latest_attempt_no"] + 1
                     is_rework = True
                 else:
@@ -2301,6 +2391,36 @@ def close_inspector_session(session_id):
                 (session_id,),
             )
         connection.commit()
+    finally:
+        connection.close()
+
+
+def publish_session_history(session_id):
+    """Publish completed session pipe history so it appears in Pipe History."""
+    connection = get_db_connection()
+    try:
+        with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute(
+                """
+                UPDATE pipe_units pu
+                SET published_at = NOW(),
+                    updated_at = NOW()
+                WHERE pu.id IN (
+                    SELECT DISTINCT ia.pipe_unit_id
+                    FROM inspection_attempts ia
+                    WHERE ia.session_id = %s
+                )
+                  AND pu.current_status <> 'in_progress'
+                RETURNING pu.id, pu.production_number, pu.pipe_number, pu.current_status
+                """,
+                (session_id,),
+            )
+            rows = cursor.fetchall()
+        connection.commit()
+        return {
+            "published_count": len(rows),
+            "pipe_units": [dict(row) for row in rows],
+        }
     finally:
         connection.close()
 

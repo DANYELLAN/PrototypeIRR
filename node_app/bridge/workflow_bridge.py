@@ -32,6 +32,7 @@ from workflow_db import (  # noqa: E402
     get_pipe_unit,
     get_recipe_elements,
     list_local_recipes,
+    publish_session_history,
     remember_inspection_entry_values,
     has_manager_pin,
     initialize_workflow_schema,
@@ -148,6 +149,7 @@ def main():
                     pipe_number=payload.get("pipe_number"),
                     status=payload.get("status"),
                     inspection_scope=payload.get("inspection_scope"),
+                    published_only=bool(payload.get("published_only")),
                 )
             )
         if action == "get_ncr_reports":
@@ -201,6 +203,8 @@ def main():
         if action == "close_inspector_session":
             close_inspector_session(payload.get("session_id"))
             return _result({"closed": True})
+        if action == "publish_session_history":
+            return _result(publish_session_history(payload.get("session_id")))
         if action == "unlock_location":
             return _result(unlock_location(payload.get("location_id")))
     except Exception as exc:

@@ -58,7 +58,27 @@ function renderLocationOptions(locations, selectedValue = null) {
 
 function renderNotice(notice) {
   if (!notice) return "";
-  return `<div class="notice ${escapeHtml(notice.kind || "info")}">${escapeHtml(notice.message)}</div>`;
+  return `<div class="notice ${escapeHtml(notice.kind || "info")}"${notice.popup ? ' data-popup="true"' : ""}>${escapeHtml(notice.message)}</div>`;
+}
+
+function renderPopupNoticeModal() {
+  return `
+    <div id="popup-notice-modal" class="approval-modal hidden" aria-hidden="true">
+      <div class="approval-modal-backdrop" data-popup-notice-close></div>
+      <div class="approval-modal-panel popup-notice-panel">
+        <div class="approval-modal-header">
+          <h4 id="popup-notice-title">Duplicate Pipe Number</h4>
+          <button type="button" class="approval-modal-close" data-popup-notice-close aria-label="Close message dialog">×</button>
+        </div>
+        <div class="popup-notice-body">
+          <p id="popup-notice-message"></p>
+        </div>
+        <div class="actions approval-modal-actions">
+          <button type="button" class="button" id="popup-notice-ok-button">Okay</button>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function renderLockedLocationRows(locations) {
@@ -101,6 +121,19 @@ function formatValue(value) {
   if (value === null || value === undefined || value === "") return "";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+function formatNumberForInput(value) {
+  if (value === null || value === undefined || value === "" || Number.isNaN(Number(value))) return "";
+  return Number(value).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function formatDecimalTailForInput(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const text = String(value).trim();
+  if (text.startsWith("0.")) return text.slice(2);
+  if (text.startsWith(".")) return text.slice(1);
+  return text;
 }
 
 function formatDateValue(value) {
@@ -232,48 +265,53 @@ function renderTable(rows) {
   `;
 }
 
-function renderPipeHistorySheets(groups, { inspectorName = "", locationName = "", canManage = false } = {}) {
-  if (!groups?.length) return "<p>No records found.</p>";
+function renderPipeHistorySheets(workorderGroups, { canManage = false } = {}) {
+  if (!workorderGroups?.length) return "<p>No records found.</p>";
   return `
     <form id="pipe-history-sheet-delete-form" method="post" action="/workflow/history/delete">
       <input type="hidden" id="pipe-history-sheet-delete-pipe-unit-id" name="pipeUnitId" value="" />
     </form>
     <div class="pipe-history-sheet-list">
-      ${groups
-        .map((group) => {
-  const drawing = group.recipeDefinition?.drawing || "";
-  const digitalIrrName = group.recipeDefinition?.display_name || formatDigitalIrrName(group.recipeDefinition?.recipe_name || "", drawing);
-  const connectionType = group.recipeDefinition?.connection_type || group.operationDescription || "";
-  const reportTitle = group.recipeDefinition?.source_report || digitalIrrName || "";
+      ${workorderGroups
+        .map((workorder) => {
           return `
             <details class="table-card pipe-history-entry">
               <summary class="pipe-history-summary">
-                <span class="pipe-history-summary-label"><strong>Workorder #:</strong> ${escapeHtml(group.productionNumber)}</span>
-                <span class="pipe-history-summary-label"><strong>Connection Type:</strong> ${escapeHtml(connectionType)}</span>
-                <span class="pipe-history-summary-label"><strong>Connections:</strong> ${escapeHtml(String(group.columns.length))}</span>
+                <span class="pipe-history-summary-label"><strong>Workorder #:</strong> ${escapeHtml(workorder.productionNumber)}</span>
+                <span class="pipe-history-summary-label"><strong>Latest Activity:</strong> ${escapeHtml(formatDateValue(workorder.latestUpdatedAt || new Date()))}</span>
+                <span class="pipe-history-summary-label"><strong>Digital IRRs:</strong> ${escapeHtml(String(workorder.connectionGroups.length))}</span>
               </summary>
-              <div class="inspection-sheet-meta pipe-history-sheet-meta">
-                <div class="inspection-sheet-meta-row">
-                  <div><strong>Date:</strong> ${escapeHtml(formatDateValue(group.latestUpdatedAt || new Date()))}</div>
-                  <div><strong>Drawing #:</strong> ${escapeHtml(drawing)}</div>
-                  <div><strong>Machine #:</strong> ${escapeHtml(locationName || "")}</div>
-                </div>
-                <div class="inspection-sheet-meta-row">
-                  <div><strong>Inspector:</strong> ${escapeHtml(inspectorName || "")}</div>
-                  <div><strong>Workorder #:</strong> ${escapeHtml(group.productionNumber)}</div>
-                  <div><strong>Connection Type:</strong> ${escapeHtml(connectionType)}</div>
-                </div>
-              </div>
-              ${reportTitle ? `<p class="pipe-history-report-title">${escapeHtml(reportTitle)}</p>` : ""}
-              <div class="table-wrap inspection-sheet-wrap">
-                <table class="inspection-sheet-table pipe-history-sheet-table">
-                  <thead>
-                    <tr>
-                      <th class="inspection-col-num">#</th>
-                      <th>Element</th>
-                      <th>DWG DIM</th>
-                      <th>Gauge</th>
-                      ${group.columns
+              <div class="pipe-history-workorder-body">
+                ${workorder.connectionGroups
+                  .map((group) => {
+                    const drawing = group.recipeDefinition?.drawing || "";
+                    const digitalIrrName = group.recipeDefinition?.display_name || formatDigitalIrrName(group.recipeDefinition?.recipe_name || "", drawing);
+                    const connectionType = group.recipeDefinition?.connection_type || group.operationDescription || "";
+                    const reportTitle = group.recipeDefinition?.source_report || digitalIrrName || "";
+                    return `
+                      <section class="card nested-card pipe-history-connection-card">
+                        <div class="inspection-sheet-meta pipe-history-sheet-meta">
+                          <div class="inspection-sheet-meta-row">
+                            <div><strong>Date:</strong> ${escapeHtml(formatDateValue(group.latestUpdatedAt || new Date()))}</div>
+                            <div><strong>Drawing #:</strong> ${escapeHtml(drawing)}</div>
+                            <div><strong>Machine #:</strong> ${escapeHtml(group.latestLocationName || "")}</div>
+                          </div>
+                          <div class="inspection-sheet-meta-row">
+                            <div><strong>Inspector:</strong> ${escapeHtml(group.latestInspectorName || "")}</div>
+                            <div><strong>Workorder #:</strong> ${escapeHtml(workorder.productionNumber)}</div>
+                            <div><strong>Connection Type:</strong> ${escapeHtml(connectionType)}</div>
+                          </div>
+                        </div>
+                        ${reportTitle ? `<p class="pipe-history-report-title">${escapeHtml(reportTitle)}</p>` : ""}
+                        <div class="table-wrap inspection-sheet-wrap">
+                          <table class="inspection-sheet-table pipe-history-sheet-table">
+                            <thead>
+                              <tr>
+                                <th class="inspection-col-num">#</th>
+                                <th>Element</th>
+                                <th>DWG DIM</th>
+                                <th>Gauge</th>
+                                ${group.columns
                         .map(
                           (column) => `<th
                             class="inspection-col-history ${canManage ? "history-column-action" : ""}"
@@ -312,10 +350,10 @@ function renderPipeHistorySheets(groups, { inspectorName = "", locationName = ""
                           </th>`,
                         )
                         .join("")}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${group.rows
+                              </tr>
+                            </thead>
+                            <tbody>
+                              ${group.rows
                       .map((row) => {
                         const rowClass =
                           row.frequency === "rotating"
@@ -340,14 +378,14 @@ function renderPipeHistorySheets(groups, { inspectorName = "", locationName = ""
                         </tr>`;
                       })
                       .join("")}
-                  </tbody>
-                  <tfoot>
-                    <tr class="inspection-result-row">
-                      <td class="inspection-col-num inspection-result-label-piece inspection-result-label-num"></td>
-                      <td class="inspection-result-label-piece inspection-result-label-main"><strong>Inspection Result</strong></td>
-                      <td class="inspection-result-label-piece inspection-result-label-dwg"></td>
-                      <td class="inspection-result-label-piece inspection-result-label-gauge"></td>
-                      ${group.columns
+                            </tbody>
+                            <tfoot>
+                              <tr class="inspection-result-row">
+                                <td class="inspection-col-num inspection-result-label-piece inspection-result-label-num"></td>
+                                <td class="inspection-result-label-piece inspection-result-label-main"><strong>Inspection Result</strong></td>
+                                <td class="inspection-result-label-piece inspection-result-label-dwg"></td>
+                                <td class="inspection-result-label-piece inspection-result-label-gauge"></td>
+                                ${group.columns
                         .map((column) => {
                           const resultLabel = formatPipeStatusResult(
                             column.status,
@@ -360,9 +398,14 @@ function renderPipeHistorySheets(groups, { inspectorName = "", locationName = ""
                           >${escapeHtml(resultLabel)}</td>`;
                         })
                         .join("")}
-                    </tr>
-                  </tfoot>
-                </table>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </section>
+                    `;
+                  })
+                  .join("")}
               </div>
             </details>
           `;
@@ -372,11 +415,14 @@ function renderPipeHistorySheets(groups, { inspectorName = "", locationName = ""
   `;
 }
 
-function renderWorkflowNav(activePath) {
+function renderWorkflowNav(activePath, req = null) {
+  const hasInspectionSession = Boolean(req?.session?.sessionRecord?.id);
+  const canAccessAdmin = Boolean(req?.session?.canAccessAdmin);
   const items = [
-    { href: "/workflow/inspection", label: "Inspection Entry" },
+    ...(hasInspectionSession ? [{ href: "/workflow/inspection", label: "Inspection Entry" }] : []),
     { href: "/workflow/history", label: "Pipe History" },
     { href: "/workflow/ncr", label: "NCR Queue" },
+    ...(canAccessAdmin ? [{ href: "/admin", label: "Admin Tools" }] : []),
   ];
   return `
     <nav class="workflow-nav card">
@@ -389,11 +435,18 @@ function renderWorkflowNav(activePath) {
           .join("")}
       </div>
       <div class="workflow-nav-actions">
-        <form method="post" action="/workflow/refresh-workorders" class="workflow-nav-refresh">
-          <input type="hidden" name="redirectTo" value="${escapeHtml(activePath)}" />
-          <button class="button secondary workflow-action-button" type="submit">Refresh Work Orders</button>
-        </form>
-        <form method="post" action="/logout" class="workflow-nav-logout">
+        ${
+          hasInspectionSession
+            ? `<form method="post" action="/workflow/refresh-workorders" class="workflow-nav-refresh">
+                 <input type="hidden" name="redirectTo" value="${escapeHtml(activePath)}" />
+                 <button class="button secondary workflow-action-button" type="submit">Refresh Work Orders</button>
+               </form>
+               <form method="post" action="/workflow/end-shift" class="workflow-nav-end-shift" onsubmit="return confirm('End shift, publish today\\'s saved pipe history, and log out?');">
+                 <button class="button secondary workflow-action-button" type="submit">End Shift</button>
+               </form>`
+            : ""
+        }
+        <form method="post" action="/logout" class="workflow-nav-logout" onsubmit="return confirm('This will log you out without publishing today\\'s Pipe History. Use End Shift to publish completed work. Continue logging out?');">
           <button class="button workflow-action-button" type="submit">Log Out</button>
         </form>
       </div>
@@ -674,16 +727,17 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
   `;
 }
 
-function renderRecipeBuilderRows(builderOptions, rowCount = 25) {
+function renderRecipeBuilderRows(builderOptions, rowCount = 25, visibleRowCount = 1) {
   const elementOptions = builderOptions?.element_options || [];
   const gaugeOptions = builderOptions?.gauge_options || [];
   const measurementModes = builderOptions?.measurement_modes || [];
   const frequencyOptions = builderOptions?.frequency_options || [];
+  const visibleRows = Math.max(1, Math.min(Number(visibleRowCount) || 1, rowCount));
 
   return Array.from({ length: rowCount }, (_, index) => {
     const rowNumber = index + 1;
     return `
-      <tr>
+      <tr class="recipe-builder-row ${rowNumber > visibleRows ? "hidden" : ""}" data-recipe-row="${rowNumber}">
         <td>${rowNumber}</td>
         <td>
           <div class="recipe-builder-cell">
@@ -709,7 +763,23 @@ function renderRecipeBuilderRows(builderOptions, rowCount = 25) {
                   <option value="3">3 dp</option>
                   <option value="4">4 dp</option>
                 </select>
-                <input name="row_${rowNumber}_tol_digits" placeholder="Tol digits" />
+                <label class="recipe-decimal-input">
+                  <span>+/- .</span>
+                  <input name="row_${rowNumber}_tol_digits" placeholder="002" />
+                </label>
+              </div>
+            </div>
+            <div class="recipe-mode-panel hidden" data-mode-panel="asymmetric_tolerance">
+              <input name="row_${rowNumber}_asym_nominal" placeholder="Nominal" />
+              <div class="recipe-mini-grid">
+                <label class="recipe-decimal-input">
+                  <span>+ .</span>
+                  <input name="row_${rowNumber}_plus_tolerance" placeholder="002" />
+                </label>
+                <label class="recipe-decimal-input">
+                  <span>- .</span>
+                  <input name="row_${rowNumber}_minus_tolerance" placeholder="002" />
+                </label>
               </div>
             </div>
             <div class="recipe-mode-panel hidden" data-mode-panel="range">
@@ -718,13 +788,28 @@ function renderRecipeBuilderRows(builderOptions, rowCount = 25) {
                 <input name="row_${rowNumber}_range_max" placeholder="High" />
               </div>
             </div>
+            <div class="recipe-mode-panel hidden" data-mode-panel="max_limit">
+              <label class="recipe-decimal-input">
+                <span>&lt;=</span>
+                <input name="row_${rowNumber}_limit_max" placeholder="Max" />
+              </label>
+            </div>
+            <div class="recipe-mode-panel hidden" data-mode-panel="min_limit">
+              <label class="recipe-decimal-input">
+                <span>&gt;=</span>
+                <input name="row_${rowNumber}_limit_min" placeholder="Min" />
+              </label>
+            </div>
             <div class="recipe-mode-panel hidden" data-mode-panel="deviation">
               <div class="recipe-mini-grid">
                 <select name="row_${rowNumber}_dev_places">
                   <option value="3">3 dp</option>
                   <option value="4">4 dp</option>
                 </select>
-                <input name="row_${rowNumber}_dev_digits" placeholder="Tol digits" />
+                <label class="recipe-decimal-input">
+                  <span>+/- .</span>
+                  <input name="row_${rowNumber}_dev_digits" placeholder="002" />
+                </label>
               </div>
             </div>
             <div class="recipe-mode-panel hidden" data-mode-panel="visual">
@@ -755,12 +840,92 @@ function renderRecipeBuilderRows(builderOptions, rowCount = 25) {
   }).join("");
 }
 
-function renderRecipeBuilderRowsWithValues(builderOptions, existingRows = [], rowCount = 25) {
+function buildSubmittedRecipePayload(req, rowCount = 25) {
+  const rows = Array.from({ length: rowCount }, (_, index) => {
+    const rowNumber = index + 1;
+    const measurementMode = req.body[`row_${rowNumber}_mode`] || "";
+    const selectedElement = req.body[`row_${rowNumber}_element`] || "";
+    const customElement = req.body[`row_${rowNumber}_element_custom`] || "";
+    const selectedGauge = req.body[`row_${rowNumber}_gauge`] || "";
+    const customGauge = req.body[`row_${rowNumber}_gauge_custom`] || "";
+    return {
+      element_sequence: rowNumber,
+      element_description: String(customElement || selectedElement).trim(),
+      measurement_mode: measurementMode,
+      gauge: String(customGauge || selectedGauge).trim(),
+      frequency: req.body[`row_${rowNumber}_frequency`] || "every_pipe",
+      nominal_value:
+        measurementMode === "asymmetric_tolerance"
+          ? req.body[`row_${rowNumber}_asym_nominal`] || ""
+          : req.body[`row_${rowNumber}_nominal`] || "",
+      tolerance_decimal_places:
+        measurementMode === "deviation"
+          ? req.body[`row_${rowNumber}_dev_places`] || "3"
+          : req.body[`row_${rowNumber}_tol_places`] || "3",
+      tolerance_digits:
+        measurementMode === "deviation"
+          ? req.body[`row_${rowNumber}_dev_digits`] || ""
+          : req.body[`row_${rowNumber}_tol_digits`] || "",
+      plus_tolerance: req.body[`row_${rowNumber}_plus_tolerance`] || "",
+      minus_tolerance: req.body[`row_${rowNumber}_minus_tolerance`] || "",
+      range_min: req.body[`row_${rowNumber}_range_min`] || "",
+      range_max: req.body[`row_${rowNumber}_range_max`] || "",
+      limit_max: req.body[`row_${rowNumber}_limit_max`] || "",
+      limit_min: req.body[`row_${rowNumber}_limit_min`] || "",
+      visual_spec: req.body[`row_${rowNumber}_visual_spec`] || "",
+    };
+  });
+
+  return {
+    branch: "",
+    size_label: req.body.size_label,
+    weight_label: req.body.weight_label,
+    first_article_label: req.body.first_article_label,
+    grade_label: req.body.grade_label,
+    connector_type: req.body.connector_type,
+    drawing: req.body.drawing,
+    source_report: req.body.source_report,
+    created_by: req.session.inspector.name,
+    rows,
+  };
+}
+
+function renderRecipeBuilderRowsWithValues(builderOptions, existingRows = [], rowCount = 25, visibleRowCount = null) {
   const rowsBySequence = new Map(existingRows.map((row) => [Number(row.element_sequence), row]));
   const elementOptions = builderOptions?.element_options || [];
   const gaugeOptions = builderOptions?.gauge_options || [];
   const measurementModes = builderOptions?.measurement_modes || [];
   const frequencyOptions = builderOptions?.frequency_options || [];
+  const rowHasValue = (row) =>
+    Boolean(
+      row.element_description ||
+        row.measurement_mode ||
+        row.gauge ||
+        row.nominal_value ||
+        row.nominal ||
+        row.tolerance_digits ||
+        row.plus_tolerance ||
+        row.minus_tolerance ||
+        row.range_min ||
+        row.range_max ||
+        row.min_value ||
+        row.max_value ||
+        row.limit_max ||
+        row.limit_min ||
+        row.visual_spec ||
+        row.dwg_dim,
+    );
+  const highestFilledRow = existingRows.reduce(
+    (highest, row) => (rowHasValue(row) ? Math.max(highest, Number(row.element_sequence) || 0) : highest),
+    0,
+  );
+  const visibleRows = Math.max(
+    1,
+    Math.min(
+      Number(visibleRowCount) || highestFilledRow || 1,
+      rowCount,
+    ),
+  );
 
   return Array.from({ length: rowCount }, (_, index) => {
     const rowNumber = index + 1;
@@ -769,9 +934,30 @@ function renderRecipeBuilderRowsWithValues(builderOptions, existingRows = [], ro
     const customElement = selectedElement ? "" : (row.element_description || "");
     const selectedGauge = gaugeOptions.includes(row.gauge) ? row.gauge : "";
     const customGauge = selectedGauge ? "" : (row.gauge || "");
+    const nominalValue = row.nominal_value ?? row.nominal ?? "";
+    const toleranceDecimalPlaces = String(row.tolerance_decimal_places || "3");
+    const toleranceDigits = row.tolerance_digits || "";
+    const rangeMin = row.range_min ?? row.min_value ?? "";
+    const rangeMax = row.range_max ?? row.max_value ?? "";
+    const limitMax = row.limit_max ?? row.max_value ?? "";
+    const limitMin = row.limit_min ?? row.min_value ?? "";
+    const visualSpec = row.visual_spec ?? row.dwg_dim ?? "";
+    const nominalToleranceDigits = formatDecimalTailForInput(toleranceDigits);
+    const plusTolerance =
+      row.plus_tolerance !== undefined
+        ? formatDecimalTailForInput(row.plus_tolerance)
+        : row.measurement_mode === "asymmetric_tolerance" && row.nominal !== null && row.nominal !== undefined && row.max_value !== null && row.max_value !== undefined
+        ? formatDecimalTailForInput(formatNumberForInput(Number(row.max_value) - Number(row.nominal)))
+        : "";
+    const minusTolerance =
+      row.minus_tolerance !== undefined
+        ? formatDecimalTailForInput(row.minus_tolerance)
+        : row.measurement_mode === "asymmetric_tolerance" && row.nominal !== null && row.nominal !== undefined && row.min_value !== null && row.min_value !== undefined
+        ? formatDecimalTailForInput(formatNumberForInput(Number(row.nominal) - Number(row.min_value)))
+        : "";
 
     return `
-      <tr>
+      <tr class="recipe-builder-row ${rowNumber > visibleRows ? "hidden" : ""}" data-recipe-row="${rowNumber}">
         <td>${rowNumber}</td>
         <td>
           <div class="recipe-builder-cell">
@@ -791,32 +977,63 @@ function renderRecipeBuilderRowsWithValues(builderOptions, existingRows = [], ro
         <td>
           <div class="recipe-mode-fields" data-row="${rowNumber}">
             <div class="recipe-mode-panel ${row.measurement_mode === "nominal_tolerance" ? "" : "hidden"}" data-mode-panel="nominal_tolerance">
-              <input name="row_${rowNumber}_nominal" placeholder="Nominal" value="${escapeHtml(row.nominal ?? "")}" />
+              <input name="row_${rowNumber}_nominal" placeholder="Nominal" value="${escapeHtml(nominalValue)}" />
               <div class="recipe-mini-grid">
                 <select name="row_${rowNumber}_tol_places">
-                  <option value="3" ${String(row.value_format || "").includes("decimal") ? "selected" : ""}>3 dp</option>
-                  <option value="4">4 dp</option>
+                  <option value="3" ${toleranceDecimalPlaces === "3" ? "selected" : ""}>3 dp</option>
+                  <option value="4" ${toleranceDecimalPlaces === "4" ? "selected" : ""}>4 dp</option>
                 </select>
-                <input name="row_${rowNumber}_tol_digits" placeholder="Tol digits" />
+                <label class="recipe-decimal-input">
+                  <span>+/- .</span>
+                  <input name="row_${rowNumber}_tol_digits" placeholder="002" value="${escapeHtml(nominalToleranceDigits)}" />
+                </label>
+              </div>
+            </div>
+            <div class="recipe-mode-panel ${row.measurement_mode === "asymmetric_tolerance" ? "" : "hidden"}" data-mode-panel="asymmetric_tolerance">
+              <input name="row_${rowNumber}_asym_nominal" placeholder="Nominal" value="${escapeHtml(nominalValue)}" />
+              <div class="recipe-mini-grid">
+                <label class="recipe-decimal-input">
+                  <span>+ .</span>
+                  <input name="row_${rowNumber}_plus_tolerance" placeholder="002" value="${escapeHtml(plusTolerance)}" />
+                </label>
+                <label class="recipe-decimal-input">
+                  <span>- .</span>
+                  <input name="row_${rowNumber}_minus_tolerance" placeholder="002" value="${escapeHtml(minusTolerance)}" />
+                </label>
               </div>
             </div>
             <div class="recipe-mode-panel ${row.measurement_mode === "range" ? "" : "hidden"}" data-mode-panel="range">
               <div class="recipe-mini-grid">
-                <input name="row_${rowNumber}_range_min" placeholder="Low" value="${escapeHtml(row.min_value ?? "")}" />
-                <input name="row_${rowNumber}_range_max" placeholder="High" value="${escapeHtml(row.max_value ?? "")}" />
+                <input name="row_${rowNumber}_range_min" placeholder="Low" value="${escapeHtml(rangeMin)}" />
+                <input name="row_${rowNumber}_range_max" placeholder="High" value="${escapeHtml(rangeMax)}" />
               </div>
+            </div>
+            <div class="recipe-mode-panel ${row.measurement_mode === "max_limit" ? "" : "hidden"}" data-mode-panel="max_limit">
+              <label class="recipe-decimal-input">
+                <span>&lt;=</span>
+                <input name="row_${rowNumber}_limit_max" placeholder="Max" value="${escapeHtml(limitMax)}" />
+              </label>
+            </div>
+            <div class="recipe-mode-panel ${row.measurement_mode === "min_limit" ? "" : "hidden"}" data-mode-panel="min_limit">
+              <label class="recipe-decimal-input">
+                <span>&gt;=</span>
+                <input name="row_${rowNumber}_limit_min" placeholder="Min" value="${escapeHtml(limitMin)}" />
+              </label>
             </div>
             <div class="recipe-mode-panel ${row.measurement_mode === "deviation" ? "" : "hidden"}" data-mode-panel="deviation">
               <div class="recipe-mini-grid">
                 <select name="row_${rowNumber}_dev_places">
-                  <option value="3" selected>3 dp</option>
-                  <option value="4">4 dp</option>
+                  <option value="3" ${toleranceDecimalPlaces === "3" ? "selected" : ""}>3 dp</option>
+                  <option value="4" ${toleranceDecimalPlaces === "4" ? "selected" : ""}>4 dp</option>
                 </select>
-                <input name="row_${rowNumber}_dev_digits" placeholder="Tol digits" />
+                <label class="recipe-decimal-input">
+                  <span>+/- .</span>
+                  <input name="row_${rowNumber}_dev_digits" placeholder="002" value="${escapeHtml(toleranceDigits)}" />
+                </label>
               </div>
             </div>
             <div class="recipe-mode-panel ${row.measurement_mode === "visual" ? "" : "hidden"}" data-mode-panel="visual">
-              <input name="row_${rowNumber}_visual_spec" placeholder="Visual spec / SOP" value="${escapeHtml(row.dwg_dim || "")}" />
+              <input name="row_${rowNumber}_visual_spec" placeholder="Visual spec / SOP" value="${escapeHtml(visualSpec)}" />
             </div>
           </div>
         </td>
@@ -879,8 +1096,50 @@ function layout({ title, sidebar, content, theme = "Light" }) {
         </aside>
         <main class="content">${content}</main>
       </div>
+      ${renderPopupNoticeModal()}
       <script>
         (function () {
+          const popupNotice = document.querySelector(".notice[data-popup='true']");
+          const popupNoticeModal = document.getElementById("popup-notice-modal");
+          const popupNoticeMessage = document.getElementById("popup-notice-message");
+          const popupNoticeOkButton = document.getElementById("popup-notice-ok-button");
+          const popupNoticeCloseButtons = document.querySelectorAll("[data-popup-notice-close]");
+          const adminLoginToggle = document.querySelector("[data-admin-login-toggle]");
+          const adminLoginLocationField = document.querySelector("[data-admin-login-field='location']");
+          const adminLoginLocationSelect = adminLoginLocationField ? adminLoginLocationField.querySelector("select") : null;
+          const setPopupNoticeVisible = (visible) => {
+            if (!popupNoticeModal) return;
+            popupNoticeModal.classList.toggle("hidden", !visible);
+            popupNoticeModal.setAttribute("aria-hidden", visible ? "false" : "true");
+          };
+          const updateAdminLoginFields = () => {
+            if (!adminLoginToggle || !adminLoginLocationField || !adminLoginLocationSelect) return;
+            const isAdminLogin = adminLoginToggle.checked;
+            adminLoginLocationField.classList.toggle("hidden", isAdminLogin);
+            adminLoginLocationSelect.disabled = isAdminLogin;
+          };
+          if (adminLoginToggle) {
+            adminLoginToggle.addEventListener("change", updateAdminLoginFields);
+            updateAdminLoginFields();
+          }
+          if (popupNotice && popupNoticeModal && popupNoticeMessage) {
+            popupNoticeMessage.textContent = popupNotice.textContent.trim();
+            window.setTimeout(() => {
+              setPopupNoticeVisible(true);
+              if (popupNoticeOkButton) popupNoticeOkButton.focus();
+            }, 0);
+          }
+          popupNoticeCloseButtons.forEach((button) =>
+            button.addEventListener("click", () => setPopupNoticeVisible(false)),
+          );
+          if (popupNoticeOkButton) {
+            popupNoticeOkButton.addEventListener("click", () => setPopupNoticeVisible(false));
+          }
+          document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape" && popupNoticeModal && !popupNoticeModal.classList.contains("hidden")) {
+              setPopupNoticeVisible(false);
+            }
+          });
           const body = document.body;
           const key = "autoirr-node-sidebar-collapsed";
           const button = document.getElementById("sidebar-toggle");
@@ -956,6 +1215,16 @@ function layout({ title, sidebar, content, theme = "Light" }) {
 
           const inputs = document.querySelectorAll(".measurement-input");
           const modeSelects = document.querySelectorAll(".recipe-mode-select");
+          const addRecipeRowButtons = document.querySelectorAll("[data-add-recipe-row]");
+          const updateRecipeAddButtons = () => {
+            addRecipeRowButtons.forEach((button) => {
+              const form = button.closest("form");
+              if (!form) return;
+              const hiddenRows = form.querySelectorAll(".recipe-builder-row.hidden");
+              button.disabled = hiddenRows.length === 0;
+              button.textContent = hiddenRows.length === 0 ? "All Elements Added" : "Add Element";
+            });
+          };
           if (modeSelects.length) {
             const syncRecipeModeRow = (select) => {
               const row = select.dataset.row;
@@ -969,6 +1238,24 @@ function layout({ title, sidebar, content, theme = "Light" }) {
               select.addEventListener("change", () => syncRecipeModeRow(select));
               syncRecipeModeRow(select);
             });
+          }
+          if (addRecipeRowButtons.length) {
+            addRecipeRowButtons.forEach((button) => {
+              button.addEventListener("click", () => {
+                const form = button.closest("form");
+                if (!form) return;
+                const nextRow = form.querySelector(".recipe-builder-row.hidden");
+                if (!nextRow) {
+                  updateRecipeAddButtons();
+                  return;
+                }
+                nextRow.classList.remove("hidden");
+                const firstInput = nextRow.querySelector("select, input");
+                if (firstInput) firstInput.focus();
+                updateRecipeAddButtons();
+              });
+            });
+            updateRecipeAddButtons();
           }
 
           if (!inputs.length) return;
@@ -1093,6 +1380,11 @@ function layout({ title, sidebar, content, theme = "Light" }) {
                 "hidden",
                 Boolean(failureActionSelect && failureActionSelect.value === "manager_approved"),
               );
+              if (failureActionSelect && failureActionSelect.value === "rework" && allFilled && anyFail) {
+                completeInspectionButton.textContent = "Submit Re-work";
+              } else {
+                completeInspectionButton.textContent = "Complete Inspection";
+              }
             }
           };
 
@@ -1191,6 +1483,7 @@ function layout({ title, sidebar, content, theme = "Light" }) {
 
 function baseSidebar(req) {
   const inspector = req.session.inspector;
+  const hasInspectionSession = Boolean(req.session.sessionRecord?.id);
   return `
     <h2>Display</h2>
     <form method="post" action="/theme">
@@ -1207,13 +1500,19 @@ function baseSidebar(req) {
            <p><strong>User:</strong> ${escapeHtml(inspector.name)}</p>
            <p><strong>Role:</strong> ${escapeHtml(req.session.roleLabel || "Inspector")}</p>
            <p><strong>Branch:</strong> ${escapeHtml(inspector.branch || "Unknown")}</p>
-           <a class="button secondary sidebar-link-button" href="/workflow/inspection">Inspection Workflow</a>
            ${
-             req.session.canAccessAdmin
-               ? `<a class="button sidebar-link-button" href="/admin">Admin Tools</a>`
+             hasInspectionSession
+               ? `<a class="button secondary sidebar-link-button" href="/workflow/inspection">Inspection Workflow</a>`
                : ""
            }
-           <form method="post" action="/logout"><button type="submit">Log Out</button></form>`
+           ${
+             req.session.canAccessAdmin
+               ? `<a class="button sidebar-link-button" href="/admin">Admin Tools</a>
+                  <a class="button secondary sidebar-link-button" href="/workflow/history?historyView=all">All Pipe History</a>
+                  <a class="button secondary sidebar-link-button" href="/workflow/ncr">All NCRs</a>`
+               : ""
+           }
+           <form method="post" action="/logout" onsubmit="return confirm('This will log you out without publishing today\\'s Pipe History. Use End Shift to publish completed work. Continue logging out?');"><button type="submit">Log Out</button></form>`
         : ""
     }
   `;
@@ -1253,16 +1552,41 @@ app.post("/logout", async (req, res) => {
   req.session.destroy(() => res.redirect("/"));
 });
 
+app.post("/workflow/end-shift", async (req, res, next) => {
+  try {
+    if (!req.session.inspector || !req.session.sessionRecord?.id) return res.redirect("/");
+    const publishResult = await callBridge("publish_session_history", { session_id: req.session.sessionRecord.id });
+    await callBridge("close_inspector_session", { session_id: req.session.sessionRecord.id });
+    const publishedCount = Number(publishResult?.published_count || 0);
+    const message =
+      publishedCount > 0
+        ? `End shift complete. ${publishedCount} pipe record${publishedCount === 1 ? "" : "s"} published to Pipe History.`
+        : "End shift complete. No completed or re-work pipe records were ready to publish to Pipe History.";
+    req.session.destroy(() =>
+      res.redirect(`/?shiftEnded=1&notice=${encodeURIComponent(message)}&kind=success`),
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/", async (req, res, next) => {
   try {
     await ensureInitialized();
     if (req.session.sessionRecord && req.session.inspector) {
       return res.redirect("/workflow");
     }
+    if (req.session.inspector && req.session.canAccessAdmin) {
+      return res.redirect("/admin");
+    }
 
     const locations = await callBridge("get_locations");
     const pending = req.session.pendingLoginContext || null;
     const operators = pending ? await callBridge("get_cnc_operators", { branch: pending.inspector.branch }) : [];
+    const pageNotice =
+      req.query.shiftEnded && req.query.notice
+        ? { kind: String(req.query.kind || "success"), message: String(req.query.notice || "") }
+        : req.session.notice;
 
     const content = `
       <section class="hero">
@@ -1282,6 +1606,10 @@ app.get("/", async (req, res, next) => {
             ${pending ? '<span class="summary-hint">Change inspector or session setup</span>' : ""}
           </summary>
           <form method="post" action="/login/find" class="form-grid">
+            <label class="toggle-row">
+              <input type="checkbox" name="admin_login" value="1" data-admin-login-toggle />
+              <span>Admin login</span>
+            </label>
             <div class="field">
               <label>Inspector ADP Number</label>
               <input type="text" name="adp_number" />
@@ -1293,7 +1621,7 @@ app.get("/", async (req, res, next) => {
                 <option value="Night">Night</option>
               </select>
             </div>
-            <div class="field">
+            <div class="field" data-admin-login-field="location">
               <label>Location / Machine</label>
               <select name="location_id">${renderLocationOptions(locations)}</select>
             </div>
@@ -1333,6 +1661,24 @@ app.post("/login/find", async (req, res, next) => {
       req.session.notice = { kind: "warning", message: "No employee found for that ADP number." };
       return res.redirect("/");
     }
+    const isAdmin = await callBridge("is_admin_user", { employee: inspector });
+    const isManager = await callBridge("is_manager_or_supervisor", { employee: inspector });
+    req.session.roleLabel = isManager ? "Manager/Supervisor" : isAdmin ? "Admin Access Only" : "Inspector";
+    req.session.canAccessAdmin = Boolean(isAdmin);
+    if (req.body.admin_login === "1") {
+      if (!isAdmin) {
+        req.session.notice = { kind: "warning", message: "Admin login is available only to managers, supervisors, and IT." };
+        return res.redirect("/");
+      }
+      req.session.inspector = inspector;
+      req.session.sessionRecord = null;
+      req.session.sessionShift = req.body.shift || (await callBridge("determine_shift"));
+      req.session.pendingLoginContext = null;
+      req.session.activeInspection = null;
+      req.session.selection = null;
+      req.session.notice = { kind: "success", message: `Admin login complete: ${inspector.name}` };
+      return res.redirect("/admin");
+    }
     const locations = await callBridge("get_locations");
     const location = locations.find((item) => String(item.id) === String(req.body.location_id));
     if (!location) {
@@ -1346,10 +1692,6 @@ app.post("/login/find", async (req, res, next) => {
       };
       return res.redirect("/");
     }
-    const isAdmin = await callBridge("is_admin_user", { employee: inspector });
-    const isManager = await callBridge("is_manager_or_supervisor", { employee: inspector });
-    req.session.roleLabel = isManager ? "Manager/Supervisor" : isAdmin ? "Admin Access Only" : "Inspector";
-    req.session.canAccessAdmin = Boolean(isAdmin);
     req.session.pendingLoginContext = {
       inspector,
       shift: req.body.shift || (await callBridge("determine_shift")),
@@ -1383,6 +1725,44 @@ app.post("/login/start", async (req, res, next) => {
     req.session.activeInspection = null;
     req.session.selection = null;
     res.redirect("/workflow/inspection");
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/admin/session/setup", async (req, res, next) => {
+  try {
+    if (!req.session.inspector) return res.redirect("/");
+    const isAdmin = req.session.canAccessAdmin ?? (await callBridge("is_admin_user", { employee: req.session.inspector }));
+    if (!isAdmin) {
+      req.session.notice = { kind: "warning", message: "Admin tools are available only to managers, supervisors, and IT." };
+      return res.redirect("/");
+    }
+    req.session.canAccessAdmin = true;
+    if (req.session.sessionRecord?.id) {
+      req.session.notice = { kind: "info", message: "You already have an active inspection session." };
+      return res.redirect("/workflow/inspection");
+    }
+    const locations = await callBridge("get_locations");
+    const location = locations.find((item) => String(item.id) === String(req.body.location_id));
+    if (!location) {
+      req.session.notice = { kind: "warning", message: "Please select a valid machine or location." };
+      return res.redirect("/admin");
+    }
+    if (location.is_locked) {
+      req.session.notice = {
+        kind: "warning",
+        message: `${location.location_name} is currently unavailable${location.active_inspector_name ? ` because it is in use by ${location.active_inspector_name}` : ""}.`,
+      };
+      return res.redirect("/admin");
+    }
+    req.session.pendingLoginContext = {
+      inspector: req.session.inspector,
+      shift: req.body.shift || (await callBridge("determine_shift")),
+      location,
+    };
+    req.session.notice = { kind: "success", message: `Floor session ready for ${req.session.inspector.name}.` };
+    res.redirect("/admin");
   } catch (error) {
     next(error);
   }
@@ -1461,6 +1841,9 @@ app.get("/workflow/inspection", async (req, res, next) => {
     const recipeDefinition = selection.recipeName
       ? await callBridge("get_recipe_elements", { recipe_name: selection.recipeName, branch: inspector.branch })
       : null;
+    const digitalIrrName = recipeDefinition
+      ? recipeDefinition.display_name || formatDigitalIrrName(recipeDefinition.recipe_name || "", recipeDefinition.drawing || "")
+      : "";
     const existingPipe = selection.pipeNumber && lookupDescription
       ? await callBridge("get_pipe_unit", {
           production_number: selection.productionNumber,
@@ -1507,7 +1890,7 @@ app.get("/workflow/inspection", async (req, res, next) => {
     const content = `
       ${renderWorkflowHeader(req)}
       ${renderNotice(req.session.notice)}
-      ${renderWorkflowNav("/workflow/inspection")}
+      ${renderWorkflowNav("/workflow/inspection", req)}
       <details class="card inspection-entry-panel"${showWorksheet ? "" : " open"}>
         <summary class="section-title">Inspection Entry</summary>
         <form method="get" action="/workflow/inspection" class="form-grid inspection-entry-form" id="inspection-selection-form">
@@ -1536,11 +1919,16 @@ app.get("/workflow/inspection", async (req, res, next) => {
                   kind: "warning",
                   message: `Pipe ${selection.pipeNumber} already has an in-progress inspection for this WO/connection. Starting inspection will resume attempt #${existingPipe.latest_attempt_no}.`,
                 })
-              : ["completed", "rework"].includes(existingPipe.current_status)
+              : existingPipe.current_status === "rework"
                 ? renderNotice({
                     kind: "warning",
-                    message: `Pipe ${selection.pipeNumber} already has completed/re-work history for this WO/connection. Starting inspection will create re-work attempt #${existingPipe.latest_attempt_no + 1}.`,
+                    message: `Pipe ${selection.pipeNumber} is currently in re-work for this WO/connection. Starting inspection will continue with re-work attempt #${existingPipe.latest_attempt_no + 1}.`,
                   })
+                : ["completed", "scrapped"].includes(existingPipe.current_status)
+                  ? renderNotice({
+                      kind: "error",
+                      message: `Pipe ${selection.pipeNumber} is already resolved for this WO/connection. This pipe number is not a re-work and can not be re-entered. Please check the entered pipe number.`,
+                    })
                 : ""
             : ""
         }
@@ -1584,123 +1972,199 @@ app.get("/workflow/inspection", async (req, res, next) => {
 
 app.get("/workflow/history", async (req, res, next) => {
   try {
-    if (!req.session.inspector || !req.session.sessionRecord) return res.redirect("/");
+    if (!req.session.inspector) return res.redirect("/");
     const inspector = req.session.inspector;
-    const canManage = Boolean(req.session.inspector);
+    const isAdmin = req.session.canAccessAdmin ?? (await callBridge("is_admin_user", { employee: inspector }));
+    const hasInspectionSession = Boolean(req.session.sessionRecord?.id);
+    if (!hasInspectionSession && !isAdmin) return res.redirect("/");
+    req.session.canAccessAdmin = Boolean(isAdmin);
+    const canManage = Boolean(hasInspectionSession);
+    const canViewAllHistory = Boolean(isAdmin);
+    const requestedHistoryView = String(req.query.historyView || "").trim().toLowerCase();
+    const historyView =
+      canViewAllHistory && (requestedHistoryView === "all" || (!requestedHistoryView && !hasInspectionSession))
+        ? "all"
+        : requestedHistoryView === "mine"
+          ? "mine"
+          : hasInspectionSession
+            ? "machine"
+            : "all";
+    const historyBranchFilter = historyView === "machine" ? inspector.branch : null;
+    const historyPublishedOnly = !(isAdmin && historyView === "all");
+    const currentLocationName = String(req.session.sessionRecord?.location_name || "").trim();
+    const currentInspectorName = String(req.session.inspector?.name || "").trim();
     const allPipeRows = await callBridge("search_pipe_units", {
-      branch: inspector.branch,
+      branch: historyBranchFilter,
       production_number: null,
       pipe_number: null,
       status: null,
       inspection_scope: null,
+      published_only: historyPublishedOnly,
     });
     const productionOptions = [...new Set(allPipeRows.map((item) => item.production_number).filter(Boolean))].sort();
     const pipeNumberOptions = [...new Set(allPipeRows.map((item) => item.pipe_number).filter(Boolean))].sort((a, b) =>
       String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" }),
     );
     const pipeRows = await callBridge("search_pipe_units", {
-      branch: inspector.branch,
+      branch: historyBranchFilter,
       production_number: req.query.historyProduction || null,
       pipe_number: req.query.historyPipe || null,
       status: req.query.historyStatus || null,
       inspection_scope: req.query.historyScope || null,
+      published_only: historyPublishedOnly,
     });
-    const pipeHistoryGroupsMap = new Map();
+    const workorderGroupsMap = new Map();
     for (const pipeRow of pipeRows) {
-      const groupKey = `${pipeRow.production_number || ""}||${pipeRow.operation_description || ""}`;
-      if (!pipeHistoryGroupsMap.has(groupKey)) {
-        pipeHistoryGroupsMap.set(groupKey, {
-          productionNumber: pipeRow.production_number || "",
-          operationDescription: pipeRow.operation_description || "",
-          latestUpdatedAt: pipeRow.updated_at || pipeRow.created_at || null,
-          pipeRows: [],
+      const attempts = await callBridge("get_pipe_attempt_history", { pipe_unit_id: pipeRow.id });
+      const latestAttempt = attempts[0];
+      if (!latestAttempt) continue;
+
+      const matchesCurrentMachine = currentLocationName
+        ? attempts.some((attempt) => String(attempt.location_name || "").trim() === currentLocationName)
+        : true;
+      const matchesCurrentInspector = currentInspectorName
+        ? attempts.some((attempt) => String(attempt.inspector_name || "").trim() === currentInspectorName)
+        : true;
+      if (historyView === "machine" && !matchesCurrentMachine) continue;
+      if (historyView === "mine" && !matchesCurrentInspector) continue;
+
+      const matchingAttempt =
+        historyView === "machine"
+          ? attempts.find((attempt) => String(attempt.location_name || "").trim() === currentLocationName) || latestAttempt
+          : historyView === "mine"
+            ? attempts.find((attempt) => String(attempt.inspector_name || "").trim() === currentInspectorName) || latestAttempt
+            : latestAttempt;
+
+      const measurements = await callBridge("get_attempt_measurements", { attempt_id: latestAttempt.id });
+      const productionNumber = pipeRow.production_number || "";
+      const operationDescription = pipeRow.operation_description || "";
+      const workorderKey = productionNumber;
+      const connectionKey = `${productionNumber}||${operationDescription}`;
+      const updatedAt =
+        matchingAttempt.completed_at || matchingAttempt.started_at || latestAttempt.completed_at || latestAttempt.started_at || pipeRow.updated_at || pipeRow.created_at || null;
+      const latestLocationName = String(latestAttempt.location_name || "").trim();
+      const latestInspectorName = String(latestAttempt.inspector_name || "").trim();
+      const matchingLocationName = String(matchingAttempt.location_name || "").trim();
+      const matchingInspectorName = String(matchingAttempt.inspector_name || "").trim();
+
+      if (!workorderGroupsMap.has(workorderKey)) {
+        workorderGroupsMap.set(workorderKey, {
+          productionNumber,
+          latestUpdatedAt: updatedAt,
+          connectionGroupsMap: new Map(),
         });
       }
-      const group = pipeHistoryGroupsMap.get(groupKey);
-      group.pipeRows.push(pipeRow);
-      const updatedAt = pipeRow.updated_at || pipeRow.created_at || null;
-      if (updatedAt && (!group.latestUpdatedAt || new Date(updatedAt) > new Date(group.latestUpdatedAt))) {
-        group.latestUpdatedAt = updatedAt;
+      const workorderGroup = workorderGroupsMap.get(workorderKey);
+      if (updatedAt && (!workorderGroup.latestUpdatedAt || new Date(updatedAt) > new Date(workorderGroup.latestUpdatedAt))) {
+        workorderGroup.latestUpdatedAt = updatedAt;
       }
-    }
 
-    const pipeHistoryGroups = [];
-    for (const group of pipeHistoryGroupsMap.values()) {
-      const recipeCandidates = await callBridge("find_recipe_candidates", {
-        operation_description: group.operationDescription,
-        branch: inspector.branch,
-      });
-      const recipeName =
-        recipeCandidates?.length
-          ? (typeof recipeCandidates[0] === "string" ? recipeCandidates[0] : recipeCandidates[0].recipe_name)
+      if (!workorderGroup.connectionGroupsMap.has(connectionKey)) {
+        const recipeCandidates = await callBridge("find_recipe_candidates", {
+          operation_description: operationDescription,
+          branch: historyBranchFilter,
+        });
+        const recipeName =
+          recipeCandidates?.length
+            ? (typeof recipeCandidates[0] === "string" ? recipeCandidates[0] : recipeCandidates[0].recipe_name)
+            : null;
+        const recipeDefinition = recipeName
+          ? await callBridge("get_recipe_elements", { recipe_name: recipeName, branch: historyBranchFilter })
           : null;
-      const recipeDefinition = recipeName
-        ? await callBridge("get_recipe_elements", { recipe_name: recipeName, branch: inspector.branch })
-        : null;
 
-      const measurementRowsBySequence = new Map();
-      const sortedPipeRows = [...group.pipeRows].sort((a, b) =>
-        String(a.pipe_number).localeCompare(String(b.pipe_number), undefined, { numeric: true, sensitivity: "base" }),
-      );
-      const columns = [];
-      for (const pipeRow of sortedPipeRows) {
-        const attempts = await callBridge("get_pipe_attempt_history", { pipe_unit_id: pipeRow.id });
-        const latestAttempt = attempts[0];
-        if (!latestAttempt) continue;
-        const measurements = await callBridge("get_attempt_measurements", { attempt_id: latestAttempt.id });
-        measurements.forEach((measurement) => {
-          const sequence = Number(measurement.element_sequence);
-          if (!measurementRowsBySequence.has(sequence)) {
-            measurementRowsBySequence.set(sequence, {
-              element_sequence: measurement.element_sequence,
-              element_description: measurement.element_description,
-              dwg_dim: measurement.dwg_dim,
-              gauge: measurement.gauge,
-              frequency: "",
-            });
-          }
-        });
-        columns.push({
-          pipeUnitId: pipeRow.id,
-          pipeNumber: pipeRow.pipe_number,
-          status: pipeRow.current_status,
-          attemptStatus: latestAttempt.status,
-          requiresManagerApproval: Boolean(latestAttempt.requires_manager_approval),
-          measurementsBySequence: new Map(measurements.map((item) => [Number(item.element_sequence), item])),
+        workorderGroup.connectionGroupsMap.set(connectionKey, {
+          productionNumber,
+          operationDescription,
+          latestUpdatedAt: updatedAt,
+          latestInspectorName: historyView === "all" ? latestInspectorName : matchingInspectorName,
+          latestLocationName: historyView === "all" ? latestLocationName : matchingLocationName,
+          recipeDefinition,
+          measurementRowsBySequence: new Map(),
+          columns: [],
         });
       }
 
-      pipeHistoryGroups.push({
-        productionNumber: group.productionNumber,
-        operationDescription: group.operationDescription,
-        latestUpdatedAt: group.latestUpdatedAt,
-        recipeDefinition,
-        rows:
-          recipeDefinition?.elements?.length
-            ? recipeDefinition.elements
-            : [...measurementRowsBySequence.values()].sort((a, b) => Number(a.element_sequence) - Number(b.element_sequence)),
-        columns,
+      const connectionGroup = workorderGroup.connectionGroupsMap.get(connectionKey);
+      if (updatedAt && (!connectionGroup.latestUpdatedAt || new Date(updatedAt) > new Date(connectionGroup.latestUpdatedAt))) {
+        connectionGroup.latestUpdatedAt = updatedAt;
+        connectionGroup.latestInspectorName = historyView === "all" ? latestInspectorName : matchingInspectorName;
+        connectionGroup.latestLocationName = historyView === "all" ? latestLocationName : matchingLocationName;
+      }
+
+      measurements.forEach((measurement) => {
+        const sequence = Number(measurement.element_sequence);
+        if (!connectionGroup.measurementRowsBySequence.has(sequence)) {
+          connectionGroup.measurementRowsBySequence.set(sequence, {
+            element_sequence: measurement.element_sequence,
+            element_description: measurement.element_description,
+            dwg_dim: measurement.dwg_dim,
+            gauge: measurement.gauge,
+            frequency: "",
+          });
+        }
+      });
+
+      connectionGroup.columns.push({
+        pipeUnitId: pipeRow.id,
+        pipeNumber: pipeRow.pipe_number,
+        status: pipeRow.current_status,
+        attemptStatus: latestAttempt.status,
+        requiresManagerApproval: Boolean(latestAttempt.requires_manager_approval),
+        measurementsBySequence: new Map(measurements.map((item) => [Number(item.element_sequence), item])),
       });
     }
+
+    const pipeHistoryGroups = [...workorderGroupsMap.values()]
+      .map((workorderGroup) => ({
+        productionNumber: workorderGroup.productionNumber,
+        latestUpdatedAt: workorderGroup.latestUpdatedAt,
+        connectionGroups: [...workorderGroup.connectionGroupsMap.values()]
+          .map((connectionGroup) => ({
+            productionNumber: connectionGroup.productionNumber,
+            operationDescription: connectionGroup.operationDescription,
+            latestUpdatedAt: connectionGroup.latestUpdatedAt,
+            latestInspectorName: connectionGroup.latestInspectorName,
+            latestLocationName: connectionGroup.latestLocationName,
+            recipeDefinition: connectionGroup.recipeDefinition,
+            rows:
+              connectionGroup.recipeDefinition?.elements?.length
+                ? connectionGroup.recipeDefinition.elements
+                : [...connectionGroup.measurementRowsBySequence.values()].sort(
+                    (a, b) => Number(a.element_sequence) - Number(b.element_sequence),
+                  ),
+            columns: [...connectionGroup.columns].sort((a, b) =>
+              String(a.pipeNumber).localeCompare(String(b.pipeNumber), undefined, { numeric: true, sensitivity: "base" }),
+            ),
+          }))
+          .sort((a, b) => new Date(b.latestUpdatedAt || 0) - new Date(a.latestUpdatedAt || 0)),
+      }))
+      .sort((a, b) => new Date(b.latestUpdatedAt || 0) - new Date(a.latestUpdatedAt || 0));
+
+    const historyViewLabel =
+      historyView === "all" ? "All History" : historyView === "mine" ? "My History" : "This Machine";
     const content = `
       ${renderWorkflowHeader(req)}
       ${renderNotice(req.session.notice)}
-      ${renderWorkflowNav("/workflow/history")}
+      ${renderWorkflowNav("/workflow/history", req)}
       <section class="table-card">
         <h2 class="section-title">Pipe History</h2>
-        <p>Search by work order, pipe number, or status to review prior attempts and measurements.</p>
+        <p>Review saved inspection history by machine, inspector, or plant-wide scope. Entries are sorted by most recent activity first.</p>
       </section>
       <section class="table-card">
         <form method="get" action="/workflow/history" class="form-grid two">
+          <div class="field"><label>History View</label><select name="historyView">
+            ${hasInspectionSession ? `<option value="machine" ${historyView === "machine" ? "selected" : ""}>This Machine</option>` : ""}
+            <option value="mine" ${historyView === "mine" ? "selected" : ""}>My History</option>
+            ${canViewAllHistory ? `<option value="all" ${historyView === "all" ? "selected" : ""}>All History</option>` : ""}
+          </select></div>
           <div class="field"><label>Filter Production Number</label><select name="historyProduction"><option value=""></option>${renderOptions(productionOptions, req.query.historyProduction || "", (item) => item, (item) => item)}</select></div>
           <div class="field"><label>Filter Pipe Number</label><select name="historyPipe"><option value=""></option>${renderOptions(pipeNumberOptions, req.query.historyPipe || "", (item) => item, (item) => item)}</select></div>
           <div class="field"><label>Filter Status</label><select name="historyStatus"><option value=""></option><option value="in_progress" ${req.query.historyStatus === "in_progress" ? "selected" : ""}>in_progress</option><option value="completed" ${req.query.historyStatus === "completed" ? "selected" : ""}>completed</option><option value="rework" ${req.query.historyStatus === "rework" ? "selected" : ""}>rework</option><option value="scrapped" ${req.query.historyStatus === "scrapped" ? "selected" : ""}>scrapped</option></select></div>
           <div class="field"><label>Filter Scope</label><select name="historyScope"><option value=""></option><option value="standard" ${req.query.historyScope === "standard" ? "selected" : ""}>Standard Inspection</option><option value="full" ${req.query.historyScope === "full" ? "selected" : ""}>Full Inspection</option></select></div>
           <div class="actions"><button class="button" type="submit">Search Pipe History</button></div>
         </form>
+        <p><strong>Viewing:</strong> ${escapeHtml(historyViewLabel)}${historyView === "machine" && currentLocationName ? ` for ${escapeHtml(currentLocationName)}` : ""}${historyView === "mine" && currentInspectorName ? ` for ${escapeHtml(currentInspectorName)}` : ""}</p>
         ${renderPipeHistorySheets(pipeHistoryGroups, {
-          inspectorName: req.session.inspector?.name || "",
-          locationName: req.session.sessionRecord?.location_name || "",
           canManage,
         })}
       </section>
@@ -1724,7 +2188,7 @@ app.get("/workflow/history/edit/:pipeUnitId", async (req, res, next) => {
     const content = `
       ${renderWorkflowHeader(req)}
       ${renderNotice(req.session.notice)}
-      ${renderWorkflowNav("/workflow/history")}
+      ${renderWorkflowNav("/workflow/history", req)}
       <section class="table-card">
         <h2 class="section-title">Edit Pipe Record</h2>
         <p>Update the pipe identifiers without removing the inspection history tied to this record.</p>
@@ -1823,9 +2287,14 @@ app.post("/workflow/history/reset", async (req, res, next) => {
 
 app.get("/report/pipe/:pipeUnitId", async (req, res, next) => {
   try {
-    if (!req.session.inspector || !req.session.sessionRecord) return res.redirect("/");
+    if (!req.session.inspector) return res.redirect("/");
     const inspector = req.session.inspector;
-    const pipeRows = await callBridge("search_pipe_units", { branch: inspector.branch });
+    const isAdmin = req.session.canAccessAdmin ?? (await callBridge("is_admin_user", { employee: inspector }));
+    const hasInspectionSession = Boolean(req.session.sessionRecord?.id);
+    if (!hasInspectionSession && !isAdmin) return res.redirect("/");
+    req.session.canAccessAdmin = Boolean(isAdmin);
+    const reportBranch = isAdmin ? null : inspector.branch;
+    const pipeRows = await callBridge("search_pipe_units", { branch: reportBranch, published_only: !isAdmin });
     const pipeRow = pipeRows.find((item) => String(item.id) === String(req.params.pipeUnitId));
     if (!pipeRow) {
       req.session.notice = { kind: "warning", message: "That pipe report could not be found." };
@@ -1837,12 +2306,12 @@ app.get("/report/pipe/:pipeUnitId", async (req, res, next) => {
     for (const attempt of attempts) {
       const measurements = await callBridge("get_attempt_measurements", { attempt_id: attempt.id });
       const recipeDefinition = attempt.recipe_name
-        ? await callBridge("get_recipe_elements", { recipe_name: attempt.recipe_name, branch: inspector.branch })
+        ? await callBridge("get_recipe_elements", { recipe_name: attempt.recipe_name, branch: reportBranch })
         : null;
       attemptsWithMeasurements.push({ ...attempt, measurements, recipeDefinition });
     }
 
-    const branchNcrs = await callBridge("get_ncr_reports", { branch: inspector.branch, status: null });
+    const branchNcrs = await callBridge("get_ncr_reports", { branch: reportBranch, status: null });
     const ncrs = branchNcrs.filter((item) => String(item.pipe_unit_id) === String(pipeRow.id));
 
     const content = `
@@ -2028,23 +2497,28 @@ app.get("/report/pipe/:pipeUnitId", async (req, res, next) => {
 
 app.get("/workflow/ncr", async (req, res, next) => {
   try {
-    if (!req.session.inspector || !req.session.sessionRecord) return res.redirect("/");
+    if (!req.session.inspector) return res.redirect("/");
     const inspector = req.session.inspector;
+    const isAdmin = req.session.canAccessAdmin ?? (await callBridge("is_admin_user", { employee: inspector }));
+    const hasInspectionSession = Boolean(req.session.sessionRecord?.id);
+    if (!hasInspectionSession && !isAdmin) return res.redirect("/");
+    req.session.canAccessAdmin = Boolean(isAdmin);
+    const ncrBranch = isAdmin ? null : inspector.branch;
     const ncrRows = await callBridge("get_ncr_reports", {
-      branch: inspector.branch,
+      branch: ncrBranch,
       status: req.query.ncrStatus || null,
     });
     const content = `
       ${renderWorkflowHeader(req)}
       ${renderNotice(req.session.notice)}
-      ${renderWorkflowNav("/workflow/ncr")}
+      ${renderWorkflowNav("/workflow/ncr", req)}
       <section class="table-card">
         <h2 class="section-title">NCR Queue</h2>
-        <p>Review open NCRs, update disposition details, and close records when the pipe is resolved.</p>
+        <p>Review NCRs${isAdmin ? " across all machines" : " for this branch"}, including disposition and containment details.</p>
       </section>
       <section class="table-card">
         <form method="get" action="/workflow/ncr" class="form-grid">
-          <div class="field"><label>NCR Status</label><select name="ncrStatus"><option value=""></option><option value="open">open</option><option value="closed">closed</option></select></div>
+          <div class="field"><label>NCR Status</label><select name="ncrStatus"><option value=""></option><option value="open" ${req.query.ncrStatus === "open" ? "selected" : ""}>open</option><option value="closed" ${req.query.ncrStatus === "closed" ? "selected" : ""}>closed</option></select></div>
           <div class="actions"><button class="button" type="submit">Filter NCRs</button></div>
         </form>
         ${renderTable(ncrRows)}
@@ -2089,6 +2563,20 @@ app.post("/workflow/start", async (req, res, next) => {
       req.session.notice = {
         kind: "info",
         message: "Inspection sheet opened. Enter the pipe number in the worksheet header to start or resume that pipe.",
+      };
+      return res.redirect("/workflow/inspection");
+    }
+    const existingPipe = await callBridge("get_pipe_unit", {
+      production_number: selection.productionNumber,
+      operation_description: lookupDescription,
+      pipe_number: selection.pipeNumber,
+    });
+    if (existingPipe && ["completed", "scrapped"].includes(String(existingPipe.current_status || "").toLowerCase())) {
+      req.session.activeInspection = null;
+      req.session.notice = {
+        kind: "error",
+        popup: true,
+        message: "This pipe number is not a re-work and can not be re-entered. Please check the entered pipe number.",
       };
       return res.redirect("/workflow/inspection");
     }
@@ -2224,10 +2712,15 @@ app.post("/workflow/complete", async (req, res, next) => {
       req.session.selection.pipeNumber = incrementPipeNumber(active.pipe_number || req.session.selection.pipeNumber || "");
     }
     req.session.notice = {
-      kind: evaluation.has_failures ? "warning" : "success",
-      message: evaluation.has_failures
-        ? `Inspection failed automatically based on the entered measurements. Attempt status: ${result.attempt_status}. Pipe status: ${result.pipe_status}.`
-        : `Inspection passed automatically. Attempt status: ${result.attempt_status}. Pipe status: ${result.pipe_status}.`,
+      kind: result.pipe_status === "rework" ? "warning" : "success",
+      message:
+        result.pipe_status === "completed"
+          ? result.attempt_status === "approved"
+            ? "Inspection saved as Pass With Approval."
+            : "Inspection completed and moved to Completed."
+          : result.pipe_status === "scrapped"
+            ? "Inspection completed and moved to Scrapped."
+            : "Inspection submitted and moved to Re-work.",
     };
     res.redirect("/workflow/inspection");
   } catch (error) {
@@ -2246,16 +2739,69 @@ app.get("/admin", async (req, res, next) => {
     }
     const builderOptions = await callBridge("get_recipe_builder_options", { branch: inspector.branch });
     const localRecipes = await callBridge("list_local_recipes", { branch: inspector.branch });
-    const lockedLocations = (await callBridge("get_locations")).filter((item) => item.is_locked);
+    const locations = await callBridge("get_locations");
+    const lockedLocations = locations.filter((item) => item.is_locked);
+    const pending = req.session.pendingLoginContext || null;
+    const createRecipeDraft = req.session.createRecipeDraft || {};
+    const createRecipeRows = createRecipeDraft.rows || [];
+    const operators =
+      pending && !req.session.sessionRecord?.id
+        ? await callBridge("get_cnc_operators", { branch: pending.inspector.branch })
+        : [];
     const content = `
       <section class="hero">
         <h1>Inspection Run Report Admin</h1>
         <p>Administrative tools for setup and maintenance.</p>
         <div class="badges">
-          <a class="badge" href="/workflow/inspection">Back to Inspection Workflow</a>
+          ${req.session.sessionRecord?.id ? `<a class="badge" href="/workflow/inspection">Back to Inspection Workflow</a>` : ""}
         </div>
       </section>
       ${renderNotice(req.session.notice)}
+      <section class="card">
+        <h2 class="section-title">Manager Review</h2>
+        <p>Open plant-wide inspection history and NCR records without starting a machine session.</p>
+        <div class="actions">
+          <a class="button" href="/workflow/history?historyView=all">View All Pipe History</a>
+          <a class="button secondary" href="/workflow/ncr">View All NCRs</a>
+        </div>
+      </section>
+      ${
+        !req.session.sessionRecord?.id
+          ? `<section class="card">
+               <h2 class="section-title">Start Floor Session</h2>
+               <p>Begin an inspection session as ${escapeHtml(inspector.name)} without signing out of admin tools.</p>
+               <form method="post" action="/admin/session/setup" class="form-grid">
+                 <div class="field">
+                   <label>Shift</label>
+                   <select name="shift">
+                     <option value="Day" ${req.session.sessionShift === "Night" ? "" : "selected"}>Day</option>
+                     <option value="Night" ${req.session.sessionShift === "Night" ? "selected" : ""}>Night</option>
+                   </select>
+                 </div>
+                 <div class="field">
+                   <label>Location / Machine</label>
+                   <select name="location_id">${renderLocationOptions(locations, pending?.location?.id)}</select>
+                 </div>
+                 <div class="actions"><button class="button" type="submit">Prepare Floor Session</button></div>
+               </form>
+             </section>`
+          : ""
+      }
+      ${
+        pending && !req.session.sessionRecord?.id
+          ? `<section class="card">
+               <h2 class="section-title">Floor Session Ready</h2>
+               <p>${escapeHtml(pending.inspector.name)} | ${escapeHtml(req.session.roleLabel || "Admin Access Only")} | ${escapeHtml(pending.shift)} | ${escapeHtml(pending.location.location_name)}</p>
+               <form method="post" action="/login/start" class="form-grid">
+                 <div class="field">
+                   <label>CNC Operator</label>
+                   <select name="operator_item_id">${renderOptions(operators, null, (item) => item.item_id, (item) => item.name)}</select>
+                 </div>
+                 <div class="actions"><button class="button" type="submit">Start Inspection Session</button></div>
+               </form>
+             </section>`
+          : ""
+      }
       <section class="card">
         <h2 class="section-title">Machine Locks</h2>
         <p>Release a machine if a session was left open unexpectedly.</p>
@@ -2280,12 +2826,13 @@ app.get("/admin", async (req, res, next) => {
         <p>Create an app-managed Digital IRR with up to 25 inspection elements. Saved Digital IRRs are immediately available to the inspection workflow.</p>
         <form method="post" action="/admin/recipes" class="form-grid">
           <div class="form-grid two">
-            <div class="field"><label>Size</label><input name="size_label" placeholder='2.875' required /></div>
-            <div class="field"><label>Weight</label><input name="weight_label" placeholder='7.90#' required /></div>
-            <div class="field"><label>Grade</label><input name="grade_label" placeholder='BTS-6' required /></div>
-            <div class="field"><label>Connector Type</label><input name="connector_type" placeholder='PIN' required /></div>
-            <div class="field"><label>Drawing Number</label><input name="drawing" placeholder='013 Rev 2' /></div>
-            <div class="field"><label>Source Report Title</label><input name="source_report" placeholder='2.875 7.90# BTS-6 (PIN) INSPECTION REPORT' /></div>
+            <div class="field"><label>Size</label><input name="size_label" placeholder='2.875' value="${escapeHtml(createRecipeDraft.size_label || "")}" required /></div>
+            <div class="field"><label>Weight</label><input name="weight_label" placeholder='7.90#' value="${escapeHtml(createRecipeDraft.weight_label || "")}" required /></div>
+            <div class="field"><label>Grade</label><input name="grade_label" placeholder='BTS-6' value="${escapeHtml(createRecipeDraft.grade_label || "")}" required /></div>
+            <div class="field"><label>Connector Type</label><input name="connector_type" placeholder='PIN' value="${escapeHtml(createRecipeDraft.connector_type || "")}" required /></div>
+            <div class="field"><label>Drawing Number</label><input name="drawing" placeholder='013 Rev 2' value="${escapeHtml(createRecipeDraft.drawing || "")}" /></div>
+            <div class="field"><label>First Article</label><input name="first_article_label" placeholder='First Article' value="${escapeHtml(createRecipeDraft.first_article_label || "")}" /></div>
+            <div class="field"><label>Source Report Title</label><input name="source_report" placeholder='2.875 7.90# BTS-6 (PIN) INSPECTION REPORT' value="${escapeHtml(createRecipeDraft.source_report || "")}" /></div>
           </div>
           <div class="table-wrap recipe-builder-table-wrap">
             <table class="recipe-builder-table">
@@ -2300,9 +2847,16 @@ app.get("/admin", async (req, res, next) => {
                 </tr>
               </thead>
               <tbody>
-                ${renderRecipeBuilderRows(builderOptions, 25)}
+                ${
+                  createRecipeRows.length
+                    ? renderRecipeBuilderRowsWithValues(builderOptions, createRecipeRows, 25)
+                    : renderRecipeBuilderRows(builderOptions, 25, 1)
+                }
               </tbody>
             </table>
+          </div>
+          <div class="actions recipe-builder-actions">
+            <button class="button secondary" type="button" data-add-recipe-row>Add Element</button>
           </div>
           <div class="actions"><button class="button" type="submit">Save Digital IRR</button></div>
         </form>
@@ -2412,6 +2966,9 @@ app.get("/admin/recipes/:recipeHeaderId/edit", async (req, res, next) => {
       return res.redirect("/admin");
     }
     const builderOptions = await callBridge("get_recipe_builder_options", { branch: req.session.inspector.branch });
+    const editRecipeDraft = req.session.editRecipeDrafts?.[req.params.recipeHeaderId] || null;
+    const recipeForm = editRecipeDraft || recipe;
+    const recipeRows = editRecipeDraft?.rows || recipe.rows || [];
 
     const content = `
       <section class="hero">
@@ -2426,12 +2983,13 @@ app.get("/admin/recipes/:recipeHeaderId/edit", async (req, res, next) => {
         <h2 class="section-title">Edit Digital IRR</h2>
         <form method="post" action="/admin/recipes/${encodeURIComponent(recipe.id)}/edit" class="form-grid">
           <div class="form-grid two">
-            <div class="field"><label>Size</label><input name="size_label" value="${escapeHtml(recipe.size_label || "")}" required /></div>
-            <div class="field"><label>Weight</label><input name="weight_label" value="${escapeHtml(recipe.weight_label || "")}" required /></div>
-            <div class="field"><label>Grade</label><input name="grade_label" value="${escapeHtml(recipe.grade_label || "")}" required /></div>
-            <div class="field"><label>Connector Type</label><input name="connector_type" value="${escapeHtml(recipe.connector_type || "")}" required /></div>
-            <div class="field"><label>Drawing Number</label><input name="drawing" value="${escapeHtml(recipe.drawing || "")}" /></div>
-            <div class="field"><label>Source Report Title</label><input name="source_report" value="${escapeHtml(recipe.source_report || "")}" /></div>
+            <div class="field"><label>Size</label><input name="size_label" value="${escapeHtml(recipeForm.size_label || "")}" required /></div>
+            <div class="field"><label>Weight</label><input name="weight_label" value="${escapeHtml(recipeForm.weight_label || "")}" required /></div>
+            <div class="field"><label>Grade</label><input name="grade_label" value="${escapeHtml(recipeForm.grade_label || "")}" required /></div>
+            <div class="field"><label>Connector Type</label><input name="connector_type" value="${escapeHtml(recipeForm.connector_type || "")}" required /></div>
+            <div class="field"><label>Drawing Number</label><input name="drawing" value="${escapeHtml(recipeForm.drawing || "")}" /></div>
+            <div class="field"><label>First Article</label><input name="first_article_label" value="${escapeHtml(recipeForm.first_article_label || "")}" /></div>
+            <div class="field"><label>Source Report Title</label><input name="source_report" value="${escapeHtml(recipeForm.source_report || "")}" /></div>
           </div>
           <div class="table-wrap recipe-builder-table-wrap">
             <table class="recipe-builder-table">
@@ -2446,9 +3004,12 @@ app.get("/admin/recipes/:recipeHeaderId/edit", async (req, res, next) => {
                 </tr>
               </thead>
               <tbody>
-                ${renderRecipeBuilderRowsWithValues(builderOptions, recipe.rows || [], 25)}
+                ${renderRecipeBuilderRowsWithValues(builderOptions, recipeRows, 25)}
               </tbody>
             </table>
+          </div>
+          <div class="actions recipe-builder-actions">
+            <button class="button secondary" type="button" data-add-recipe-row>Add Element</button>
           </div>
           <div class="actions">
             <button class="button" type="submit">Save Digital IRR Changes</button>
@@ -2465,105 +3026,44 @@ app.get("/admin/recipes/:recipeHeaderId/edit", async (req, res, next) => {
 });
 
 app.post("/admin/recipes", async (req, res, next) => {
+  let recipePayload = null;
   try {
     if (!req.session.inspector || !req.session.canAccessAdmin) return res.redirect("/");
-    const rows = Array.from({ length: 25 }, (_, index) => {
-      const rowNumber = index + 1;
-      const measurementMode = req.body[`row_${rowNumber}_mode`] || "";
-      const selectedElement = req.body[`row_${rowNumber}_element`] || "";
-      const customElement = req.body[`row_${rowNumber}_element_custom`] || "";
-      const selectedGauge = req.body[`row_${rowNumber}_gauge`] || "";
-      const customGauge = req.body[`row_${rowNumber}_gauge_custom`] || "";
-      return {
-        element_description: String(customElement || selectedElement).trim(),
-        measurement_mode: measurementMode,
-        gauge: String(customGauge || selectedGauge).trim(),
-        frequency: req.body[`row_${rowNumber}_frequency`] || "every_pipe",
-        nominal_value: req.body[`row_${rowNumber}_nominal`] || "",
-        tolerance_decimal_places:
-          measurementMode === "deviation"
-            ? req.body[`row_${rowNumber}_dev_places`] || "3"
-            : req.body[`row_${rowNumber}_tol_places`] || "3",
-        tolerance_digits:
-          measurementMode === "deviation"
-            ? req.body[`row_${rowNumber}_dev_digits`] || ""
-            : req.body[`row_${rowNumber}_tol_digits`] || "",
-        range_min: req.body[`row_${rowNumber}_range_min`] || "",
-        range_max: req.body[`row_${rowNumber}_range_max`] || "",
-        visual_spec: req.body[`row_${rowNumber}_visual_spec`] || "",
-      };
-    });
+    recipePayload = buildSubmittedRecipePayload(req);
 
     const recipe = await callBridge("create_local_recipe", {
-      recipe_payload: {
-        branch: req.session.inspector.branch,
-        size_label: req.body.size_label,
-        weight_label: req.body.weight_label,
-        grade_label: req.body.grade_label,
-        connector_type: req.body.connector_type,
-        drawing: req.body.drawing,
-        source_report: req.body.source_report,
-        created_by: req.session.inspector.name,
-        rows,
-      },
+      recipe_payload: recipePayload,
     });
 
+    req.session.createRecipeDraft = null;
     req.session.notice = { kind: "success", message: `Local Digital IRR saved: ${formatDigitalIrrName(recipe.display_name || recipe.recipe_name, recipe.drawing)}.` };
     res.redirect("/admin");
   } catch (error) {
+    if (recipePayload) req.session.createRecipeDraft = recipePayload;
     req.session.notice = { kind: "warning", message: error.message || "Unable to save that Digital IRR." };
     res.redirect("/admin");
   }
 });
 
 app.post("/admin/recipes/:recipeHeaderId/edit", async (req, res, next) => {
+  let recipePayload = null;
   try {
     if (!req.session.inspector || !req.session.canAccessAdmin) return res.redirect("/");
-    const rows = Array.from({ length: 25 }, (_, index) => {
-      const rowNumber = index + 1;
-      const measurementMode = req.body[`row_${rowNumber}_mode`] || "";
-      const selectedElement = req.body[`row_${rowNumber}_element`] || "";
-      const customElement = req.body[`row_${rowNumber}_element_custom`] || "";
-      const selectedGauge = req.body[`row_${rowNumber}_gauge`] || "";
-      const customGauge = req.body[`row_${rowNumber}_gauge_custom`] || "";
-      return {
-        element_description: String(customElement || selectedElement).trim(),
-        measurement_mode: measurementMode,
-        gauge: String(customGauge || selectedGauge).trim(),
-        frequency: req.body[`row_${rowNumber}_frequency`] || "every_pipe",
-        nominal_value: req.body[`row_${rowNumber}_nominal`] || "",
-        tolerance_decimal_places:
-          measurementMode === "deviation"
-            ? req.body[`row_${rowNumber}_dev_places`] || "3"
-            : req.body[`row_${rowNumber}_tol_places`] || "3",
-        tolerance_digits:
-          measurementMode === "deviation"
-            ? req.body[`row_${rowNumber}_dev_digits`] || ""
-            : req.body[`row_${rowNumber}_tol_digits`] || "",
-        range_min: req.body[`row_${rowNumber}_range_min`] || "",
-        range_max: req.body[`row_${rowNumber}_range_max`] || "",
-        visual_spec: req.body[`row_${rowNumber}_visual_spec`] || "",
-      };
-    });
+    recipePayload = buildSubmittedRecipePayload(req);
 
     const recipe = await callBridge("update_local_recipe", {
       recipe_header_id: req.params.recipeHeaderId,
-      recipe_payload: {
-        branch: req.session.inspector.branch,
-        size_label: req.body.size_label,
-        weight_label: req.body.weight_label,
-        grade_label: req.body.grade_label,
-        connector_type: req.body.connector_type,
-        drawing: req.body.drawing,
-        source_report: req.body.source_report,
-        created_by: req.session.inspector.name,
-        rows,
-      },
+      recipe_payload: recipePayload,
     });
 
+    if (req.session.editRecipeDrafts) delete req.session.editRecipeDrafts[req.params.recipeHeaderId];
     req.session.notice = { kind: "success", message: `Local Digital IRR updated: ${formatDigitalIrrName(recipe.display_name || recipe.recipe_name, recipe.drawing)}.` };
     res.redirect("/admin");
   } catch (error) {
+    if (recipePayload) {
+      req.session.editRecipeDrafts = req.session.editRecipeDrafts || {};
+      req.session.editRecipeDrafts[req.params.recipeHeaderId] = recipePayload;
+    }
     req.session.notice = { kind: "warning", message: error.message || "Unable to update that local Digital IRR." };
     res.redirect(`/admin/recipes/${encodeURIComponent(req.params.recipeHeaderId)}/edit`);
   }
