@@ -33,6 +33,15 @@ from field_mappings import (
     RECIPE_VERSION_FIELDS,
 )
 from postgres_sync import get_db_connection
+from sharepoint_client import (
+    build_headers,
+    create_list_item,
+    get_access_token,
+    get_list_columns,
+    get_list_items,
+    get_site_id,
+    update_list_item_fields,
+)
 
 
 WORKFLOW_SCHEMA_SQL = """
@@ -58,6 +67,7 @@ CREATE TABLE IF NOT EXISTS inspector_sessions (
     location_name TEXT,
     cnc_operator_item_id BIGINT,
     cnc_operator_name TEXT,
+    floating_tablet_note TEXT,
     logged_in_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     logged_out_at TIMESTAMPTZ
 );
@@ -98,6 +108,7 @@ CREATE TABLE IF NOT EXISTS app_recipe_headers (
     connector_type TEXT,
     drawing TEXT,
     source_report TEXT,
+    last_edit_comment TEXT,
     recipe_version INTEGER NOT NULL DEFAULT 1,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_by TEXT,
@@ -207,6 +218,78 @@ DEFAULT_LOCATIONS = (
 DEFAULT_ALWAYS_INSPECT_COUNT = get_env_int("RECIPE_ALWAYS_INSPECT_COUNT", 9)
 DEFAULT_ROTATING_COUNT = get_env_int("RECIPE_ROTATING_COUNT_PER_PIPE", 1)
 ENABLE_TEST_WORK_ORDERS = get_env_bool("ENABLE_TEST_WORK_ORDERS", True)
+INSPECTION_RECIPES_SITE_URL = os.getenv(
+    "INSPECTION_RECIPES_SITE_URL",
+    "https://benoitinc.sharepoint.com/sites/QMS1061",
+)
+INSPECTION_RECIPES_LIST_NAME = os.getenv("INSPECTION_RECIPES_LIST_NAME", "InspectionRecipes")
+SHAREPOINT_RECIPE_FIELD_NAMES = {
+    "title": os.getenv("SHAREPOINT_RECIPE_TITLE_FIELD", "Title"),
+    "recipe_name": os.getenv("SHAREPOINT_RECIPE_NAME_FIELD", "RecipeName"),
+    "connection_type": os.getenv("SHAREPOINT_RECIPE_CONNECTION_FIELD", "ConnectionType"),
+    "recipe_version": os.getenv(
+        "SHAREPOINT_RECIPE_REVISION_FIELD",
+        os.getenv("SHAREPOINT_RECIPE_VERSION_FIELD", "RecipeVersion"),
+    ),
+    "recipe_json": os.getenv("SHAREPOINT_RECIPE_JSON_FIELD", "RecipeJson"),
+    "min_max_rules": os.getenv("SHAREPOINT_RECIPE_MIN_MAX_FIELD", "MinMaxRulesJson"),
+    "approval_rules": os.getenv("SHAREPOINT_RECIPE_APPROVAL_FIELD", "RequiresApprovalRulesJson"),
+    "branch": os.getenv("SHAREPOINT_RECIPE_BRANCH_FIELD", "Branch"),
+}
+SHAREPOINT_RECIPE_FIELD_CANDIDATES = {
+    "title": ["Title"],
+    "recipe_name": [
+        SHAREPOINT_RECIPE_FIELD_NAMES["recipe_name"],
+        *RECIPE_NAME_FIELDS,
+        "Recipe Name",
+        "Recipe_x0020_Name",
+        "Recipe",
+    ],
+    "connection_type": [
+        SHAREPOINT_RECIPE_FIELD_NAMES["connection_type"],
+        *RECIPE_CONNECTION_TYPE_FIELDS,
+        "Connection Type",
+        "Connection_x0020_Type",
+    ],
+    "recipe_version": [
+        SHAREPOINT_RECIPE_FIELD_NAMES["recipe_version"],
+        *RECIPE_VERSION_FIELDS,
+        "Revision",
+        "Revision #",
+        "Revision Number",
+        "Revision_x0020__x0023_",
+    ],
+    "recipe_json": [
+        SHAREPOINT_RECIPE_FIELD_NAMES["recipe_json"],
+        *RECIPE_JSON_FIELDS,
+        "Recipe Json",
+        "Recipe JSON",
+        "Recipe_x0020_Json",
+        "Recipe_x0020_JSON",
+    ],
+    "min_max_rules": [
+        SHAREPOINT_RECIPE_FIELD_NAMES["min_max_rules"],
+        *RECIPE_MIN_MAX_RULES_FIELDS,
+        "Min Max Rules Json",
+        "Min Max Rules JSON",
+        "MinMaxRules",
+        "MinMaxRulesJSON",
+    ],
+    "approval_rules": [
+        SHAREPOINT_RECIPE_FIELD_NAMES["approval_rules"],
+        *RECIPE_APPROVAL_RULES_FIELDS,
+        "Requires Approval Rules Json",
+        "Requires Approval Rules JSON",
+        "Approval Rules Json",
+        "ApprovalRulesJson",
+    ],
+    "branch": [
+        SHAREPOINT_RECIPE_FIELD_NAMES["branch"],
+        *RECIPE_BRANCH_FIELDS,
+        "Location",
+        "Site",
+    ],
+}
 MANAGER_ROLE_KEYWORDS = {"manager", "supervisor"}
 ADMIN_DEPARTMENT_KEYWORDS = {"it", "information technology"}
 ADMIN_ROLE_KEYWORDS = {
@@ -281,6 +364,18 @@ def initialize_workflow_schema():
                 """
                 ALTER TABLE app_recipe_headers
                 ADD COLUMN IF NOT EXISTS first_article_label TEXT
+                """
+            )
+            cursor.execute(
+                """
+                ALTER TABLE app_recipe_headers
+                ADD COLUMN IF NOT EXISTS last_edit_comment TEXT
+                """
+            )
+            cursor.execute(
+                """
+                ALTER TABLE inspector_sessions
+                ADD COLUMN IF NOT EXISTS floating_tablet_note TEXT
                 """
             )
             for location_name, branch, machine_code, device_name, device_type in DEFAULT_LOCATIONS:
@@ -480,6 +575,30 @@ def _coerce_bigint(value):
     return int(text) if text.isdigit() else None
 
 
+def _coerce_revision(value):
+    """Return a numeric recipe revision, defaulting blank or invalid values to 1."""
+    if value in (None, ""):
+        return 1
+    text = str(value).strip()
+    if text.endswith(".0"):
+        text = text[:-2]
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return 1
+
+
+def _recipe_revision_key(recipe):
+    return _coerce_revision((recipe or {}).get("recipe_version"))
+
+
+def _recipe_identity_key(recipe):
+    return (
+        str((recipe or {}).get("recipe_name") or "").strip(),
+        str((recipe or {}).get("branch") or "").strip(),
+    )
+
+
 def _hash_pin(pin, salt):
     digest = hashlib.pbkdf2_hmac(
         "sha256",
@@ -542,12 +661,13 @@ def get_locations():
             loc.machine_code,
             loc.device_type,
             active_sess.id AS active_session_id,
+            active_sess.inspector_adp AS active_inspector_adp,
             active_sess.inspector_name AS active_inspector_name,
             active_sess.logged_in_at AS active_logged_in_at,
             CASE WHEN active_sess.id IS NULL THEN FALSE ELSE TRUE END AS is_locked
         FROM app_locations loc
         LEFT JOIN LATERAL (
-            SELECT sess.id, sess.inspector_name, sess.logged_in_at
+            SELECT sess.id, sess.inspector_adp, sess.inspector_name, sess.logged_in_at
             FROM inspector_sessions sess
             WHERE sess.location_id = loc.id
               AND sess.logged_out_at IS NULL
@@ -983,7 +1103,7 @@ def list_local_recipes(branch=None):
     return _fetch_all_dicts(
         f"""
         SELECT id, branch, recipe_name, connection_type, drawing, source_report,
-               recipe_version, created_by, created_at, updated_at
+               last_edit_comment, recipe_version, created_by, created_at, updated_at
         FROM app_recipe_headers
         WHERE {' AND '.join(clauses)}
         ORDER BY updated_at DESC, recipe_name ASC
@@ -998,7 +1118,7 @@ def get_local_recipe_by_id(recipe_header_id):
         """
         SELECT id, branch, recipe_name, connection_type, size_label, weight_label,
                first_article_label, grade_label, connector_type, drawing, source_report, recipe_version,
-               created_by, created_at, updated_at
+               last_edit_comment, created_by, created_at, updated_at
         FROM app_recipe_headers
         WHERE id = %s
           AND is_active = TRUE
@@ -1020,6 +1140,224 @@ def get_local_recipe_by_id(recipe_header_id):
     )
     header["rows"] = rows
     return header
+
+
+def _json_field(value):
+    """Serialize a SharePoint JSON text field consistently."""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _normalize_field_lookup(value):
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def _resolve_sharepoint_recipe_fields(columns):
+    """Map logical recipe fields to actual SharePoint internal field names."""
+    exact_lookup = {}
+    normalized_lookup = {}
+    for column in columns or []:
+        column_name = str(column.get("name") or "").strip()
+        if not column_name:
+            continue
+        if column.get("readOnly") or column_name.lower() in {"linktitle", "linktitle2", "linktitleNoMenu".lower()}:
+            continue
+        for key in [column.get("name"), column.get("displayName")]:
+            if not key:
+                continue
+            exact_lookup[str(key).strip().lower()] = column_name
+            normalized_lookup[_normalize_field_lookup(key)] = column_name
+
+    resolved = {}
+    for logical_name, candidates in SHAREPOINT_RECIPE_FIELD_CANDIDATES.items():
+        for candidate in candidates:
+            if not candidate:
+                continue
+            exact_key = str(candidate).strip().lower()
+            normalized_key = _normalize_field_lookup(candidate)
+            if exact_key in exact_lookup:
+                resolved[logical_name] = exact_lookup[exact_key]
+                break
+            if normalized_key in normalized_lookup:
+                resolved[logical_name] = normalized_lookup[normalized_key]
+                break
+
+    resolved.setdefault("title", "Title")
+    return resolved
+
+
+def _set_sharepoint_field(payload, field_names, logical_name, value, required=False):
+    field_name = field_names.get(logical_name)
+    if field_name:
+        payload[field_name] = value
+        return
+    if required:
+        raise ValueError(
+            f"SharePoint list is missing a recognized column for {logical_name}. "
+            "Check the column internal name or set the matching SHAREPOINT_RECIPE_*_FIELD env var."
+        )
+
+
+def _local_recipe_sharepoint_payload(recipe, field_names=None):
+    """Convert a local recipe row set into the SharePoint Digital IRR JSON shape."""
+    always_items = []
+    rotating_items = []
+    elements = []
+    min_max_rules = []
+
+    for index, row in enumerate(recipe.get("rows") or [], start=1):
+        sequence = row.get("element_sequence") or index
+        frequency = row.get("frequency") or "every_pipe"
+        if frequency == "rotating":
+            rotating_items.append(sequence)
+        else:
+            always_items.append(sequence)
+
+        element = {
+            "item": sequence,
+            "element": row.get("element_description"),
+            "specText": row.get("dwg_dim"),
+            "gauge": row.get("gauge"),
+            "captureType": row.get("capture_type") or "numeric",
+            "valueFormat": row.get("value_format"),
+            "frequency": frequency,
+            "nominal": float(row["nominal"]) if row.get("nominal") is not None else None,
+            "min": float(row["min_value"]) if row.get("min_value") is not None else None,
+            "max": float(row["max_value"]) if row.get("max_value") is not None else None,
+            "notes": row.get("notes"),
+        }
+        elements.append(element)
+
+        if row.get("min_value") is not None or row.get("max_value") is not None:
+            min_max_rules.append(
+                {
+                    "item": sequence,
+                    "min": float(row["min_value"]) if row.get("min_value") is not None else None,
+                    "max": float(row["max_value"]) if row.get("max_value") is not None else None,
+                }
+            )
+
+    sampling_plan = {
+        "alwaysMeasureItems": always_items,
+        "rotatingAuditItems": rotating_items,
+    }
+    if rotating_items:
+        sampling_plan["cycleMap"] = {
+            str(index + 1): item for index, item in enumerate(rotating_items)
+        }
+        sampling_plan["rule"] = (
+            f"Measure items {', '.join(map(str, always_items))} on every pipe. "
+            f"Measure one additional rotating item from {', '.join(map(str, rotating_items))} on each pipe."
+            if always_items
+            else f"Measure one rotating item from {', '.join(map(str, rotating_items))} on each pipe."
+        )
+
+    recipe_json = {
+        "drawing": recipe.get("drawing"),
+        "sourceReport": recipe.get("source_report"),
+        "samplingPlan": sampling_plan,
+        "elements": elements,
+    }
+    approval_rules = [
+        {"condition": "numeric_out_of_spec", "requiresApproval": True},
+        {"condition": "visual_fail", "requiresApproval": True},
+    ]
+
+    fields = field_names or SHAREPOINT_RECIPE_FIELD_NAMES
+    payload = {}
+    _set_sharepoint_field(payload, fields, "title", recipe.get("recipe_name"), required=True)
+    _set_sharepoint_field(payload, fields, "recipe_name", recipe.get("recipe_name"))
+    _set_sharepoint_field(payload, fields, "connection_type", recipe.get("connection_type"))
+    _set_sharepoint_field(payload, fields, "recipe_version", int(recipe.get("recipe_version") or 1))
+    _set_sharepoint_field(payload, fields, "recipe_json", _json_field(recipe_json), required=True)
+    _set_sharepoint_field(payload, fields, "min_max_rules", _json_field(min_max_rules))
+    _set_sharepoint_field(payload, fields, "approval_rules", _json_field(approval_rules))
+    _set_sharepoint_field(payload, fields, "branch", recipe.get("branch"))
+    return payload
+
+
+def _sharepoint_recipe_matches(fields, recipe):
+    recipe_name = str(recipe.get("recipe_name") or "").strip()
+    branch = str(recipe.get("branch") or "").strip()
+    existing_name = str(_candidate_value(fields, RECIPE_NAME_FIELDS) or fields.get("Title") or "").strip()
+    existing_branch = str(_candidate_value(fields, RECIPE_BRANCH_FIELDS) or "").strip()
+
+    if existing_name != recipe_name:
+        return False
+    return existing_branch == branch or (not existing_branch and not branch)
+
+
+def _sharepoint_recipe_revision_matches(fields, recipe):
+    if not _sharepoint_recipe_matches(fields, recipe):
+        return False
+    existing_revision = _coerce_revision(_candidate_value(fields, RECIPE_VERSION_FIELDS))
+    return existing_revision == _coerce_revision(recipe.get("recipe_version"))
+
+
+def publish_local_recipe_to_sharepoint(recipe_header_id):
+    """Create or update a local Digital IRR in the SharePoint InspectionRecipes list."""
+    recipe = get_local_recipe_by_id(recipe_header_id)
+    if not recipe:
+        raise ValueError("That local Digital IRR could not be found.")
+
+    access_token = get_access_token()
+    headers = build_headers(access_token)
+    site_id = get_site_id(INSPECTION_RECIPES_SITE_URL, headers)
+    columns = get_list_columns(
+        INSPECTION_RECIPES_SITE_URL,
+        INSPECTION_RECIPES_LIST_NAME,
+        headers=headers,
+        site_id=site_id,
+    )
+    resolved_field_names = _resolve_sharepoint_recipe_fields(columns)
+    sharepoint_fields = _local_recipe_sharepoint_payload(recipe, resolved_field_names)
+    existing_items = get_list_items(
+        INSPECTION_RECIPES_SITE_URL,
+        INSPECTION_RECIPES_LIST_NAME,
+        headers=headers,
+        site_id=site_id,
+        fetch_all=True,
+    )
+
+    existing_item = next(
+        (
+            item
+            for item in existing_items
+            if _sharepoint_recipe_revision_matches(item.get("fields", {}), recipe)
+        ),
+        None,
+    )
+
+    if existing_item:
+        update_list_item_fields(
+            INSPECTION_RECIPES_SITE_URL,
+            INSPECTION_RECIPES_LIST_NAME,
+            existing_item["id"],
+            sharepoint_fields,
+            headers=headers,
+            site_id=site_id,
+        )
+        action = "updated"
+        item_id = existing_item["id"]
+    else:
+        created_item = create_list_item(
+            INSPECTION_RECIPES_SITE_URL,
+            INSPECTION_RECIPES_LIST_NAME,
+            sharepoint_fields,
+            headers=headers,
+            site_id=site_id,
+        )
+        action = "created"
+        item_id = created_item.get("id")
+
+    return {
+        "action": action,
+        "item_id": item_id,
+        "recipe_name": recipe["recipe_name"],
+        "recipe_version": _coerce_revision(recipe.get("recipe_version")),
+        "drawing": recipe.get("drawing"),
+        "site_url": INSPECTION_RECIPES_SITE_URL,
+        "list_name": INSPECTION_RECIPES_LIST_NAME,
+    }
 
 
 def find_recipe_candidates(operation_description, branch=None):
@@ -1047,10 +1385,10 @@ def find_recipe_candidates(operation_description, branch=None):
 
     local_recipe_rows = _fetch_all_dicts(
         """
-        SELECT recipe_name, connection_type, branch, drawing
+        SELECT recipe_name, connection_type, branch, drawing, recipe_version
         FROM app_recipe_headers
         WHERE is_active = TRUE
-        ORDER BY updated_at DESC, recipe_name ASC
+        ORDER BY recipe_name ASC, branch ASC, recipe_version DESC, updated_at DESC
         """
     )
 
@@ -1072,7 +1410,26 @@ def find_recipe_candidates(operation_description, branch=None):
     scored = []
     seen = set()
 
+    latest_local_recipes = {}
     for recipe in local_recipe_rows:
+        key = _recipe_identity_key(recipe)
+        if key[0] and (
+            key not in latest_local_recipes
+            or _recipe_revision_key(recipe) > _recipe_revision_key(latest_local_recipes[key])
+        ):
+            latest_local_recipes[key] = recipe
+
+    latest_sharepoint_recipes = {}
+    for row in recipe_rows:
+        recipe = _normalize_recipe_row(row)
+        key = _recipe_identity_key(recipe)
+        if key[0] and (
+            key not in latest_sharepoint_recipes
+            or _recipe_revision_key(recipe) > _recipe_revision_key(latest_sharepoint_recipes[key])
+        ):
+            latest_sharepoint_recipes[key] = recipe
+
+    for recipe in latest_local_recipes.values():
         recipe_name = recipe["recipe_name"]
         if not recipe_name or recipe_name in seen:
             continue
@@ -1089,8 +1446,7 @@ def find_recipe_candidates(operation_description, branch=None):
             scored.append((score, recipe_name, _format_digital_irr_name(recipe_name, recipe.get("drawing"))))
             seen.add(recipe_name)
 
-    for row in recipe_rows:
-        recipe = _normalize_recipe_row(row)
+    for recipe in latest_sharepoint_recipes.values():
         recipe_name = recipe["recipe_name"]
         if not recipe_name or recipe_name in seen:
             continue
@@ -1134,11 +1490,12 @@ def get_recipe_elements(recipe_name, branch=None):
         FROM app_recipe_headers
         WHERE recipe_name = %s
           AND is_active = TRUE
-        ORDER BY updated_at DESC NULLS LAST, id DESC
+        ORDER BY recipe_version DESC, updated_at DESC NULLS LAST, id DESC
         LIMIT 1
         """,
         (recipe_name,),
     )
+    local_definition = None
     if local_header:
         local_elements = _fetch_all_dicts(
             """
@@ -1150,7 +1507,7 @@ def get_recipe_elements(recipe_name, branch=None):
             """,
             (local_header["id"],),
         )
-        return _recipe_definition_from_local(local_header, local_elements)
+        local_definition = _recipe_definition_from_local(local_header, local_elements)
 
     rows = _fetch_all_dicts(
         """
@@ -1162,14 +1519,30 @@ def get_recipe_elements(recipe_name, branch=None):
         """
     )
 
-    elements = []
+    matching_recipes = []
     for row in rows:
         recipe = _normalize_recipe_row(row)
         if recipe["recipe_name"] != recipe_name:
             continue
         if branch and recipe["branch"] not in {None, "", branch}:
             continue
+        matching_recipes.append(recipe)
 
+    matching_recipes.sort(key=_recipe_revision_key, reverse=True)
+    if matching_recipes:
+        latest_revision = _recipe_revision_key(matching_recipes[0])
+        matching_recipes = [
+            recipe for recipe in matching_recipes if _recipe_revision_key(recipe) == latest_revision
+        ]
+
+    if local_definition and (
+        not matching_recipes
+        or _recipe_revision_key(local_definition) >= _recipe_revision_key(matching_recipes[0])
+    ):
+        return local_definition
+
+    elements = []
+    for recipe in matching_recipes:
         recipe_json = recipe.get("recipe_json")
         if isinstance(recipe_json, dict) and isinstance(recipe_json.get("elements"), list):
             min_max_by_item = {
@@ -1305,6 +1678,7 @@ def _prepare_local_recipe_payload(recipe_payload):
     connector_type = str(recipe_payload.get("connector_type") or "").strip()
     drawing = str(recipe_payload.get("drawing") or "").strip()
     source_report = str(recipe_payload.get("source_report") or "").strip()
+    edit_comment = str(recipe_payload.get("edit_comment") or "").strip()
     created_by = str(recipe_payload.get("created_by") or "").strip()
     rows = recipe_payload.get("rows") or []
 
@@ -1428,6 +1802,7 @@ def _prepare_local_recipe_payload(recipe_payload):
         "connector_type": connector_type,
         "drawing": drawing,
         "source_report": source_report,
+        "edit_comment": edit_comment,
         "created_by": created_by,
         "connection_type": connection_type,
         "recipe_name": recipe_name,
@@ -1438,12 +1813,14 @@ def _prepare_local_recipe_payload(recipe_payload):
 def update_local_recipe(recipe_header_id, recipe_payload):
     """Update an existing locally managed recipe and replace its element rows."""
     processed_payload = _prepare_local_recipe_payload(recipe_payload)
+    if not processed_payload["edit_comment"]:
+        raise ValueError("Enter an edit comment explaining why this Digital IRR was changed.")
     connection = get_db_connection()
     try:
         with connection.cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute(
                 """
-                SELECT id
+                SELECT id, recipe_version
                 FROM app_recipe_headers
                 WHERE id = %s
                   AND is_active = TRUE
@@ -1453,6 +1830,7 @@ def update_local_recipe(recipe_header_id, recipe_payload):
             existing = cursor.fetchone()
             if not existing:
                 raise ValueError("That local recipe could not be found.")
+            next_revision = _coerce_revision(existing.get("recipe_version")) + 1
 
             cursor.execute(
                 """
@@ -1467,6 +1845,8 @@ def update_local_recipe(recipe_header_id, recipe_payload):
                     connector_type = %s,
                     drawing = %s,
                     source_report = %s,
+                    last_edit_comment = %s,
+                    recipe_version = %s,
                     updated_at = NOW()
                 WHERE id = %s
                 """,
@@ -1481,6 +1861,8 @@ def update_local_recipe(recipe_header_id, recipe_payload):
                     processed_payload["connector_type"] or None,
                     processed_payload["drawing"] or None,
                     processed_payload["source_report"] or None,
+                    processed_payload["edit_comment"],
+                    next_revision,
                     recipe_header_id,
                 ),
             )
@@ -1609,6 +1991,42 @@ def evaluate_measurements(measurements, approval_rules=None):
     requires_approval = False
     failed_count = 0
 
+    def normalize_numeric_measurement(raw_value, measurement):
+        text = str(raw_value).strip()
+        nominal = measurement.get("nominal")
+        min_value = measurement.get("min")
+        max_value = measurement.get("max")
+        is_offset_entry = False
+        if nominal not in (None, ""):
+            try:
+                float(nominal)
+                is_offset_entry = (
+                    text.startswith(("+", "-"))
+                    or text.startswith(".")
+                    or bool(re.match(r"^\d+$", text))
+                )
+            except (TypeError, ValueError):
+                is_offset_entry = False
+
+        if is_offset_entry:
+            sign = -1 if text.startswith("-") else 1
+            offset_text = text[1:].strip() if text.startswith(("+", "-")) else text
+            if not offset_text:
+                raise ValueError("Missing offset")
+            if offset_text.startswith("."):
+                offset = float(offset_text)
+            else:
+                numeric_offset = int(offset_text) if offset_text.isdigit() else float(offset_text)
+                decimal_places = max(
+                    _count_decimal_places(nominal),
+                    _count_decimal_places(min_value),
+                    _count_decimal_places(max_value),
+                    3,
+                )
+                offset = numeric_offset / (10 ** decimal_places)
+            return float(nominal) + (sign * offset)
+        return float(text)
+
     for measurement in measurements:
         updated = dict(measurement)
         capture_type = updated.get("capture_type")
@@ -1617,7 +2035,7 @@ def evaluate_measurements(measurements, approval_rules=None):
 
         if capture_type == "numeric":
             try:
-                numeric_value = float(str(value).strip())
+                numeric_value = normalize_numeric_measurement(value, updated)
                 updated["measured_value"] = numeric_value
                 minimum = updated.get("min")
                 maximum = updated.get("max")
@@ -1727,6 +2145,129 @@ def get_attempt_measurements(attempt_id):
         """,
         (attempt_id,),
     )
+
+
+def update_attempt_measurements(attempt_id, measurements):
+    """Replace saved measurements for an existing attempt without changing its disposition."""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id
+                FROM inspection_attempts
+                WHERE id = %s
+                """,
+                (attempt_id,),
+            )
+            if not cursor.fetchone():
+                raise ValueError("That inspection attempt could not be found.")
+
+            cursor.execute(
+                """
+                DELETE FROM inspection_measurements
+                WHERE attempt_id = %s
+                """,
+                (attempt_id,),
+            )
+            for measurement in measurements:
+                cursor.execute(
+                    """
+                    INSERT INTO inspection_measurements (
+                        attempt_id,
+                        element_sequence,
+                        element_description,
+                        dwg_dim,
+                        gauge,
+                        measured_value,
+                        pass_fail,
+                        inspected_this_pipe
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        attempt_id,
+                        measurement.get("element_sequence"),
+                        measurement.get("element_description"),
+                        measurement.get("dwg_dim"),
+                        measurement.get("gauge"),
+                        measurement.get("measured_value"),
+                        measurement.get("pass_fail", ""),
+                        measurement.get("inspected_this_pipe", True),
+                    ),
+                )
+        connection.commit()
+        return {"updated": True, "measurement_count": len(measurements)}
+    finally:
+        connection.close()
+
+
+def get_pipe_history_details(pipe_unit_ids):
+    """Return attempts and measurements for a batch of pipe units."""
+    normalized_pipe_ids = []
+    for pipe_unit_id in pipe_unit_ids or []:
+        try:
+            normalized_pipe_ids.append(int(pipe_unit_id))
+        except (TypeError, ValueError):
+            continue
+
+    if not normalized_pipe_ids:
+        return {"attempts_by_pipe": {}, "measurements_by_attempt": {}}
+
+    attempts = _fetch_all_dicts(
+        """
+        SELECT ia.id,
+               ia.pipe_unit_id,
+               ia.attempt_no,
+               ia.inspection_scope,
+               ia.status,
+               ia.requires_manager_approval,
+               ia.manager_name,
+               ia.inspector_name,
+               ia.cnc_operator_name,
+               ia.recipe_name,
+               ia.started_at,
+               ia.completed_at,
+               ia.notes,
+               sess.shift,
+               sess.location_name,
+               sess.logged_in_at,
+               sess.logged_out_at
+        FROM inspection_attempts ia
+        LEFT JOIN inspector_sessions sess ON sess.id = ia.session_id
+        WHERE ia.pipe_unit_id = ANY(%s)
+        ORDER BY ia.pipe_unit_id ASC, ia.attempt_no DESC
+        """,
+        (normalized_pipe_ids,),
+    )
+
+    latest_attempt_ids = []
+    attempts_by_pipe = {}
+    for attempt in attempts:
+        pipe_key = str(attempt["pipe_unit_id"])
+        attempts_by_pipe.setdefault(pipe_key, []).append(attempt)
+        if len(attempts_by_pipe[pipe_key]) == 1:
+            latest_attempt_ids.append(int(attempt["id"]))
+
+    measurements_by_attempt = {}
+    if latest_attempt_ids:
+        measurements = _fetch_all_dicts(
+            """
+            SELECT attempt_id, element_sequence, element_description, dwg_dim, gauge,
+                   measured_value, pass_fail, inspected_this_pipe, created_at
+            FROM inspection_measurements
+            WHERE attempt_id = ANY(%s)
+            ORDER BY attempt_id ASC, element_sequence ASC, id ASC
+            """,
+            (latest_attempt_ids,),
+        )
+        for measurement in measurements:
+            measurements_by_attempt.setdefault(str(measurement["attempt_id"]), []).append(measurement)
+
+    return {
+        "attempts_by_pipe": attempts_by_pipe,
+        "measurements_by_attempt": measurements_by_attempt,
+    }
 
 
 def search_pipe_units(branch=None, production_number=None, pipe_number=None, status=None, inspection_scope=None, published_only=False):
@@ -2153,6 +2694,56 @@ def create_inspection_attempt(
         connection.close()
 
 
+def update_inspection_attempt_scope(attempt_id, recipe_elements, inspection_scope="standard"):
+    """Switch an in-progress attempt between standard and full inspection scopes."""
+    normalized_scope = "full" if str(inspection_scope).strip().lower() == "full" else "standard"
+    connection = get_db_connection()
+    try:
+        with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute(
+                """
+                SELECT ia.id, ia.attempt_no, ia.status, ia.pipe_unit_id, pu.pipe_number
+                FROM inspection_attempts ia
+                JOIN pipe_units pu ON pu.id = ia.pipe_unit_id
+                WHERE ia.id = %s
+                """,
+                (attempt_id,),
+            )
+            attempt = cursor.fetchone()
+            if not attempt:
+                raise ValueError("That inspection attempt could not be found.")
+            if attempt["status"] != "in_progress":
+                raise ValueError("Only in-progress inspections can change inspection scope.")
+
+            pipe_number = str(attempt["pipe_number"] or "").strip()
+            rotation_index = int(pipe_number) if pipe_number.isdigit() else None
+            inspection_plan = build_inspection_plan(
+                recipe_elements,
+                attempt["attempt_no"],
+                inspection_scope=normalized_scope,
+                rotation_index=rotation_index,
+            )
+            cursor.execute(
+                """
+                UPDATE inspection_attempts
+                SET inspection_scope = %s
+                WHERE id = %s
+                """,
+                (normalized_scope, attempt_id),
+            )
+        connection.commit()
+        return {
+            "attempt_id": attempt["id"],
+            "pipe_unit_id": attempt["pipe_unit_id"],
+            "attempt_no": attempt["attempt_no"],
+            "inspection_scope": normalized_scope,
+            "inspection_plan": inspection_plan,
+            "approval_rules": recipe_elements.get("approval_rules", []) if recipe_elements else [],
+        }
+    finally:
+        connection.close()
+
+
 def complete_inspection_attempt(
     attempt_id,
     pipe_unit_id,
@@ -2323,15 +2914,28 @@ def complete_inspection_attempt(
         connection.close()
 
 
-def create_inspector_session(inspector, shift, location, cnc_operator):
+def create_inspector_session(inspector, shift, location, cnc_operator, floating_tablet_note=""):
     """Store the login/session context for the current inspector."""
+    normalized_floating_tablet_note = str(floating_tablet_note or "").strip()
+    is_floating_tablet = (
+        str((location or {}).get("location_name") or "").strip().lower() == "floating tablet"
+    )
     connection = get_db_connection()
     try:
         with connection.cursor(cursor_factory=RealDictCursor) as cursor:
             if location and location.get("id"):
                 cursor.execute(
                     """
-                    SELECT sess.inspector_name
+                    SELECT sess.id,
+                           sess.inspector_adp,
+                           sess.inspector_name,
+                           sess.shift,
+                           sess.location_id,
+                           sess.location_name,
+                           sess.cnc_operator_item_id,
+                           sess.cnc_operator_name,
+                           sess.floating_tablet_note,
+                           sess.logged_in_at
                     FROM inspector_sessions sess
                     WHERE sess.location_id = %s
                       AND sess.logged_out_at IS NULL
@@ -2342,6 +2946,8 @@ def create_inspector_session(inspector, shift, location, cnc_operator):
                 )
                 active_lock = cursor.fetchone()
                 if active_lock:
+                    if _normalize_identifier(active_lock.get("inspector_adp")) == _normalize_identifier(inspector.get("adp_number")):
+                        return dict(active_lock)
                     locked_by = active_lock.get("inspector_name") or "another inspector"
                     raise ValueError(f"{location.get('location_name')} is currently in use by {locked_by}.")
 
@@ -2356,11 +2962,12 @@ def create_inspector_session(inspector, shift, location, cnc_operator):
                     location_id,
                     location_name,
                     cnc_operator_item_id,
-                    cnc_operator_name
+                    cnc_operator_name,
+                    floating_tablet_note
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id, logged_in_at, location_id, location_name,
-                          cnc_operator_item_id, cnc_operator_name
+                          cnc_operator_item_id, cnc_operator_name, floating_tablet_note
                 """,
                 (
                     int(inspector["item_id"]) if str(inspector["item_id"]).isdigit() else None,
@@ -2372,6 +2979,7 @@ def create_inspector_session(inspector, shift, location, cnc_operator):
                     location.get("location_name") if location else None,
                     int(cnc_operator["item_id"]) if cnc_operator and str(cnc_operator["item_id"]).isdigit() else None,
                     cnc_operator.get("name") if cnc_operator else None,
+                    normalized_floating_tablet_note if is_floating_tablet else None,
                 ),
             )
             row = cursor.fetchone()

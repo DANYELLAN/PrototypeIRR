@@ -124,6 +124,40 @@ def graph_get_absolute(url, headers):
     return response.json()
 
 
+def graph_post(endpoint, headers, payload):
+    """Issue a POST request to Microsoft Graph and raise a readable error on failure."""
+    response = requests.post(
+        f"{GRAPH_BASE_URL}{endpoint}",
+        headers={**headers, "Content-Type": "application/json"},
+        json=payload,
+        timeout=30,
+    )
+
+    if response.status_code not in {200, 201}:
+        raise SharePointApiError(
+            f"Graph request failed ({response.status_code}) for {endpoint}: {response.text}"
+        )
+
+    return response.json()
+
+
+def graph_patch(endpoint, headers, payload):
+    """Issue a PATCH request to Microsoft Graph and raise a readable error on failure."""
+    response = requests.patch(
+        f"{GRAPH_BASE_URL}{endpoint}",
+        headers={**headers, "Content-Type": "application/json"},
+        json=payload,
+        timeout=30,
+    )
+
+    if response.status_code not in {200, 204}:
+        raise SharePointApiError(
+            f"Graph request failed ({response.status_code}) for {endpoint}: {response.text}"
+        )
+
+    return response.json() if response.text else {}
+
+
 def get_site_id(site_url, headers):
     """Resolve a SharePoint site URL to its Microsoft Graph site ID."""
     site_host, site_path = parse_site_url(site_url)
@@ -158,6 +192,36 @@ def get_list_items(site_url, list_name, headers, top=DEFAULT_TOP, site_id=None, 
         next_link = data.get("@odata.nextLink")
 
     return items
+
+
+def get_list_columns(site_url, list_name, headers, site_id=None):
+    """Fetch SharePoint list column metadata so writes can use internal field names."""
+    resolved_site_id = site_id or get_site_id(site_url, headers)
+    data = graph_get(
+        f"/sites/{resolved_site_id}/lists/{list_name}/columns",
+        headers=headers,
+    )
+    return data.get("value", [])
+
+
+def create_list_item(site_url, list_name, fields, headers, site_id=None):
+    """Create a SharePoint list item using Microsoft Graph."""
+    resolved_site_id = site_id or get_site_id(site_url, headers)
+    return graph_post(
+        f"/sites/{resolved_site_id}/lists/{list_name}/items",
+        headers=headers,
+        payload={"fields": fields},
+    )
+
+
+def update_list_item_fields(site_url, list_name, item_id, fields, headers, site_id=None):
+    """Update SharePoint list item fields using Microsoft Graph."""
+    resolved_site_id = site_id or get_site_id(site_url, headers)
+    return graph_patch(
+        f"/sites/{resolved_site_id}/lists/{list_name}/items/{item_id}/fields",
+        headers=headers,
+        payload=fields,
+    )
 
 
 def get_multiple_lists(site_to_lists_map, headers, top=DEFAULT_TOP, fetch_all=False):

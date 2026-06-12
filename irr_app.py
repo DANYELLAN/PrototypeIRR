@@ -1,3 +1,5 @@
+import re
+
 import streamlit as st
 
 from postgres_sync import DatabaseSyncError
@@ -13,6 +15,7 @@ from workflow_db import (
     get_connection_types,
     get_cnc_operators,
     get_employee_by_adp,
+    get_inspection_entry_options,
     get_locations,
     get_manager_candidates,
     get_ncr_reports,
@@ -24,9 +27,13 @@ from workflow_db import (
     initialize_workflow_schema,
     is_admin_user,
     is_manager_or_supervisor,
+    list_local_recipes,
+    publish_local_recipe_to_sharepoint,
+    remember_inspection_entry_values,
     search_pipe_units,
     set_manager_pin,
     update_ncr_report,
+    update_inspection_attempt_scope,
 )
 
 
@@ -525,6 +532,43 @@ def render_notice(message, kind="info"):
     )
 
 
+def _extract_inspection_entry_defaults(operation_description):
+    """Best-effort defaults from a work-order operation description."""
+    text = str(operation_description or "")
+    if not text.strip():
+        return {"size": "", "weight": "", "connection": "", "end_type": ""}
+
+    size_match = re.search(r"Size:\s*([^,]+)", text, re.IGNORECASE)
+    weight_match = re.search(r"Weight:\s*([^,]+)", text, re.IGNORECASE)
+    connection_match = re.search(
+        r"Connection:\s*(.+?)(?:\s+(?:Pin|Box)\b|\s+as\s+Per\b|$)",
+        text,
+        re.IGNORECASE,
+    )
+    connection_section = text.split("Connection:", 1)[1] if "Connection:" in text else text
+    end_type_match = re.search(r"\b(Pin|Box)\b", connection_section, re.IGNORECASE)
+
+    return {
+        "size": size_match.group(1).strip() if size_match else "",
+        "weight": weight_match.group(1).strip() if weight_match else "",
+        "connection": connection_match.group(1).strip() if connection_match else "",
+        "end_type": end_type_match.group(1).upper() if end_type_match else "",
+    }
+
+
+def _build_inspection_connection_label(size_label, weight_label, connection_label, end_type):
+    return " ".join(
+        part
+        for part in [
+            str(size_label or "").strip(),
+            str(weight_label or "").strip(),
+            str(connection_label or "").strip(),
+            str(end_type or "").strip().upper(),
+        ]
+        if part
+    )
+
+
 def _clear_inspection_form_state():
     """Remove transient inspection form state so the next pipe starts fresh."""
     active_inspection = st.session_state.get("active_inspection")
@@ -590,34 +634,59 @@ def render_admin():
     manager_candidates = get_manager_candidates(inspector["branch"])
     if not manager_candidates:
         st.warning("No manager or supervisor candidates were found for this branch.")
-        return
+    else:
+        render_section_intro(
+            "Manager PIN Setup",
+            "Create or update approval PINs for managers and supervisors in the current branch.",
+        )
+        with st.form("manager_pin_setup_form"):
+            manager_names = [item["name"] for item in manager_candidates]
+            selected_manager_name = st.selectbox("Manager", manager_names)
+            new_pin = st.text_input("New Manager PIN", type="password")
+            confirm_pin = st.text_input("Confirm Manager PIN", type="password")
+            save_pin = st.form_submit_button("Save Manager PIN")
+
+        if save_pin:
+            if not new_pin.strip():
+                st.error("Enter a PIN before saving.")
+            elif new_pin != confirm_pin:
+                st.error("PIN values do not match.")
+            else:
+                selected_manager = next(
+                    item for item in manager_candidates if item["name"] == selected_manager_name
+                )
+                try:
+                    set_manager_pin(selected_manager, new_pin)
+                except ValueError as error:
+                    st.error(str(error))
+                else:
+                    st.success(f"Manager PIN saved for {selected_manager_name}.")
 
     render_section_intro(
-        "Manager PIN Setup",
-        "Create or update approval PINs for managers and supervisors in the current branch.",
+        "Publish Digital IRR",
+        "Write an app-managed Digital IRR to the SharePoint InspectionRecipes list as JSON.",
     )
-    with st.form("manager_pin_setup_form"):
-        manager_names = [item["name"] for item in manager_candidates]
-        selected_manager_name = st.selectbox("Manager", manager_names)
-        new_pin = st.text_input("New Manager PIN", type="password")
-        confirm_pin = st.text_input("Confirm Manager PIN", type="password")
-        save_pin = st.form_submit_button("Save Manager PIN")
+    local_recipes = list_local_recipes(inspector["branch"])
+    if not local_recipes:
+        st.info("No local Digital IRRs were found for this branch.")
+        return
 
-    if save_pin:
-        if not new_pin.strip():
-            st.error("Enter a PIN before saving.")
-        elif new_pin != confirm_pin:
-            st.error("PIN values do not match.")
+    recipe_options = {
+        f"{item['recipe_name']} ({item.get('drawing') or 'No drawing'}) - Rev {item.get('recipe_version') or 1}": item
+        for item in local_recipes
+    }
+    selected_recipe_label = st.selectbox("Local Digital IRR", list(recipe_options.keys()))
+    if st.button("Publish to SharePoint", width="stretch"):
+        selected_recipe = recipe_options[selected_recipe_label]
+        try:
+            publish_result = publish_local_recipe_to_sharepoint(selected_recipe["id"])
+        except Exception as error:
+            st.error(f"SharePoint publish failed: {error}")
         else:
-            selected_manager = next(
-                item for item in manager_candidates if item["name"] == selected_manager_name
+            st.success(
+                f"SharePoint item {publish_result['action']}: "
+                f"{publish_result['recipe_name']} Rev {publish_result.get('recipe_version') or 1}."
             )
-            try:
-                set_manager_pin(selected_manager, new_pin)
-            except ValueError as error:
-                st.error(str(error))
-            else:
-                st.success(f"Manager PIN saved for {selected_manager_name}.")
 
 
 def render_login():
@@ -740,9 +809,64 @@ def render_inspection_tab(inspector, session_record):
         "Connection Type / Operation Description",
         list(description_map.keys()),
     )
+    entry_defaults = _extract_inspection_entry_defaults(selected_description)
+    entry_options = get_inspection_entry_options(inspector["branch"])
+    entry_source_key = f"{selected_production}|{selected_description}"
+    if st.session_state.get("inspection_entry_source_key") != entry_source_key:
+        st.session_state.inspection_entry_source_key = entry_source_key
+        st.session_state.inspection_size_label = entry_defaults["size"]
+        st.session_state.inspection_weight_label = entry_defaults["weight"]
+        st.session_state.inspection_connection_label = entry_defaults["connection"]
+        st.session_state.inspection_end_type = entry_defaults["end_type"]
+
+    st.subheader("Connection Details")
+    detail_col1, detail_col2, detail_col3, detail_col4 = st.columns(4)
+    with detail_col1:
+        size_label = st.text_input(
+            "Size *",
+            key="inspection_size_label",
+            placeholder=", ".join(entry_options.get("size_options", [])[:3]),
+        )
+    with detail_col2:
+        weight_label = st.text_input(
+            "Weight *",
+            key="inspection_weight_label",
+            placeholder=", ".join(entry_options.get("weight_options", [])[:3]),
+        )
+    with detail_col3:
+        connection_label = st.text_input(
+            "Connection *",
+            key="inspection_connection_label",
+            placeholder=", ".join(entry_options.get("connection_options", [])[:3]),
+        )
+    with detail_col4:
+        end_type_options = ["", "BOX", "PIN"]
+        end_type = st.selectbox(
+            "Box / Pin *",
+            end_type_options,
+            key="inspection_end_type",
+            format_func=lambda value: {"": "", "BOX": "Box", "PIN": "Pin"}[value],
+        )
+
+    inspection_connection = _build_inspection_connection_label(
+        size_label,
+        weight_label,
+        connection_label,
+        end_type,
+    )
+    connection_details_complete = all(
+        str(value or "").strip()
+        for value in [size_label, weight_label, connection_label, end_type]
+    )
+    if inspection_connection:
+        render_notice(f"Inspection selection: {inspection_connection}", kind="info")
 
     st.subheader("Recipe Match")
-    recipe_candidates = find_recipe_candidates(selected_description, inspector["branch"])
+    recipe_candidates = (
+        find_recipe_candidates(inspection_connection, inspector["branch"])
+        if connection_details_complete
+        else []
+    )
     if recipe_candidates:
         recipe_names = [item["recipe_name"] for item in recipe_candidates]
         selected_recipe_name = st.selectbox("Suggested Recipe", recipe_names)
@@ -753,8 +877,10 @@ def render_inspection_tab(inspector, session_record):
     else:
         selected_recipe_name = st.text_input("Recipe Name", placeholder="Enter recipe manually")
         render_notice(
-            "No recipe alias or token match was found. Manual recipe selection is needed.",
-            kind="info",
+            "Enter size, weight, connection, and Box/Pin before selecting the Digital IRR."
+            if not connection_details_complete
+            else "No recipe alias or token match was found. Manual recipe selection is needed.",
+            kind="warning" if not connection_details_complete else "info",
         )
 
     pipe_number = st.text_input("Pipe Number", key="inspection_pipe_number")
@@ -789,8 +915,8 @@ def render_inspection_tab(inspector, session_record):
                     kind="warning",
                 )
 
-    if pipe_number.strip():
-        existing_pipe = get_pipe_unit(selected_production, selected_description, pipe_number)
+    if pipe_number.strip() and connection_details_complete:
+        existing_pipe = get_pipe_unit(selected_production, inspection_connection, pipe_number)
         if existing_pipe:
             render_notice(
                 f"Pipe {pipe_number.strip()} already exists for this WO/connection. "
@@ -807,15 +933,28 @@ def render_inspection_tab(inspector, session_record):
             )
 
     can_prepare = bool(
-        selected_recipe_name
+        connection_details_complete
+        and selected_recipe_name
         and pipe_number.strip()
         and recipe_definition
         and recipe_definition["elements"]
     )
+    inspection_scope = st.radio(
+        "Inspection Scope",
+        ["standard", "full"],
+        horizontal=True,
+        format_func=lambda value: "Full Inspection" if value == "full" else "Standard Inspection",
+    )
     if st.button("Prepare Inspection", disabled=not can_prepare, width="stretch"):
+        remember_inspection_entry_values(
+            branch=inspector["branch"],
+            size_label=size_label,
+            weight_label=weight_label,
+            connection_label=connection_label,
+        )
         st.session_state.active_inspection = create_inspection_attempt(
             production_number=selected_production,
-            operation_description=selected_description,
+            operation_description=inspection_connection,
             pipe_number=pipe_number.strip(),
             branch=inspector["branch"],
             session_id=session_record["id"],
@@ -826,6 +965,7 @@ def render_inspection_tab(inspector, session_record):
             },
             recipe_name=selected_recipe_name,
             recipe_elements=recipe_definition,
+            inspection_scope=inspection_scope,
         )
         st.rerun()
 
@@ -846,6 +986,22 @@ def render_inspection_tab(inspector, session_record):
         """,
         unsafe_allow_html=True,
     )
+
+    current_scope = active_inspection.get("inspection_scope", "standard")
+    next_scope = "standard" if current_scope == "full" else "full"
+    if st.button(
+        "Switch to Standard Inspection" if current_scope == "full" else "Switch to Full Inspection",
+        width="stretch",
+    ):
+        st.session_state.active_inspection = {
+            **active_inspection,
+            **update_inspection_attempt_scope(
+                active_inspection["attempt_id"],
+                recipe_definition,
+                inspection_scope=next_scope,
+            ),
+        }
+        st.rerun()
 
     inspection_plan = active_inspection["inspection_plan"]
     if inspection_plan:
@@ -948,6 +1104,10 @@ def render_inspection_tab(inspector, session_record):
                 manager_name = st.text_input("Manager Name")
             manager_pin = st.text_input("Manager PIN", type="password")
 
+        relief_note = st.text_area(
+            "Relief / Coverage Notes",
+            placeholder="Example: Relieved inspector at 10:15. I inspected pipes 42-47.",
+        )
         notes = st.text_area("Attempt Notes")
         submitted = st.form_submit_button("Complete Inspection")
 
@@ -961,13 +1121,22 @@ def render_inspection_tab(inspector, session_record):
             st.error("Manager name and PIN are required for manager approval.")
             return
 
+        combined_notes = "\n\n".join(
+            item
+            for item in [
+                f"Relief / Coverage Notes: {relief_note.strip()}" if relief_note.strip() else "",
+                notes.strip(),
+            ]
+            if item
+        )
+
         try:
             result = complete_inspection_attempt(
                 attempt_id=active_inspection["attempt_id"],
                 pipe_unit_id=active_inspection["pipe_unit_id"],
                 measurements=evaluated_measurements,
                 disposition=disposition,
-                notes=notes,
+                notes=combined_notes,
                 manager_item_id=manager_item_id,
                 manager_name=manager_name,
                 manager_pin=manager_pin,

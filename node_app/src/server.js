@@ -42,18 +42,36 @@ function renderOptions(items, selectedValue, getValue, getLabel) {
     .join("");
 }
 
-function renderLocationOptions(locations, selectedValue = null) {
+function renderLocationOptions(locations, selectedValue = null, inspector = null) {
+  const inspectorAdp = String(inspector?.adp_number || "").trim();
   return locations
     .map((item) => {
       const value = item.id;
       const selected = String(selectedValue ?? "") === String(value) ? "selected" : "";
-      const disabled = item.is_locked ? "disabled" : "";
+      const isOwnSession = item.is_locked && inspectorAdp && String(item.active_inspector_adp || "").trim() === inspectorAdp;
+      const disabled = item.is_locked && inspectorAdp && !isOwnSession ? "disabled" : "";
       const lockedSuffix = item.is_locked
-        ? ` (In Use${item.active_inspector_name ? ` - ${item.active_inspector_name}` : ""})`
+        ? isOwnSession
+          ? " (Resume your session)"
+          : ` (In Use${item.active_inspector_name ? ` - ${item.active_inspector_name}` : ""})`
         : "";
-      return `<option value="${escapeHtml(value)}" ${selected} ${disabled}>${escapeHtml(`${item.location_name}${lockedSuffix}`)}</option>`;
+      const isFloatingTablet = String(item.location_name || "").trim().toLowerCase() === "floating tablet";
+      return `<option value="${escapeHtml(value)}" data-floating-tablet="${isFloatingTablet ? "1" : "0"}" ${selected} ${disabled}>${escapeHtml(`${item.location_name}${lockedSuffix}`)}</option>`;
     })
     .join("");
+}
+
+function renderFloatingTabletNoteField(value = "") {
+  return `
+    <div class="field hidden" data-floating-tablet-note-field>
+      <label>Floating Tablet Note</label>
+      <textarea name="floating_tablet_note" rows="3" placeholder="Optional: reason for using the floating tablet">${escapeHtml(value)}</textarea>
+    </div>
+  `;
+}
+
+function isFloatingTabletLocation(location) {
+  return String(location?.location_name || "").trim().toLowerCase() === "floating tablet";
 }
 
 function renderNotice(notice) {
@@ -171,9 +189,12 @@ function buildInspectionConnectionLabel(selection = {}) {
 
 function incrementPipeNumber(pipeNumber) {
   const text = String(pipeNumber ?? "").trim();
-  if (!/^\d+$/.test(text)) return text;
-  const nextValue = String(Number(text) + 1);
-  return text.length > nextValue.length ? nextValue.padStart(text.length, "0") : nextValue;
+  const match = text.match(/^(.*?)(\d+)$/);
+  if (!match) return text;
+  const [, prefix, digits] = match;
+  const nextValue = String(Number(digits) + 1);
+  const nextDigits = digits.length > nextValue.length ? nextValue.padStart(digits.length, "0") : nextValue;
+  return `${prefix}${nextDigits}`;
 }
 
 function formatPipeStatusResult(status, attemptStatus = "", requiresManagerApproval = false) {
@@ -193,18 +214,30 @@ function formatPipeStatusResult(status, attemptStatus = "", requiresManagerAppro
 
 function countDecimalPlaces(value) {
   if (value === null || value === undefined || value === "") return 0;
-  const text = String(value);
+  const text = normalizeNumericText(value);
   if (!text.includes(".")) return 0;
   return text.split(".")[1].length;
 }
 
-function formatNumericReference(value, decimals) {
+function normalizeNumericText(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  if (!/^-?\d+(?:\.\d+)?$/.test(text)) return text;
+  return text.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+}
+
+function formatNumericReference(value, decimals, { trim = true } = {}) {
   const numericValue = Number(value);
   if (Number.isNaN(numericValue)) return "";
-  return numericValue.toFixed(decimals);
+  const text = numericValue.toFixed(decimals);
+  return trim ? normalizeNumericText(text) : text;
 }
 
 function buildNumericEntryConfig(element) {
+  if (element.nominal !== null && element.nominal !== undefined && element.nominal !== "") {
+    return null;
+  }
+
   const candidates = [element.nominal, element.min, element.max]
     .map((value) => Number(value))
     .filter((value) => !Number.isNaN(value));
@@ -223,9 +256,12 @@ function buildNumericEntryConfig(element) {
     return null;
   }
 
-  const referenceSource = element.nominal ?? element.max ?? element.min;
-  const reference = formatNumericReference(referenceSource, decimals);
-  if (!reference || reference.length <= 2) {
+  const referenceSource =
+    element.nominal !== null && element.nominal !== undefined && element.nominal !== "" && Number(element.nominal) !== 0
+      ? element.nominal
+      : element.max ?? element.min ?? element.nominal;
+  const reference = formatNumericReference(referenceSource, decimals, { trim: false });
+  if (!reference || reference.length <= 2 || reference.length > 8) {
     return null;
   }
 
@@ -270,6 +306,7 @@ function renderPipeHistorySheets(workorderGroups, { canManage = false } = {}) {
   return `
     <form id="pipe-history-sheet-delete-form" method="post" action="/workflow/history/delete">
       <input type="hidden" id="pipe-history-sheet-delete-pipe-unit-id" name="pipeUnitId" value="" />
+      <input type="hidden" name="redirectTo" value="" data-current-history-url />
     </form>
     <div class="pipe-history-sheet-list">
       ${workorderGroups
@@ -317,35 +354,16 @@ function renderPipeHistorySheets(workorderGroups, { canManage = false } = {}) {
                             class="inspection-col-history ${canManage ? "history-column-action" : ""}"
                             ${canManage ? `data-history-pipe-id="${escapeHtml(column.pipeUnitId)}" data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}" title="Click to edit this saved pipe. Right-click to delete it."` : ""}
                           >
-                            <div class="pipe-history-connection-header">
-                              <span class="pipe-history-connection-label">Connection # ${escapeHtml(column.pipeNumber || "")}</span>
-                              <details class="pipe-history-action-menu pipe-history-table-action-menu">
-                                <summary class="pipe-history-action-menu-toggle" aria-label="Connection actions">⋮</summary>
-                                <div class="pipe-history-action-menu-panel">
-                                  <a class="pipe-history-action-menu-item" href="/report/pipe/${encodeURIComponent(column.pipeUnitId)}">View Full Report</a>
-                                  ${
-                                    canManage
-                                      ? `<a class="pipe-history-action-menu-item" href="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}">Edit</a>`
-                                      : ""
-                                  }
-                                  ${
-                                    canManage && column.status === "in_progress"
-                                      ? `<form method="post" action="/workflow/history/reset" onsubmit="return confirm('Reset this in-progress pipe inspection? The unfinished attempt will be removed and the pipe will roll back to its last resolved state.');">
-                                           <input type="hidden" name="pipeUnitId" value="${escapeHtml(column.pipeUnitId)}" />
-                                           <button class="pipe-history-action-menu-item warning" type="submit">Reset In-Progress</button>
-                                         </form>`
-                                      : ""
-                                  }
-                                  ${
-                                    canManage
-                                      ? `<form method="post" action="/workflow/history/delete" onsubmit="return confirm('Delete this pipe inspection and all related attempts, measurements, and NCR records?');">
-                                           <input type="hidden" name="pipeUnitId" value="${escapeHtml(column.pipeUnitId)}" />
-                                           <button class="pipe-history-action-menu-item danger" type="submit">Delete</button>
-                                         </form>`
-                                      : ""
-                                  }
-                                </div>
-                              </details>
+                            <div class="pipe-history-connection-header centered">
+                              <span class="pipe-history-connection-label">Pipe # ${escapeHtml(column.pipeNumber || "")}</span>
+                              ${
+                                canManage
+                                  ? `<div class="pipe-history-header-actions">
+                                      <a class="pipe-history-inline-action" href="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}">Edit</a>
+                                      <button class="pipe-history-inline-action danger" type="button" data-delete-pipe-id="${escapeHtml(column.pipeUnitId)}">Delete</button>
+                                    </div>`
+                                  : ""
+                              }
                             </div>
                           </th>`,
                         )
@@ -446,7 +464,7 @@ function renderWorkflowNav(activePath, req = null) {
                </form>`
             : ""
         }
-        <form method="post" action="/logout" class="workflow-nav-logout" onsubmit="return confirm('This will log you out without publishing today\\'s Pipe History. Use End Shift to publish completed work. Continue logging out?');">
+        <form method="post" action="/logout" class="workflow-nav-logout" onsubmit="return confirm('Log out and save today\\'s completed pipe history? Any unfinished pipe stays unpublished.');">
           <button class="button workflow-action-button" type="submit">Log Out</button>
         </form>
       </div>
@@ -523,6 +541,7 @@ function renderInspectionInputControl(element, priorMeasuredValue = null) {
       <input
         class="measurement-input measurement-short-input"
         data-capture-type="numeric"
+        data-nominal="${escapeHtml(element.nominal ?? "")}"
         data-min="${escapeHtml(element.min ?? "")}"
         data-max="${escapeHtml(element.max ?? "")}"
         data-prefix="${escapeHtml(numericEntryConfig.prefix)}"
@@ -538,7 +557,7 @@ function renderInspectionInputControl(element, priorMeasuredValue = null) {
     </div>`;
   }
 
-  return `<input class="measurement-input inspection-table-input" data-capture-type="numeric" data-min="${escapeHtml(element.min ?? "")}" data-max="${escapeHtml(element.max ?? "")}" placeholder="${escapeHtml(element.nominal ?? "")}" value="${escapeHtml(carriedValue?.fullValue || "")}" name="element_${element.element_sequence}" required />`;
+  return `<input class="measurement-input inspection-table-input" data-capture-type="numeric" data-nominal="${escapeHtml(element.nominal ?? "")}" data-min="${escapeHtml(element.min ?? "")}" data-max="${escapeHtml(element.max ?? "")}" placeholder="${escapeHtml(element.nominal ?? "")}" value="${escapeHtml(carriedValue?.fullValue || "")}" name="element_${element.element_sequence}" required />`;
 }
 
 function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, selection, sessionRecord, inspectorName, historyColumns = [] }) {
@@ -549,16 +568,20 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
   const digitalIrrName = recipeDefinition?.display_name || formatDigitalIrrName(recipeDefinition?.recipe_name || "", drawing);
   const locationName = sessionRecord?.location_name || "";
   const currentPipeNumber = activeInspection?.pipe_number || selection.pipeNumber || "";
+  const hasPendingNextPipe = !activeInspection && Boolean(currentPipeNumber);
   const previousMeasurementsBySequence = historyColumns.length
     ? historyColumns[historyColumns.length - 1].measurementsBySequence
     : new Map();
-  const loadPipeFormId = "load-pipe-form";
   const connectionCellForm = `
     <div class="connection-header-entry">
-      <span class="connection-header-label">Connection #</span>
+      <span class="connection-header-label">Pipe #</span>
       <div class="connection-header-form">
-        <input form="${loadPipeFormId}" type="text" name="pipeNumber" value="${escapeHtml(currentPipeNumber)}" placeholder="Enter pipe #" required />
-        <button form="${loadPipeFormId}" type="submit" class="button compact-button">Load Pipe</button>
+        <div class="pipe-number-stepper">
+          <button type="button" class="pipe-number-step-button" data-pipe-step="-1" aria-label="Previous pipe number">-</button>
+          <input type="text" name="pipeNumber" value="${escapeHtml(currentPipeNumber)}" placeholder="Enter pipe #" required data-pipe-number-entry />
+          <button type="button" class="pipe-number-step-button" data-pipe-step="1" aria-label="Next pipe number">+</button>
+        </div>
+        <button type="button" class="button compact-button" data-start-pipe-button>${hasPendingNextPipe ? "Start Pipe" : "Load Pipe"}</button>
       </div>
     </div>
   `;
@@ -569,14 +592,29 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
       <p>${
         activeInspection
           ? `Attempt #${escapeHtml(activeInspection.attempt_no)} | ${activeInspection.is_rework ? "Re-work" : "First inspection"} | ${renderScopeBadge(activeInspection.inspection_scope)}`
-          : "Enter the pipe number in the table header to start or resume that pipe."
+          : hasPendingNextPipe
+            ? "Next pipe is ready. Edit the pipe number if needed, then start it when inspection begins."
+            : "Enter the pipe number in the table header to start or resume that pipe."
       }</p>
+      ${
+        activeInspection
+          ? `<form method="post" action="/workflow/scope" class="inspection-scope-toggle-form">
+              <input type="hidden" name="inspectionScope" value="${activeInspection.inspection_scope === "full" ? "standard" : "full"}" />
+              <button class="button secondary compact-button" type="submit">
+                ${activeInspection.inspection_scope === "full" ? "Switch to Standard Inspection" : "Switch to Full Inspection"}
+              </button>
+            </form>`
+          : ""
+      }
       ${
         activeInspection && !plan.length
           ? renderNotice({ kind: "warning", message: "This attempt has no measurement plan yet. Go back to the selection above and make sure a Digital IRR is selected before preparing the inspection." })
           : ""
       }
-      <form id="${loadPipeFormId}" method="post" action="/workflow/start">
+      <form id="worksheet-history-delete-form" method="post" action="/workflow/history/delete">
+        <input type="hidden" id="worksheet-history-delete-pipe-unit-id" name="pipeUnitId" value="" />
+      </form>
+      <form id="inspection-complete-form" method="post" action="/workflow/complete" class="form-grid">
         <input type="hidden" name="productionNumber" value="${escapeHtml(selection.productionNumber || "")}" />
         <input type="hidden" name="sizeLabel" value="${escapeHtml(selection.sizeLabel || "")}" />
         <input type="hidden" name="weightLabel" value="${escapeHtml(selection.weightLabel || "")}" />
@@ -584,11 +622,6 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
         <input type="hidden" name="endType" value="${escapeHtml(selection.endType || "")}" />
         <input type="hidden" name="recipeName" value="${escapeHtml(selection.recipeName || "")}" />
         <input type="hidden" name="inspectionScope" value="${escapeHtml(selection.inspectionScope || "standard")}" />
-      </form>
-      <form id="worksheet-history-delete-form" method="post" action="/workflow/history/delete">
-        <input type="hidden" id="worksheet-history-delete-pipe-unit-id" name="pipeUnitId" value="" />
-      </form>
-      <form method="post" action="/workflow/complete" class="form-grid">
         <div class="inspection-sheet-meta">
           <div class="inspection-sheet-meta-row">
             <div><strong>Date:</strong> ${escapeHtml(formatDateValue(new Date()))}</div>
@@ -616,7 +649,15 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
                       data-history-pipe-id="${escapeHtml(column.pipeUnitId)}"
                       data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}"
                       title="Click to edit this saved pipe. Right-click to delete it."
-                    >Connection # ${escapeHtml(column.pipe_number || "")}</th>`,
+                    >
+                      <div class="pipe-history-connection-header centered">
+                        <span class="pipe-history-connection-label">Pipe # ${escapeHtml(column.pipe_number || "")}</span>
+                        <div class="pipe-history-header-actions">
+                          <a class="pipe-history-inline-action" href="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}">Edit</a>
+                          <button class="pipe-history-inline-action danger" type="button" data-delete-pipe-id="${escapeHtml(column.pipeUnitId)}">Delete</button>
+                        </div>
+                      </div>
+                    </th>`,
                   )
                   .join("")}
                 <th class="inspection-col-measure inspection-col-current">${connectionCellForm}</th>
@@ -630,6 +671,8 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
                     ? planned.inspection_frequency === "rotating"
                       ? "inspection-sheet-row-rotating"
                       : "inspection-sheet-row-active"
+                    : hasPendingNextPipe
+                      ? "inspection-sheet-row-next"
                     : "inspection-sheet-row-muted";
                   return `<tr class="${rowClass}">
                     <td class="inspection-col-num">${escapeHtml(row.element_sequence)}</td>
@@ -653,6 +696,8 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
                           ? renderInspectionInputControl(planned, previousMeasurementsBySequence.get(Number(row.element_sequence))?.measured_value ?? null)
                           : activeInspection
                             ? `<span class="inspection-sheet-not-due">${escapeHtml(row.frequency === "rotating" ? "Rotating" : "")}</span>`
+                            : hasPendingNextPipe
+                              ? `<span class="inspection-sheet-not-due">Ready</span>`
                             : `<span class="inspection-sheet-not-due"></span>`
                       }
                     </td>
@@ -719,6 +764,10 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
           <div class="field"><label>Tier Code</label><input name="tier_code" /></div>
           <div class="field"><label>Nonconformance</label><textarea name="nonconformance"></textarea></div>
           <div class="field"><label>Immediate Containment</label><textarea name="immediate_containment"></textarea></div>
+        </div>
+        <div class="field">
+          <label>Relief / Coverage Notes</label>
+          <textarea name="relief_note" placeholder="Example: Relieved inspector at 10:15. I inspected pipes 42-47."></textarea>
         </div>
         <div class="field"><label>Attempt Notes</label><textarea name="notes"></textarea></div>
         <div class="actions">${activeInspection ? `<button id="complete-inspection-button" class="button" type="submit">Complete Inspection</button>` : ""}</div>
@@ -885,6 +934,7 @@ function buildSubmittedRecipePayload(req, rowCount = 25) {
     connector_type: req.body.connector_type,
     drawing: req.body.drawing,
     source_report: req.body.source_report,
+    edit_comment: req.body.edit_comment,
     created_by: req.session.inspector.name,
     rows,
   };
@@ -1107,6 +1157,7 @@ function layout({ title, sidebar, content, theme = "Light" }) {
           const adminLoginToggle = document.querySelector("[data-admin-login-toggle]");
           const adminLoginLocationField = document.querySelector("[data-admin-login-field='location']");
           const adminLoginLocationSelect = adminLoginLocationField ? adminLoginLocationField.querySelector("select") : null;
+          const floatingTabletLocationSelects = document.querySelectorAll("select[name='location_id']");
           const setPopupNoticeVisible = (visible) => {
             if (!popupNoticeModal) return;
             popupNoticeModal.classList.toggle("hidden", !visible);
@@ -1117,11 +1168,28 @@ function layout({ title, sidebar, content, theme = "Light" }) {
             const isAdminLogin = adminLoginToggle.checked;
             adminLoginLocationField.classList.toggle("hidden", isAdminLogin);
             adminLoginLocationSelect.disabled = isAdminLogin;
+            adminLoginLocationSelect.dispatchEvent(new Event("change"));
           };
           if (adminLoginToggle) {
             adminLoginToggle.addEventListener("change", updateAdminLoginFields);
             updateAdminLoginFields();
           }
+          floatingTabletLocationSelects.forEach((select) => {
+            const form = select.closest("form");
+            const noteField = form ? form.querySelector("[data-floating-tablet-note-field]") : null;
+            const noteInput = noteField ? noteField.querySelector("textarea") : null;
+            const updateFloatingTabletNote = () => {
+              const selectedOption = select.selectedOptions && select.selectedOptions.length ? select.selectedOptions[0] : null;
+              const shouldShow = Boolean(!select.disabled && selectedOption && selectedOption.dataset.floatingTablet === "1");
+              if (noteField) noteField.classList.toggle("hidden", !shouldShow);
+              if (noteInput) {
+                noteInput.disabled = !shouldShow;
+                if (!shouldShow) noteInput.value = "";
+              }
+            };
+            select.addEventListener("change", updateFloatingTabletNote);
+            updateFloatingTabletNote();
+          });
           if (popupNotice && popupNoticeModal && popupNoticeMessage) {
             popupNoticeMessage.textContent = popupNotice.textContent.trim();
             window.setTimeout(() => {
@@ -1161,7 +1229,8 @@ function layout({ title, sidebar, content, theme = "Light" }) {
         })();
 
         (function () {
-          const inspectionSheetWrap = document.querySelector(".inspection-sheet-wrap");
+          const initializeInspectionWorkspace = (root = document) => {
+          const inspectionSheetWrap = root.querySelector(".inspection-sheet-wrap");
           if (inspectionSheetWrap) {
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
@@ -1170,10 +1239,51 @@ function layout({ title, sidebar, content, theme = "Light" }) {
             });
           }
 
-          const historyActionCells = document.querySelectorAll(".history-column-action");
-          const historyDeleteForm = document.getElementById("worksheet-history-delete-form");
-          const historyDeletePipeInput = document.getElementById("worksheet-history-delete-pipe-unit-id");
-          const historyActionMenus = document.querySelectorAll(".pipe-history-action-menu, .pipe-history-action-menu-toggle, .pipe-history-action-menu-panel");
+          const historyActionCells = root.querySelectorAll(".history-column-action");
+          const historyDeleteForm =
+            root.querySelector("#worksheet-history-delete-form") ||
+            root.querySelector("#pipe-history-sheet-delete-form");
+          const historyDeletePipeInput =
+            root.querySelector("#worksheet-history-delete-pipe-unit-id") ||
+            root.querySelector("#pipe-history-sheet-delete-pipe-unit-id");
+          const historyRedirectInput = historyDeleteForm ? historyDeleteForm.querySelector("[data-current-history-url]") : null;
+          if (historyRedirectInput) {
+            historyRedirectInput.value = window.location.pathname + window.location.search;
+          }
+          const submitHistoryDelete = async (pipeUnitId) => {
+            if (!pipeUnitId || !historyDeleteForm || !historyDeletePipeInput) return;
+            historyDeletePipeInput.value = pipeUnitId;
+            if (historyRedirectInput) {
+              historyRedirectInput.value = window.location.pathname + window.location.search;
+            }
+            if (!window.fetch || !window.DOMParser || historyDeleteForm.id !== "pipe-history-sheet-delete-form") {
+              historyDeleteForm.submit();
+              return;
+            }
+            const currentScrollY = window.scrollY;
+            try {
+              const response = await fetch(historyDeleteForm.action, {
+                method: "POST",
+                body: new URLSearchParams(new FormData(historyDeleteForm)),
+                credentials: "same-origin",
+              });
+              const html = await response.text();
+              if (!response.ok) throw new Error("Delete failed.");
+              const nextDocument = new DOMParser().parseFromString(html, "text/html");
+              const nextList = nextDocument.querySelector(".pipe-history-sheet-list");
+              const currentList = document.querySelector(".pipe-history-sheet-list");
+              const nextNotice = nextDocument.querySelector(".notice");
+              const currentNotice = document.querySelector(".notice");
+              if (!nextList || !currentList) throw new Error("History response was missing the table.");
+              currentList.replaceWith(nextList);
+              if (nextNotice && currentNotice) currentNotice.replaceWith(nextNotice);
+              initializeInspectionWorkspace(document);
+              window.scrollTo({ top: currentScrollY, left: window.scrollX });
+            } catch (error) {
+              historyDeleteForm.submit();
+            }
+          };
+          const historyActionMenus = root.querySelectorAll(".pipe-history-action-menu, .pipe-history-action-menu-toggle, .pipe-history-action-menu-panel");
 
           historyActionMenus.forEach((element) => {
             element.addEventListener("click", (event) => {
@@ -1189,12 +1299,11 @@ function layout({ title, sidebar, content, theme = "Light" }) {
               if (event.target.closest(".pipe-history-action-menu")) {
                 return;
               }
-              const editUrl = cell.dataset.editUrl;
-              if (!editUrl) return;
-              if (!window.confirm("Edit this saved pipe record?")) {
-                event.preventDefault();
+              if (event.target.closest(".pipe-history-inline-action")) {
                 return;
               }
+              const editUrl = cell.dataset.editUrl;
+              if (!editUrl) return;
               window.location.href = editUrl;
             });
 
@@ -1208,14 +1317,81 @@ function layout({ title, sidebar, content, theme = "Light" }) {
               if (!window.confirm("Delete this saved pipe inspection and all related attempts, measurements, and NCR records?")) {
                 return;
               }
-              historyDeletePipeInput.value = pipeUnitId;
-              historyDeleteForm.submit();
+              submitHistoryDelete(pipeUnitId);
+            });
+          });
+          root.querySelectorAll("[data-delete-pipe-id]").forEach((button) => {
+            button.addEventListener("click", (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              const pipeUnitId = button.dataset.deletePipeId;
+              if (!pipeUnitId || !historyDeleteForm || !historyDeletePipeInput) return;
+              if (!window.confirm("Delete this saved pipe inspection and all related attempts, measurements, and NCR records?")) {
+                return;
+              }
+              submitHistoryDelete(pipeUnitId);
             });
           });
 
-          const inputs = document.querySelectorAll(".measurement-input");
-          const modeSelects = document.querySelectorAll(".recipe-mode-select");
-          const addRecipeRowButtons = document.querySelectorAll("[data-add-recipe-row]");
+          const inputs = root.querySelectorAll(".measurement-input");
+          const modeSelects = root.querySelectorAll(".recipe-mode-select");
+          const addRecipeRowButtons = root.querySelectorAll("[data-add-recipe-row]");
+          const pipeNumberStepButtons = root.querySelectorAll("[data-pipe-step]");
+          const pipeNumberEntries = root.querySelectorAll("[data-pipe-number-entry]");
+          const startPipeButtons = root.querySelectorAll("[data-start-pipe-button]");
+          const scopeToggleForms = root.querySelectorAll(".inspection-scope-toggle-form");
+          const replaceInspectionWorkspace = (html, currentScrollY, focusSelector) => {
+            const nextDocument = new DOMParser().parseFromString(html, "text/html");
+            const nextWorkspace = nextDocument.getElementById("inspection-workspace");
+            const popupNotice = nextDocument.querySelector(".notice[data-popup='true']");
+            if (!nextWorkspace) throw new Error("Pipe load response was missing the inspection workspace.");
+            const workspace = document.getElementById("inspection-workspace");
+            if (!workspace) throw new Error("Inspection workspace is missing.");
+            workspace.replaceWith(nextWorkspace);
+            initializeInspectionWorkspace(nextWorkspace);
+            if (popupNotice) {
+              window.alert(popupNotice.textContent.trim());
+            }
+            window.scrollTo({ top: currentScrollY, left: window.scrollX });
+            const focusTarget = focusSelector ? nextWorkspace.querySelector(focusSelector) : null;
+            if (focusTarget) {
+              focusTarget.focus();
+              if (typeof focusTarget.select === "function" && !focusTarget.classList.contains("measurement-checkbox")) {
+                focusTarget.select();
+              }
+            }
+          };
+          const snapshotInspectionValues = () => {
+            const values = new Map();
+            document.querySelectorAll("#inspection-complete-form [name^='element_']").forEach((input) => {
+              values.set(input.name, input.type === "checkbox" ? input.checked : input.value);
+            });
+            return values;
+          };
+          const restoreInspectionValues = (workspace, values) => {
+            values.forEach((value, name) => {
+              const input = workspace.querySelector("#inspection-complete-form [name='" + CSS.escape(name) + "']");
+              if (!input) return;
+              if (input.type === "checkbox") {
+                input.checked = Boolean(value);
+              } else {
+                input.value = value;
+              }
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+              input.dispatchEvent(new Event("change", { bubbles: true }));
+            });
+          };
+          const stepPipeNumber = (value, amount) => {
+            const text = String(value || "").trim();
+            const match = text.match(/^(.*?)(\\d+)$/);
+            if (!match) return text;
+            const prefix = match[1];
+            const digits = match[2];
+            const nextNumber = Math.max(0, Number(digits) + amount);
+            const nextText = String(nextNumber);
+            const nextDigits = digits.length > nextText.length ? nextText.padStart(digits.length, "0") : nextText;
+            return prefix + nextDigits;
+          };
           const updateRecipeAddButtons = () => {
             addRecipeRowButtons.forEach((button) => {
               const form = button.closest("form");
@@ -1228,7 +1404,7 @@ function layout({ title, sidebar, content, theme = "Light" }) {
           if (modeSelects.length) {
             const syncRecipeModeRow = (select) => {
               const row = select.dataset.row;
-              const wrapper = document.querySelector('.recipe-mode-fields[data-row="' + row + '"]');
+              const wrapper = root.querySelector('.recipe-mode-fields[data-row="' + row + '"]');
               if (!wrapper) return;
               wrapper.querySelectorAll(".recipe-mode-panel").forEach((panel) => {
                 panel.classList.toggle("hidden", panel.dataset.modePanel !== select.value);
@@ -1257,21 +1433,110 @@ function layout({ title, sidebar, content, theme = "Light" }) {
             });
             updateRecipeAddButtons();
           }
+          pipeNumberStepButtons.forEach((button) => {
+            button.addEventListener("click", () => {
+              const wrapper = button.closest(".pipe-number-stepper");
+              const input = wrapper ? wrapper.querySelector("[data-pipe-number-entry]") : null;
+              if (!input) return;
+              const nextValue = stepPipeNumber(input.value, Number(button.dataset.pipeStep || 0));
+              input.value = nextValue;
+              input.focus();
+              if (typeof input.select === "function") input.select();
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+            });
+          });
+          pipeNumberEntries.forEach((entry) => {
+            entry.addEventListener("keydown", (event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              const button = root.querySelector("[data-start-pipe-button]");
+              if (button) button.click();
+            });
+          });
+          startPipeButtons.forEach((button) => {
+            button.addEventListener("click", async () => {
+              const form = button.closest("form");
+              const entry = form ? form.querySelector("[data-pipe-number-entry]") : root.querySelector("[data-pipe-number-entry]");
+              if (!form || !entry) return;
+              if (!entry.reportValidity()) return;
+              const currentScrollY = window.scrollY;
+              const previousButtonText = button.textContent;
+              button.disabled = true;
+              button.textContent = "Loading...";
+              try {
+                const formData = new FormData(form);
+                formData.set("pipeNumber", entry.value);
+                const response = await fetch("/workflow/start", {
+                  method: "POST",
+                  body: new URLSearchParams(formData),
+                  credentials: "same-origin",
+                });
+                const html = await response.text();
+                if (!response.ok) throw new Error("Pipe load failed.");
+                replaceInspectionWorkspace(
+                  html,
+                  currentScrollY,
+                  ".measurement-short-input, .inspection-table-input, .measurement-checkbox, [data-pipe-number-entry]",
+                );
+              } catch (error) {
+                form.action = "/workflow/start";
+                form.method = "post";
+                form.noValidate = true;
+                form.submit();
+              } finally {
+                button.disabled = false;
+                button.textContent = previousButtonText;
+              }
+            });
+          });
+          scopeToggleForms.forEach((form) => {
+            form.addEventListener("submit", async (event) => {
+              if (!window.fetch || !window.DOMParser) return;
+              event.preventDefault();
+              const button = event.submitter || form.querySelector('button[type="submit"]');
+              const previousButtonText = button ? button.textContent : "";
+              const currentScrollY = window.scrollY;
+              const measurementValues = snapshotInspectionValues();
+              if (button) {
+                button.disabled = true;
+                button.textContent = "Switching...";
+              }
+              try {
+                const response = await fetch(form.action, {
+                  method: "POST",
+                  body: new URLSearchParams(new FormData(form)),
+                  credentials: "same-origin",
+                });
+                const html = await response.text();
+                if (!response.ok) throw new Error("Scope switch failed.");
+                replaceInspectionWorkspace(html, currentScrollY, null);
+                const nextWorkspace = document.getElementById("inspection-workspace");
+                if (nextWorkspace) restoreInspectionValues(nextWorkspace, measurementValues);
+              } catch (error) {
+                form.submit();
+              } finally {
+                if (button) {
+                  button.disabled = false;
+                  button.textContent = previousButtonText;
+                }
+              }
+            });
+          });
 
           if (!inputs.length) return;
-          const resultPanel = document.getElementById("inspection-table-result");
-          const resultText = document.getElementById("inspection-table-result-text");
-          const resultDetail = document.getElementById("inspection-table-result-detail");
-          const failureActionSelect = document.getElementById("failure-action-select");
-          const failureControls = document.getElementById("inspection-result-fail-controls");
-          const failureFields = document.getElementById("failure-fields");
-          const managerApprovalModal = document.getElementById("manager-approval-modal");
-          const managerNameInput = document.getElementById("manager-name-input");
-          const managerReasonInput = document.getElementById("manager-reason-input");
-          const completeInspectionButton = document.getElementById("complete-inspection-button");
-          const approvalCloseButtons = document.querySelectorAll("[data-approval-close]");
+          const resultPanel = root.querySelector("#inspection-table-result");
+          const resultText = root.querySelector("#inspection-table-result-text");
+          const resultDetail = root.querySelector("#inspection-table-result-detail");
+          const failureActionSelect = root.querySelector("#failure-action-select");
+          const failureControls = root.querySelector("#inspection-result-fail-controls");
+          const failureFields = root.querySelector("#failure-fields");
+          const managerApprovalModal = root.querySelector("#manager-approval-modal");
+          const managerNameInput = root.querySelector("#manager-name-input");
+          const managerReasonInput = root.querySelector("#manager-reason-input");
+          const completeInspectionButton = root.querySelector("#complete-inspection-button");
+          const approvalCloseButtons = root.querySelectorAll("[data-approval-close]");
           const focusableMeasurementInputs = Array.from(
-            document.querySelectorAll(".measurement-short-input, .inspection-table-input, .measurement-checkbox"),
+            root.querySelectorAll(".measurement-short-input, .inspection-table-input, .measurement-checkbox"),
           );
 
           const setApprovalModalVisible = (visible) => {
@@ -1281,6 +1546,59 @@ function layout({ title, sidebar, content, theme = "Light" }) {
           };
 
           const getEffectiveValue = (element) => {
+            const normalizeNumericTextForEntry = (value) => {
+              const text = String(value ?? "").trim();
+              if (!text) return "";
+              if (!/^-?\\d+(?:\\.\\d+)?$/.test(text)) return text;
+              return text.replace(/(\\.\\d*?)0+$/, "$1").replace(/\\.$/, "");
+            };
+            const countDecimalPlacesForEntry = (value) => {
+              const text = normalizeNumericTextForEntry(value);
+              if (!text.includes(".")) return 0;
+              return text.split(".")[1].length;
+            };
+            const normalizeNumericMeasurementValue = (rawValue, targetElement) => {
+              const text = String(rawValue ?? "").trim();
+              if (!text) return "";
+              const nominalText = String(targetElement.dataset.nominal || "").trim();
+              const minText = String(targetElement.dataset.min || "").trim();
+              const maxText = String(targetElement.dataset.max || "").trim();
+              const unsignedOffsetText = /^\.?\d+$/.test(text) && !text.includes(".");
+              const isOffsetEntry =
+                nominalText !== "" &&
+                !Number.isNaN(Number(nominalText)) &&
+                (/^[+-]/.test(text) ||
+                  text.startsWith(".") ||
+                  unsignedOffsetText);
+              if (isOffsetEntry) {
+                const sign = text.startsWith("-") ? -1 : 1;
+                const offsetText = /^[+-]/.test(text) ? text.slice(1).trim() : text;
+                if (!offsetText) return "";
+                let offset;
+                if (offsetText.startsWith(".")) {
+                  offset = Number(offsetText);
+                } else if (/^\d+$/.test(offsetText)) {
+                  const decimalPlaces = Math.max(
+                    countDecimalPlacesForEntry(nominalText),
+                    countDecimalPlacesForEntry(minText),
+                    countDecimalPlacesForEntry(maxText),
+                    3,
+                  );
+                  offset = Number(offsetText) / Math.pow(10, decimalPlaces);
+                } else {
+                  offset = Number(offsetText);
+                }
+                if (Number.isNaN(offset)) return "";
+                const decimals = Math.max(
+                  countDecimalPlacesForEntry(nominalText),
+                  countDecimalPlacesForEntry(minText),
+                  countDecimalPlacesForEntry(maxText),
+                  3,
+                );
+                return normalizeNumericTextForEntry((Number(nominalText) + sign * offset).toFixed(decimals));
+              }
+              return text;
+            };
             if (element.classList.contains("measurement-short-input")) {
               const hiddenTarget = document.getElementById(element.dataset.fullTarget || "");
               const rawDigits = String(element.value ?? "").replace(/\D/g, "");
@@ -1300,7 +1618,7 @@ function layout({ title, sidebar, content, theme = "Light" }) {
               if (hiddenTarget) hiddenTarget.value = checkboxValue;
               return checkboxValue;
             }
-            return String(element.value ?? "").trim();
+            return normalizeNumericMeasurementValue(element.value, element);
           };
 
           const isFilled = (element) => {
@@ -1475,6 +1793,74 @@ function layout({ title, sidebar, content, theme = "Light" }) {
             });
           }
           updateOverallResult();
+          };
+
+          document.addEventListener("submit", async (event) => {
+            const form = event.target;
+            if (!form || form.id !== "inspection-complete-form") return;
+            if (form.dataset.nativeSubmit === "1") {
+              delete form.dataset.nativeSubmit;
+              return;
+            }
+            const workspace = document.getElementById("inspection-workspace");
+            if (!workspace || !window.fetch || !window.DOMParser) return;
+            event.preventDefault();
+            const submitButton = event.submitter || form.querySelector('button[type="submit"]');
+            const requestAction = submitButton?.getAttribute("formaction")
+              ? new URL(submitButton.getAttribute("formaction"), window.location.href).href
+              : form.action;
+            const requestMethod = submitButton?.getAttribute("formmethod") || form.getAttribute("method") || "post";
+            const isCompletingInspection = requestAction.includes("/workflow/complete");
+            const previousButtonText = submitButton ? submitButton.textContent : "";
+            const currentScrollY = window.scrollY;
+            if (submitButton) {
+              submitButton.disabled = true;
+              submitButton.textContent = isCompletingInspection ? "Saving..." : "Loading...";
+            }
+            try {
+              const formData = new FormData(form);
+              const response = await fetch(requestAction, {
+                method: requestMethod.toUpperCase(),
+                body: new URLSearchParams(formData),
+                credentials: "same-origin",
+              });
+              const html = await response.text();
+              if (!response.ok) throw new Error("Pipe load failed.");
+              const nextDocument = new DOMParser().parseFromString(html, "text/html");
+              const nextWorkspace = nextDocument.getElementById("inspection-workspace");
+              const popupNotice = nextDocument.querySelector(".notice[data-popup='true']");
+              if (!nextWorkspace) throw new Error("Pipe load response was missing the inspection workspace.");
+              workspace.replaceWith(nextWorkspace);
+              initializeInspectionWorkspace(nextWorkspace);
+              if (popupNotice) {
+                window.alert(popupNotice.textContent.trim());
+              }
+              window.scrollTo({ top: currentScrollY, left: window.scrollX });
+              const focusTarget =
+                isCompletingInspection
+                  ? nextWorkspace.querySelector("[data-pipe-number-entry]")
+                  : nextWorkspace.querySelector(".measurement-short-input, .inspection-table-input, .measurement-checkbox");
+              if (focusTarget) {
+                focusTarget.focus();
+                if (typeof focusTarget.select === "function" && !focusTarget.classList.contains("measurement-checkbox")) {
+                  focusTarget.select();
+                }
+              }
+            } catch (error) {
+              form.action = requestAction;
+              form.method = requestMethod;
+              form.noValidate = !isCompletingInspection;
+              form.dataset.nativeSubmit = "1";
+              form.submit();
+            } finally {
+              if (submitButton) {
+                submitButton.disabled = false;
+                submitButton.textContent = previousButtonText;
+              }
+            }
+          });
+
+          initializeInspectionWorkspace(document);
         })();
       </script>
     </body>
@@ -1512,7 +1898,7 @@ function baseSidebar(req) {
                   <a class="button secondary sidebar-link-button" href="/workflow/ncr">All NCRs</a>`
                : ""
            }
-           <form method="post" action="/logout" onsubmit="return confirm('This will log you out without publishing today\\'s Pipe History. Use End Shift to publish completed work. Continue logging out?');"><button type="submit">Log Out</button></form>`
+           <form method="post" action="/logout" onsubmit="return confirm('Log out and save today\\'s completed pipe history? Any unfinished pipe stays unpublished.');"><button type="submit">Log Out</button></form>`
         : ""
     }
   `;
@@ -1545,19 +1931,34 @@ app.post("/theme", (req, res) => {
   res.redirect("back");
 });
 
-app.post("/logout", async (req, res) => {
-  if (req.session.sessionRecord?.id) {
-    await callBridge("close_inspector_session", { session_id: req.session.sessionRecord.id });
+async function publishAndCloseSession(sessionRecord) {
+  if (!sessionRecord?.id) {
+    return { publishedCount: 0 };
   }
-  req.session.destroy(() => res.redirect("/"));
+  const publishResult = await callBridge("publish_session_history", { session_id: sessionRecord.id });
+  await callBridge("close_inspector_session", { session_id: sessionRecord.id });
+  return { publishedCount: Number(publishResult?.published_count || 0) };
+}
+
+app.post("/logout", async (req, res, next) => {
+  try {
+    const { publishedCount } = await publishAndCloseSession(req.session.sessionRecord);
+    const message =
+      publishedCount > 0
+        ? `Logout complete. ${publishedCount} pipe record${publishedCount === 1 ? "" : "s"} published to Pipe History.`
+        : "Logout complete. No completed or re-work pipe records were ready to publish to Pipe History.";
+    req.session.destroy(() =>
+      res.redirect(`/?shiftEnded=1&notice=${encodeURIComponent(message)}&kind=success`),
+    );
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post("/workflow/end-shift", async (req, res, next) => {
   try {
     if (!req.session.inspector || !req.session.sessionRecord?.id) return res.redirect("/");
-    const publishResult = await callBridge("publish_session_history", { session_id: req.session.sessionRecord.id });
-    await callBridge("close_inspector_session", { session_id: req.session.sessionRecord.id });
-    const publishedCount = Number(publishResult?.published_count || 0);
+    const { publishedCount } = await publishAndCloseSession(req.session.sessionRecord);
     const message =
       publishedCount > 0
         ? `End shift complete. ${publishedCount} pipe record${publishedCount === 1 ? "" : "s"} published to Pipe History.`
@@ -1589,14 +1990,17 @@ app.get("/", async (req, res, next) => {
         : req.session.notice;
 
     const content = `
-      <section class="hero">
-        <h1>Inspection Run Report</h1>
-        <p>Manage inspector login, inspection entry, pipe history, NCR follow-up, and supervisor approvals in one place.</p>
-        <div class="badges">
-          <span class="badge">Login</span>
-          <span class="badge">Workflow</span>
-          <span class="badge">Admin</span>
+      <section class="hero home-hero">
+        <div class="home-hero-copy">
+          <h1>Inspection Run Report</h1>
+          <p>Manage inspector login, inspection entry, pipe history, NCR follow-up, and supervisor approvals in one place.</p>
+          <div class="badges">
+            <span class="badge">Login</span>
+            <span class="badge">Workflow</span>
+            <span class="badge">Admin</span>
+          </div>
         </div>
+        <img class="home-hero-logo" src="/public/BenoitLogoRegistered-Red.png" alt="Benoit" />
       </section>
       ${renderNotice(req.session.notice)}
       <section class="card">
@@ -1623,8 +2027,9 @@ app.get("/", async (req, res, next) => {
             </div>
             <div class="field" data-admin-login-field="location">
               <label>Location / Machine</label>
-              <select name="location_id">${renderLocationOptions(locations)}</select>
+              <select name="location_id">${renderLocationOptions(locations, null, pending?.inspector)}</select>
             </div>
+            ${renderFloatingTabletNoteField()}
             <div class="actions"><button class="button" type="submit">Find Inspector</button></div>
           </form>
         </details>
@@ -1634,6 +2039,7 @@ app.get("/", async (req, res, next) => {
           ? `<section class="card">
                <h2 class="section-title">Inspector Ready</h2>
                <p>${escapeHtml(pending.inspector.name)} | ${escapeHtml(req.session.roleLabel || "Inspector")} | ${escapeHtml(pending.shift)} | ${escapeHtml(pending.location.location_name)}</p>
+               ${pending.floatingTabletNote ? `<p><strong>Floating Tablet Note:</strong> ${escapeHtml(pending.floatingTabletNote)}</p>` : ""}
                <form method="post" action="/login/start" class="form-grid">
                  <div class="field">
                    <label>CNC Operator</label>
@@ -1685,7 +2091,10 @@ app.post("/login/find", async (req, res, next) => {
       req.session.notice = { kind: "warning", message: "Please select a valid machine or location." };
       return res.redirect("/");
     }
-    if (location.is_locked) {
+    const isOwnLockedSession =
+      location.is_locked &&
+      String(location.active_inspector_adp || "").trim() === String(inspector.adp_number || "").trim();
+    if (location.is_locked && !isOwnLockedSession) {
       req.session.notice = {
         kind: "warning",
         message: `${location.location_name} is currently unavailable${location.active_inspector_name ? ` because it is in use by ${location.active_inspector_name}` : ""}.`,
@@ -1696,8 +2105,14 @@ app.post("/login/find", async (req, res, next) => {
       inspector,
       shift: req.body.shift || (await callBridge("determine_shift")),
       location,
+      floatingTabletNote: String(req.body.floating_tablet_note || "").trim(),
     };
-    req.session.notice = { kind: "success", message: `Inspector found: ${inspector.name}` };
+    req.session.notice = {
+      kind: "success",
+      message: isOwnLockedSession
+        ? `Inspector found: ${inspector.name}. Resume your open session at ${location.location_name}.`
+        : `Inspector found: ${inspector.name}`,
+    };
     res.redirect("/");
   } catch (error) {
     next(error);
@@ -1716,6 +2131,7 @@ app.post("/login/start", async (req, res, next) => {
         shift: pending.shift,
         location: pending.location,
         cnc_operator: operator,
+        floating_tablet_note: pending.floatingTabletNote || "",
       },
     });
     req.session.inspector = pending.inspector;
@@ -1749,7 +2165,10 @@ app.post("/admin/session/setup", async (req, res, next) => {
       req.session.notice = { kind: "warning", message: "Please select a valid machine or location." };
       return res.redirect("/admin");
     }
-    if (location.is_locked) {
+    const isOwnLockedSession =
+      location.is_locked &&
+      String(location.active_inspector_adp || "").trim() === String(req.session.inspector.adp_number || "").trim();
+    if (location.is_locked && !isOwnLockedSession) {
       req.session.notice = {
         kind: "warning",
         message: `${location.location_name} is currently unavailable${location.active_inspector_name ? ` because it is in use by ${location.active_inspector_name}` : ""}.`,
@@ -1760,6 +2179,7 @@ app.post("/admin/session/setup", async (req, res, next) => {
       inspector: req.session.inspector,
       shift: req.body.shift || (await callBridge("determine_shift")),
       location,
+      floatingTabletNote: String(req.body.floating_tablet_note || "").trim(),
     };
     req.session.notice = { kind: "success", message: `Floor session ready for ${req.session.inspector.name}.` };
     res.redirect("/admin");
@@ -1896,10 +2316,10 @@ app.get("/workflow/inspection", async (req, res, next) => {
         <form method="get" action="/workflow/inspection" class="form-grid inspection-entry-form" id="inspection-selection-form">
           <div class="field"><label>Production Number / WO</label><select name="productionNumber" onchange="this.form.recipeName.value=''; this.form.submit();">${renderOptions(productionNumbers, selection.productionNumber, (item) => item, (item) => item)}</select></div>
           <div class="inspection-entry-inline-row">
-            <div class="field"><label>Size</label><input name="sizeLabel" list="size-options" value="${escapeHtml(selection.sizeLabel)}" oninput="this.form.recipeName.value='';" /></div>
-            <div class="field"><label>Weight</label><input name="weightLabel" list="weight-options" value="${escapeHtml(selection.weightLabel)}" oninput="this.form.recipeName.value='';" /></div>
-            <div class="field"><label>Connection</label><input name="connectionLabel" list="connection-options" value="${escapeHtml(selection.connectionLabel)}" oninput="this.form.recipeName.value='';" /></div>
-            <div class="field"><label>Box / Pin</label><select name="endType" onchange="this.form.recipeName.value='';"><option value=""></option><option value="BOX" ${selection.endType === "BOX" ? "selected" : ""}>Box</option><option value="PIN" ${selection.endType === "PIN" ? "selected" : ""}>Pin</option></select></div>
+            <div class="field"><label>Size <span class="required-marker" aria-hidden="true">*</span></label><input name="sizeLabel" list="size-options" value="${escapeHtml(selection.sizeLabel)}" oninput="this.form.recipeName.value='';" required /></div>
+            <div class="field"><label>Weight <span class="required-marker" aria-hidden="true">*</span></label><input name="weightLabel" list="weight-options" value="${escapeHtml(selection.weightLabel)}" oninput="this.form.recipeName.value='';" required /></div>
+            <div class="field"><label>Connection <span class="required-marker" aria-hidden="true">*</span></label><input name="connectionLabel" list="connection-options" value="${escapeHtml(selection.connectionLabel)}" oninput="this.form.recipeName.value='';" required /></div>
+            <div class="field"><label>Box / Pin <span class="required-marker" aria-hidden="true">*</span></label><select name="endType" onchange="this.form.recipeName.value='';" required><option value=""></option><option value="BOX" ${selection.endType === "BOX" ? "selected" : ""}>Box</option><option value="PIN" ${selection.endType === "PIN" ? "selected" : ""}>Pin</option></select></div>
           </div>
           <datalist id="size-options">${(entryOptions?.size_options || []).map((item) => `<option value="${escapeHtml(item)}"></option>`).join("")}</datalist>
           <datalist id="weight-options">${(entryOptions?.weight_options || []).map((item) => `<option value="${escapeHtml(item)}"></option>`).join("")}</datalist>
@@ -1912,6 +2332,7 @@ app.get("/workflow/inspection", async (req, res, next) => {
           </div>
         </form>
       </details>
+      <div id="inspection-workspace">
         ${
           existingPipe
             ? existingPipe.current_status === "in_progress"
@@ -1961,6 +2382,7 @@ app.get("/workflow/inspection", async (req, res, next) => {
           historyColumns,
         }) : ""}
         ${history.length ? `<h3 class="section-title">Pipe History</h3>${renderTable(history)}` : ""}
+      </div>
     `;
 
     req.session.notice = null;
@@ -2013,9 +2435,15 @@ app.get("/workflow/history", async (req, res, next) => {
       inspection_scope: req.query.historyScope || null,
       published_only: historyPublishedOnly,
     });
+    const historyDetails = await callBridge("get_pipe_history_details", {
+      pipe_unit_ids: pipeRows.map((pipeRow) => pipeRow.id),
+    });
+    const attemptsByPipe = historyDetails?.attempts_by_pipe || {};
+    const measurementsByAttempt = historyDetails?.measurements_by_attempt || {};
     const workorderGroupsMap = new Map();
+    const recipeDefinitionCache = new Map();
     for (const pipeRow of pipeRows) {
-      const attempts = await callBridge("get_pipe_attempt_history", { pipe_unit_id: pipeRow.id });
+      const attempts = attemptsByPipe[String(pipeRow.id)] || [];
       const latestAttempt = attempts[0];
       if (!latestAttempt) continue;
 
@@ -2035,7 +2463,7 @@ app.get("/workflow/history", async (req, res, next) => {
             ? attempts.find((attempt) => String(attempt.inspector_name || "").trim() === currentInspectorName) || latestAttempt
             : latestAttempt;
 
-      const measurements = await callBridge("get_attempt_measurements", { attempt_id: latestAttempt.id });
+      const measurements = measurementsByAttempt[String(latestAttempt.id)] || [];
       const productionNumber = pipeRow.production_number || "";
       const operationDescription = pipeRow.operation_description || "";
       const workorderKey = productionNumber;
@@ -2060,17 +2488,22 @@ app.get("/workflow/history", async (req, res, next) => {
       }
 
       if (!workorderGroup.connectionGroupsMap.has(connectionKey)) {
-        const recipeCandidates = await callBridge("find_recipe_candidates", {
-          operation_description: operationDescription,
-          branch: historyBranchFilter,
-        });
-        const recipeName =
-          recipeCandidates?.length
-            ? (typeof recipeCandidates[0] === "string" ? recipeCandidates[0] : recipeCandidates[0].recipe_name)
+        const recipeCacheKey = `${historyBranchFilter || ""}||${operationDescription}`;
+        let recipeDefinition = recipeDefinitionCache.get(recipeCacheKey);
+        if (!recipeDefinitionCache.has(recipeCacheKey)) {
+          const recipeCandidates = await callBridge("find_recipe_candidates", {
+            operation_description: operationDescription,
+            branch: historyBranchFilter,
+          });
+          const recipeName =
+            recipeCandidates?.length
+              ? (typeof recipeCandidates[0] === "string" ? recipeCandidates[0] : recipeCandidates[0].recipe_name)
+              : null;
+          recipeDefinition = recipeName
+            ? await callBridge("get_recipe_elements", { recipe_name: recipeName, branch: historyBranchFilter })
             : null;
-        const recipeDefinition = recipeName
-          ? await callBridge("get_recipe_elements", { recipe_name: recipeName, branch: historyBranchFilter })
-          : null;
+          recipeDefinitionCache.set(recipeCacheKey, recipeDefinition);
+        }
 
         workorderGroup.connectionGroupsMap.set(connectionKey, {
           productionNumber,
@@ -2184,6 +2617,11 @@ app.get("/workflow/history/edit/:pipeUnitId", async (req, res, next) => {
       req.session.notice = { kind: "warning", message: "That pipe inspection could not be found." };
       return res.redirect("/workflow/history");
     }
+    const attempts = await callBridge("get_pipe_attempt_history", { pipe_unit_id: pipeRow.id });
+    const latestAttempt = attempts?.[0] || null;
+    const measurements = latestAttempt
+      ? await callBridge("get_attempt_measurements", { attempt_id: latestAttempt.id })
+      : [];
 
     const content = `
       ${renderWorkflowHeader(req)}
@@ -2191,7 +2629,7 @@ app.get("/workflow/history/edit/:pipeUnitId", async (req, res, next) => {
       ${renderWorkflowNav("/workflow/history", req)}
       <section class="table-card">
         <h2 class="section-title">Edit Pipe Record</h2>
-        <p>Update the pipe identifiers without removing the inspection history tied to this record.</p>
+        <p>Update the pipe identifiers and latest saved measurement values without removing the inspection history tied to this record.</p>
       </section>
       <section class="table-card">
         <form method="post" action="/workflow/history/edit/${encodeURIComponent(pipeRow.id)}" class="form-grid">
@@ -2199,6 +2637,52 @@ app.get("/workflow/history/edit/:pipeUnitId", async (req, res, next) => {
           <div class="field"><label>Connection Type / Operation Description</label><input name="operation_description" value="${escapeHtml(pipeRow.operation_description)}" required /></div>
           <div class="field"><label>Pipe Number</label><input name="pipe_number" value="${escapeHtml(pipeRow.pipe_number)}" required /></div>
           <div class="field"><label>Current Status</label><input value="${escapeHtml(pipeRow.current_status)}" disabled /></div>
+          ${
+            latestAttempt && measurements.length
+              ? `<input type="hidden" name="attempt_id" value="${escapeHtml(latestAttempt.id)}" />
+                 <div class="table-wrap">
+                   <table>
+                     <thead>
+                       <tr>
+                         <th>#</th>
+                         <th>Element</th>
+                         <th>DWG DIM</th>
+                         <th>Gauge</th>
+                         <th>Measured Value</th>
+                         <th>Result</th>
+                       </tr>
+                     </thead>
+                     <tbody>
+                       ${measurements
+                         .map(
+                           (measurement, index) => `<tr>
+                             <td>${escapeHtml(measurement.element_sequence)}</td>
+                             <td>
+                               ${escapeHtml(measurement.element_description)}
+                               <input type="hidden" name="measurement_${index}_sequence" value="${escapeHtml(measurement.element_sequence)}" />
+                               <input type="hidden" name="measurement_${index}_element" value="${escapeHtml(measurement.element_description)}" />
+                               <input type="hidden" name="measurement_${index}_dwg_dim" value="${escapeHtml(measurement.dwg_dim || "")}" />
+                               <input type="hidden" name="measurement_${index}_gauge" value="${escapeHtml(measurement.gauge || "")}" />
+                             </td>
+                             <td>${escapeHtml(measurement.dwg_dim || "")}</td>
+                             <td>${escapeHtml(measurement.gauge || "")}</td>
+                             <td><input name="measurement_${index}_value" value="${escapeHtml(formatValue(measurement.measured_value))}" required /></td>
+                             <td>
+                               <select name="measurement_${index}_pass_fail">
+                                 <option value=""></option>
+                                 <option value="Pass" ${measurement.pass_fail === "Pass" ? "selected" : ""}>Pass</option>
+                                 <option value="Fail" ${measurement.pass_fail === "Fail" ? "selected" : ""}>Fail</option>
+                               </select>
+                             </td>
+                           </tr>`,
+                         )
+                         .join("")}
+                     </tbody>
+                   </table>
+                 </div>
+                 <input type="hidden" name="measurement_count" value="${escapeHtml(measurements.length)}" />`
+              : `<p>No saved measurements were found for the latest attempt.</p>`
+          }
           <div class="actions">
             <button class="button" type="submit">Save Changes</button>
             <a class="button secondary" href="/workflow/history">Cancel</a>
@@ -2222,6 +2706,23 @@ app.post("/workflow/history/edit/:pipeUnitId", async (req, res, next) => {
       operation_description: req.body.operation_description,
       pipe_number: req.body.pipe_number,
     });
+    const measurementCount = Number(req.body.measurement_count || 0);
+    const attemptId = req.body.attempt_id;
+    if (attemptId && measurementCount > 0) {
+      const measurements = Array.from({ length: measurementCount }, (_, index) => ({
+        element_sequence: req.body[`measurement_${index}_sequence`],
+        element_description: req.body[`measurement_${index}_element`],
+        dwg_dim: req.body[`measurement_${index}_dwg_dim`],
+        gauge: req.body[`measurement_${index}_gauge`],
+        measured_value: req.body[`measurement_${index}_value`],
+        pass_fail: req.body[`measurement_${index}_pass_fail`],
+        inspected_this_pipe: true,
+      }));
+      await callBridge("update_attempt_measurements", {
+        attempt_id: attemptId,
+        measurements,
+      });
+    }
 
     if (req.session.activeInspection && String(req.session.activeInspection.pipe_unit_id) === String(req.params.pipeUnitId)) {
       req.session.selection = {
@@ -2243,10 +2744,12 @@ app.post("/workflow/history/edit/:pipeUnitId", async (req, res, next) => {
 app.post("/workflow/history/delete", async (req, res, next) => {
   try {
     if (!req.session.inspector || !req.session.sessionRecord) return res.redirect("/");
+    const redirectTo = String(req.body.redirectTo || "/workflow/history");
+    const safeRedirect = redirectTo.startsWith("/workflow/history") ? redirectTo : "/workflow/history";
     const pipeUnitId = req.body.pipeUnitId;
     if (!pipeUnitId) {
       req.session.notice = { kind: "warning", message: "No pipe inspection was selected for deletion." };
-      return res.redirect("/workflow/history");
+      return res.redirect(safeRedirect);
     }
 
     await callBridge("delete_pipe_unit", { pipe_unit_id: pipeUnitId });
@@ -2254,7 +2757,7 @@ app.post("/workflow/history/delete", async (req, res, next) => {
       req.session.activeInspection = null;
     }
     req.session.notice = { kind: "success", message: "The selected pipe inspection and its related records were deleted." };
-    res.redirect("/workflow/history");
+    res.redirect(safeRedirect);
   } catch (error) {
     next(error);
   }
@@ -2414,7 +2917,7 @@ app.get("/report/pipe/:pipeUnitId", async (req, res, next) => {
                         <span class="worksheet-meta-value">${escapeHtml(pipeRow.production_number)}</span>
                       </div>
                       <div class="worksheet-meta-row">
-                        <span class="worksheet-meta-label">Connection #:</span>
+                        <span class="worksheet-meta-label">Pipe #:</span>
                         <span class="worksheet-meta-value">${escapeHtml(pipeRow.pipe_number)}</span>
                       </div>
                       <div class="worksheet-meta-row">
@@ -2533,15 +3036,20 @@ app.get("/workflow/ncr", async (req, res, next) => {
 
 app.post("/workflow/start", async (req, res, next) => {
   try {
+    const previousSelection = req.session.selection || {};
+    const bodyValue = (name, fallback = "") =>
+      Object.prototype.hasOwnProperty.call(req.body, name)
+        ? req.body[name] || ""
+        : previousSelection[name] || fallback;
     const selection = {
-      productionNumber: req.body.productionNumber || "",
-      sizeLabel: req.body.sizeLabel || "",
-      weightLabel: req.body.weightLabel || "",
-      connectionLabel: req.body.connectionLabel || "",
-      endType: req.body.endType || "",
-      recipeName: req.body.recipeName || "",
-      pipeNumber: req.body.pipeNumber || "",
-      inspectionScope: req.body.inspectionScope || "standard",
+      productionNumber: bodyValue("productionNumber"),
+      sizeLabel: bodyValue("sizeLabel"),
+      weightLabel: bodyValue("weightLabel"),
+      connectionLabel: bodyValue("connectionLabel"),
+      endType: bodyValue("endType"),
+      recipeName: bodyValue("recipeName"),
+      pipeNumber: bodyValue("pipeNumber"),
+      inspectionScope: bodyValue("inspectionScope", "standard") || "standard",
     };
     req.session.selection = selection;
     req.session.showInspectionSheet = true;
@@ -2554,7 +3062,13 @@ app.post("/workflow/start", async (req, res, next) => {
       connection_label: selection.connectionLabel,
     });
     const lookupDescription = buildInspectionConnectionLabel(selection);
-    if (!lookupDescription) {
+    const hasRequiredConnectionDetails = [
+      selection.sizeLabel,
+      selection.weightLabel,
+      selection.connectionLabel,
+      selection.endType,
+    ].every((value) => String(value || "").trim());
+    if (!hasRequiredConnectionDetails) {
       req.session.notice = { kind: "warning", message: "Enter size, weight, connection, and Box/Pin before starting an inspection." };
       return res.redirect("/workflow/inspection");
     }
@@ -2635,6 +3149,42 @@ app.post("/workflow/start", async (req, res, next) => {
   }
 });
 
+app.post("/workflow/scope", async (req, res, next) => {
+  try {
+    const active = req.session.activeInspection;
+    const selection = req.session.selection || {};
+    const inspector = req.session.inspector;
+    if (!active || !selection.recipeName || !inspector) {
+      req.session.notice = { kind: "warning", message: "Start or resume an inspection before changing inspection scope." };
+      return res.redirect("/workflow/inspection");
+    }
+
+    const nextScope = String(req.body.inspectionScope || "").trim().toLowerCase() === "full" ? "full" : "standard";
+    const recipeDefinition = await callBridge("get_recipe_elements", {
+      recipe_name: selection.recipeName,
+      branch: inspector.branch,
+    });
+    const updated = await callBridge("update_inspection_attempt_scope", {
+      params: {
+        attempt_id: active.attempt_id,
+        recipe_elements: recipeDefinition,
+        inspection_scope: nextScope,
+      },
+    });
+
+    req.session.activeInspection = { ...active, ...updated };
+    req.session.selection = { ...selection, inspectionScope: nextScope };
+    req.session.showInspectionSheet = true;
+    req.session.notice = {
+      kind: "info",
+      message: nextScope === "full" ? "Switched this pipe to full inspection." : "Switched this pipe to standard inspection.",
+    };
+    res.redirect("/workflow/inspection");
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/workflow/complete", async (req, res, next) => {
   try {
     const active = req.session.activeInspection;
@@ -2690,13 +3240,18 @@ app.post("/workflow/complete", async (req, res, next) => {
       }
       disposition = failureAction;
     }
+    const attemptNotes = String(req.body.notes || "").trim();
+    const reliefNote = String(req.body.relief_note || "").trim();
+    const combinedNotes = [reliefNote ? `Relief / Coverage Notes: ${reliefNote}` : "", attemptNotes]
+      .filter(Boolean)
+      .join("\n\n");
     const result = await callBridge("complete_inspection_attempt", {
       params: {
         attempt_id: active.attempt_id,
         pipe_unit_id: active.pipe_unit_id,
         measurements: evaluation.measurements,
         disposition,
-        notes: req.body.notes || "",
+        notes: combinedNotes,
         manager_name: req.body.manager_name || "",
         manager_reason: req.body.manager_reason || "",
         ncr_data: {
@@ -2780,8 +3335,9 @@ app.get("/admin", async (req, res, next) => {
                  </div>
                  <div class="field">
                    <label>Location / Machine</label>
-                   <select name="location_id">${renderLocationOptions(locations, pending?.location?.id)}</select>
+                   <select name="location_id">${renderLocationOptions(locations, pending?.location?.id, inspector)}</select>
                  </div>
+                 ${renderFloatingTabletNoteField(pending?.floatingTabletNote || "")}
                  <div class="actions"><button class="button" type="submit">Prepare Floor Session</button></div>
                </form>
              </section>`
@@ -2792,6 +3348,7 @@ app.get("/admin", async (req, res, next) => {
           ? `<section class="card">
                <h2 class="section-title">Floor Session Ready</h2>
                <p>${escapeHtml(pending.inspector.name)} | ${escapeHtml(req.session.roleLabel || "Admin Access Only")} | ${escapeHtml(pending.shift)} | ${escapeHtml(pending.location.location_name)}</p>
+               ${pending.floatingTabletNote ? `<p><strong>Floating Tablet Note:</strong> ${escapeHtml(pending.floatingTabletNote)}</p>` : ""}
                <form method="post" action="/login/start" class="form-grid">
                  <div class="field">
                    <label>CNC Operator</label>
@@ -2870,9 +3427,12 @@ app.get("/admin", async (req, res, next) => {
                 <th>Digital IRR</th>
                 <th>Connection</th>
                 <th>Drawing</th>
+                <th>Revision</th>
                 <th>Source Report</th>
+                <th>Last Edit Comment</th>
                 <th>Updated</th>
                 <th>Admin</th>
+                <th>SharePoint</th>
               </tr>
             </thead>
             <tbody>
@@ -2882,9 +3442,16 @@ app.get("/admin", async (req, res, next) => {
                     <td>${escapeHtml(formatDigitalIrrName(recipe.recipe_name, recipe.drawing))}</td>
                     <td>${escapeHtml(recipe.connection_type)}</td>
                     <td>${escapeHtml(recipe.drawing)}</td>
+                    <td>${escapeHtml(recipe.recipe_version || 1)}</td>
                     <td>${escapeHtml(recipe.source_report)}</td>
+                    <td>${escapeHtml(recipe.last_edit_comment || "")}</td>
                     <td>${escapeHtml(formatDateValue(recipe.updated_at))}</td>
                     <td><a class="button secondary compact-button" href="/admin/recipes/${encodeURIComponent(recipe.id)}/edit">Edit</a></td>
+                    <td>
+                      <form method="post" action="/admin/recipes/${encodeURIComponent(recipe.id)}/publish">
+                        <button class="button compact-button" type="submit">Publish</button>
+                      </form>
+                    </td>
                   </tr>`,
                 )
                 .join("")}
@@ -2981,6 +3548,7 @@ app.get("/admin/recipes/:recipeHeaderId/edit", async (req, res, next) => {
       ${renderNotice(req.session.notice)}
       <section class="card">
         <h2 class="section-title">Edit Digital IRR</h2>
+        <p>Current revision: ${escapeHtml(recipe.recipe_version || 1)}. Saving changes will increment the revision number.</p>
         <form method="post" action="/admin/recipes/${encodeURIComponent(recipe.id)}/edit" class="form-grid">
           <div class="form-grid two">
             <div class="field"><label>Size</label><input name="size_label" value="${escapeHtml(recipeForm.size_label || "")}" required /></div>
@@ -2990,6 +3558,10 @@ app.get("/admin/recipes/:recipeHeaderId/edit", async (req, res, next) => {
             <div class="field"><label>Drawing Number</label><input name="drawing" value="${escapeHtml(recipeForm.drawing || "")}" /></div>
             <div class="field"><label>First Article</label><input name="first_article_label" value="${escapeHtml(recipeForm.first_article_label || "")}" /></div>
             <div class="field"><label>Source Report Title</label><input name="source_report" value="${escapeHtml(recipeForm.source_report || "")}" /></div>
+          </div>
+          <div class="field">
+            <label>Edit Comment</label>
+            <textarea name="edit_comment" rows="3" placeholder="State why this Digital IRR is being changed" required>${escapeHtml(editRecipeDraft?.edit_comment || "")}</textarea>
           </div>
           <div class="table-wrap recipe-builder-table-wrap">
             <table class="recipe-builder-table">
@@ -3067,4 +3639,23 @@ app.post("/admin/recipes/:recipeHeaderId/edit", async (req, res, next) => {
     req.session.notice = { kind: "warning", message: error.message || "Unable to update that local Digital IRR." };
     res.redirect(`/admin/recipes/${encodeURIComponent(req.params.recipeHeaderId)}/edit`);
   }
+});
+
+app.post("/admin/recipes/:recipeHeaderId/publish", async (req, res, next) => {
+  try {
+    if (!req.session.inspector || !req.session.canAccessAdmin) return res.redirect("/");
+    const result = await callBridge("publish_local_recipe_to_sharepoint", {
+      recipe_header_id: req.params.recipeHeaderId,
+    });
+    req.session.notice = {
+      kind: "success",
+      message: `SharePoint item ${result.action}: ${formatDigitalIrrName(result.recipe_name, result.drawing)} Rev ${result.recipe_version || 1}.`,
+    };
+  } catch (error) {
+    req.session.notice = {
+      kind: "warning",
+      message: error.message || "Unable to publish that Digital IRR to SharePoint.",
+    };
+  }
+  res.redirect("/admin");
 });

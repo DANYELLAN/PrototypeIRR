@@ -61,7 +61,14 @@ RECIPE_CONNECTION_TYPE_FIELDS = get_env_list(
 )
 RECIPE_VERSION_FIELDS = get_env_list(
     "RECIPE_VERSION_FIELDS",
-    ["RecipeVersion", "recipeVersion"],
+    [
+        "RecipeVersion",
+        "recipeVersion",
+        "Revision",
+        "RevisionNumber",
+        "Revision #",
+        "Revision_x0020__x0023_",
+    ],
 )
 RECIPE_JSON_FIELDS = get_env_list(
     "RECIPE_JSON_FIELDS",

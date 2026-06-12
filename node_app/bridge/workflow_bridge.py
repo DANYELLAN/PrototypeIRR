@@ -26,6 +26,7 @@ from workflow_db import (  # noqa: E402
     get_ncr_reports,
     get_open_work_orders,
     get_pipe_attempt_history,
+    get_pipe_history_details,
     get_recipe_builder_options,
     get_local_recipe_by_id,
     get_pipe_unit_by_id,
@@ -33,6 +34,7 @@ from workflow_db import (  # noqa: E402
     get_recipe_elements,
     list_local_recipes,
     publish_session_history,
+    publish_local_recipe_to_sharepoint,
     remember_inspection_entry_values,
     has_manager_pin,
     initialize_workflow_schema,
@@ -43,6 +45,8 @@ from workflow_db import (  # noqa: E402
     create_local_recipe,
     reset_in_progress_pipe_unit,
     update_local_recipe,
+    update_inspection_attempt_scope,
+    update_attempt_measurements,
     update_pipe_unit,
     update_ncr_report,
     unlock_location,
@@ -139,6 +143,8 @@ def main():
             return _result(get_pipe_unit_by_id(payload.get("pipe_unit_id")))
         if action == "get_pipe_attempt_history":
             return _result(get_pipe_attempt_history(payload.get("pipe_unit_id")))
+        if action == "get_pipe_history_details":
+            return _result(get_pipe_history_details(payload.get("pipe_unit_ids") or []))
         if action == "get_attempt_measurements":
             return _result(get_attempt_measurements(payload.get("attempt_id")))
         if action == "search_pipe_units":
@@ -187,6 +193,17 @@ def main():
                     payload.get("recipe_payload") or {},
                 )
             )
+        if action == "update_inspection_attempt_scope":
+            return _result(update_inspection_attempt_scope(**payload.get("params", {})))
+        if action == "update_attempt_measurements":
+            return _result(
+                update_attempt_measurements(
+                    payload.get("attempt_id"),
+                    payload.get("measurements") or [],
+                )
+            )
+        if action == "publish_local_recipe_to_sharepoint":
+            return _result(publish_local_recipe_to_sharepoint(payload.get("recipe_header_id")))
         if action == "evaluate_measurements":
             return _result(
                 evaluate_measurements(

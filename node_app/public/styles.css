@@ -197,6 +197,24 @@ a { color: inherit; text-decoration: none; }
   background: linear-gradient(135deg, var(--hero-start), var(--hero-end));
 }
 
+.home-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+}
+
+.home-hero-copy {
+  min-width: 0;
+}
+
+.home-hero-logo {
+  display: block;
+  width: clamp(260px, 28vw, 520px);
+  max-height: 120px;
+  object-fit: contain;
+}
+
 .hero .badges {
   display: flex;
   flex-wrap: wrap;
@@ -302,6 +320,11 @@ a { color: inherit; text-decoration: none; }
   display: block;
   margin-bottom: 0.4rem;
   font-weight: 600;
+}
+
+.required-marker {
+  color: #b72d2d;
+  font-weight: 800;
 }
 
 .field input,
@@ -1136,6 +1159,36 @@ details summary::-webkit-details-marker {
   cursor: pointer;
 }
 
+.pipe-history-connection-header.centered {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.pipe-history-header-actions {
+  display: flex;
+  gap: 0.35rem;
+  justify-content: center;
+  margin-top: 0.35rem;
+}
+
+.pipe-history-inline-action {
+  border: 1px solid rgba(23, 53, 45, 0.22);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.2rem 0.45rem;
+  text-decoration: none;
+}
+
+.pipe-history-inline-action.danger {
+  color: #8a1f17;
+}
+
 .inspection-sheet-row-muted td {
   background: rgba(120, 120, 120, 0.14);
   color: var(--muted);
@@ -1143,6 +1196,14 @@ details summary::-webkit-details-marker {
 
 .inspection-sheet-row-muted .inspection-measure-cell {
   background: rgba(120, 120, 120, 0.18);
+}
+
+.inspection-sheet-row-next td {
+  background: rgba(227, 242, 239, 0.5);
+}
+
+.inspection-sheet-row-next .inspection-measure-cell {
+  background: rgba(227, 242, 239, 0.75);
 }
 
 .inspection-sheet-row-rotating td {
@@ -1203,6 +1264,35 @@ details summary::-webkit-details-marker {
   width: 100%;
   min-width: 0;
   text-align: center;
+}
+
+.pipe-number-stepper {
+  display: grid;
+  grid-template-columns: 2.25rem minmax(0, 1fr) 2.25rem;
+  align-items: stretch;
+  gap: 0.25rem;
+  width: 100%;
+}
+
+.pipe-number-stepper input {
+  min-width: 0;
+}
+
+.pipe-number-step-button {
+  min-width: 0;
+  min-height: 2.45rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8f6ef;
+  color: var(--text);
+  font-size: 1.15rem;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pipe-number-step-button:hover {
+  background: #e7e4db;
 }
 
 .compact-button {
@@ -1628,6 +1718,13 @@ details summary::-webkit-details-marker {
   .report-grid,
   .signature-grid,
   .worksheet-meta-grid { grid-template-columns: 1fr; }
+  .home-hero {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .home-hero-logo {
+    width: min(100%, 420px);
+  }
   .inspection-sheet-meta-row { grid-template-columns: 1fr; }
   .inspection-entry-inline-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sidebar-collapsed .app-shell { grid-template-columns: 1fr; }
