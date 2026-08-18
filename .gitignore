@@ -207,3 +207,7 @@ marimo/_lsp/
 __marimo__/
 # Local auth/token caches
 .msal_token_cache.json
+
+# Sensitive local data
+data/
+node_app/data/
