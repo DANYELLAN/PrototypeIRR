@@ -1,0 +1,16 @@
+{
+  "name": "Benoit CNC Time Entry",
+  "short_name": "CNC Time",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3eee7",
+  "theme_color": "#8d1f24",
+  "description": "Installable web recreation of the Ennis CNC Time Entry PowerApp.",
+  "icons": [
+    {
+      "src": "/public/BenoitLogoRegistered-Red.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

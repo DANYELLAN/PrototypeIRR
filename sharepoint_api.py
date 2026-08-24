@@ -35,6 +35,30 @@ WORK_ORDER_SITE_LISTS = {
     ],
 }
 
+CNC_TIME_SITE_LISTS = {
+    "https://benoitinc.sharepoint.com/sites/QMS1061": [
+        "Employees",
+    ],
+    "https://benoitinc.sharepoint.com/sites/MachinistTime": [
+        "Stations",
+        "Ennis Start and Stop Time Inputs",
+        "Ennis Machinist Time Entry",
+        "Details Type",
+    ],
+    "https://benoitinc.sharepoint.com/sites/BenoitMaintenance1": [
+        "Assets",
+        "Locations",
+        "Ennis Maintenance Request",
+        "CNC Maintenace Pre-Use/Daily Checklist",
+    ],
+    "https://benoitinc.sharepoint.com/sites/BenoitIT677": [
+        "tblTechnicalSupportCategories",
+    ],
+    "https://benoitinc.sharepoint.com/sites/AcumaticaDataStorage": [
+        "Production Operations",
+    ],
+}
+
 SITE_LISTS_ENV = os.getenv("SITE_LISTS")
 if SITE_LISTS_ENV:
     SITE_LISTS = {
@@ -112,6 +136,11 @@ def sync_sharepoint_lists_to_postgres(site_lists=None, top=DEFAULT_TOP, fetch_al
 def sync_work_orders_to_postgres():
     """Refresh only the Production Operations work-order source list."""
     return sync_sharepoint_lists_to_postgres(site_lists=WORK_ORDER_SITE_LISTS, fetch_all=True)
+
+
+def sync_cnc_time_lists_to_postgres():
+    """Refresh the SharePoint lists used by the CNC Time Entry app."""
+    return sync_sharepoint_lists_to_postgres(site_lists=CNC_TIME_SITE_LISTS, fetch_all=True)
 
 
 def main():
