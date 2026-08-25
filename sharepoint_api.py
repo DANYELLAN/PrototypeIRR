@@ -6,6 +6,7 @@ from sharepoint_client import (
     SharePointApiError,
     build_headers,
     get_access_token,
+    get_access_token_from_env,
     get_multiple_lists,
     parse_site_url,
 )
@@ -42,7 +43,7 @@ CNC_TIME_SITE_LISTS = {
     "https://benoitinc.sharepoint.com/sites/MachinistTime": [
         "Stations",
         "Ennis Start and Stop Time Inputs",
-        "Ennis Machinist Time Entry",
+        "Ennis Machinist Time Entry1",
         "Details Type",
     ],
     "https://benoitinc.sharepoint.com/sites/BenoitMaintenance1": [
@@ -83,7 +84,7 @@ def print_item_preview(items, preview_fields=6):
         print(f"\n  ... {len(items) - 3} more items not shown")
 
 
-def sync_multiple_lists_to_postgres(connection, site_to_list_results, site_ids):
+def sync_multiple_lists_to_postgres(connection, site_to_list_results, site_ids, app_key="irr"):
     """Persist multiple SharePoint sites and lists to PostgreSQL."""
     sync_counts = {}
 
@@ -100,17 +101,25 @@ def sync_multiple_lists_to_postgres(connection, site_to_list_results, site_ids):
                 list_name,
                 items,
                 site_ids[site_url],
+                app_key=app_key,
             )
             sync_counts[site_url][list_name] = inserted_count
 
     return sync_counts
 
 
-def sync_sharepoint_lists_to_postgres(site_lists=None, top=DEFAULT_TOP, fetch_all=True):
+def sync_sharepoint_lists_to_postgres(
+    site_lists=None,
+    top=DEFAULT_TOP,
+    fetch_all=True,
+    app_key="irr",
+    token_env_prefix="SHAREPOINT",
+    allow_interactive=True,
+):
     """Fetch configured SharePoint lists and persist them to PostgreSQL."""
     selected_site_lists = site_lists or SITE_LISTS
 
-    token = get_access_token()
+    token = get_access_token_from_env(token_env_prefix, allow_interactive=allow_interactive)
     headers = build_headers(token)
     site_results, site_ids = get_multiple_lists(
         selected_site_lists,
@@ -122,7 +131,12 @@ def sync_sharepoint_lists_to_postgres(site_lists=None, top=DEFAULT_TOP, fetch_al
     connection = get_db_connection()
     try:
         initialize_database(connection)
-        sync_counts = sync_multiple_lists_to_postgres(connection, site_results, site_ids)
+        sync_counts = sync_multiple_lists_to_postgres(
+            connection,
+            site_results,
+            site_ids,
+            app_key=app_key,
+        )
     finally:
         connection.close()
 
@@ -135,12 +149,23 @@ def sync_sharepoint_lists_to_postgres(site_lists=None, top=DEFAULT_TOP, fetch_al
 
 def sync_work_orders_to_postgres():
     """Refresh only the Production Operations work-order source list."""
-    return sync_sharepoint_lists_to_postgres(site_lists=WORK_ORDER_SITE_LISTS, fetch_all=True)
+    return sync_sharepoint_lists_to_postgres(
+        site_lists=WORK_ORDER_SITE_LISTS,
+        fetch_all=True,
+        app_key="irr",
+        token_env_prefix="SHAREPOINT",
+    )
 
 
 def sync_cnc_time_lists_to_postgres():
     """Refresh the SharePoint lists used by the CNC Time Entry app."""
-    return sync_sharepoint_lists_to_postgres(site_lists=CNC_TIME_SITE_LISTS, fetch_all=True)
+    return sync_sharepoint_lists_to_postgres(
+        site_lists=CNC_TIME_SITE_LISTS,
+        fetch_all=True,
+        app_key="time_entry",
+        token_env_prefix="CNC_TIME_SHAREPOINT",
+        allow_interactive=False,
+    )
 
 
 def main():

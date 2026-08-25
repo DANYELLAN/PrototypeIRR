@@ -11,10 +11,11 @@ CREATE TABLE IF NOT EXISTS sharepoint_sites (
 CREATE TABLE IF NOT EXISTS sharepoint_lists (
     id SERIAL PRIMARY KEY,
     site_id INTEGER NOT NULL REFERENCES sharepoint_sites(id) ON DELETE CASCADE,
+    app_key TEXT NOT NULL DEFAULT 'irr',
     list_name TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (site_id, list_name)
+    UNIQUE (site_id, app_key, list_name)
 );
 
 CREATE TABLE IF NOT EXISTS sharepoint_items (

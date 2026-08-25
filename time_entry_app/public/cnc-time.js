@@ -1,19 +1,91 @@
 let deferredInstallPrompt = null;
+const INSTALL_FLAG_KEY = "cnc_time_app_installed";
+
+function hasInstallFlag() {
+  try {
+    return window.localStorage.getItem(INSTALL_FLAG_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function setInstallFlag() {
+  try {
+    window.localStorage.setItem(INSTALL_FLAG_KEY, "true");
+  } catch {
+    // Ignore storage restrictions; standalone detection will still work.
+  }
+}
+
+function hasInstalledLaunchFlag() {
+  try {
+    return new URLSearchParams(window.location.search).get("installed") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function isInstalledApp() {
+  return (
+    hasInstallFlag() ||
+    hasInstalledLaunchFlag() ||
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true
+  );
+}
+
+function hideInstallButton() {
+  const button = document.getElementById("install-app-button");
+  if (button) button.hidden = true;
+}
 
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
+  if (isInstalledApp()) return;
   deferredInstallPrompt = event;
   const button = document.getElementById("install-app-button");
   if (button) button.hidden = false;
 });
 
+window.addEventListener("appinstalled", () => {
+  setInstallFlag();
+  deferredInstallPrompt = null;
+  hideInstallButton();
+});
+
 window.addEventListener("load", () => {
+  if (hasInstalledLaunchFlag()) {
+    setInstallFlag();
+    if (window.history.replaceState) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }
+
+  const headerClock = document.getElementById("header_clock");
+  if (headerClock) {
+    const updateHeaderClock = () => {
+      headerClock.textContent = new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+    };
+    updateHeaderClock();
+    window.setInterval(updateHeaderClock, 1000);
+  }
+
   const installButton = document.getElementById("install-app-button");
   if (installButton) {
+    if (isInstalledApp()) {
+      hideInstallButton();
+    }
     installButton.addEventListener("click", async () => {
       if (!deferredInstallPrompt) return;
       deferredInstallPrompt.prompt();
-      await deferredInstallPrompt.userChoice;
+      const choice = await deferredInstallPrompt.userChoice;
+      if (choice?.outcome === "accepted") {
+        setInstallFlag();
+      }
       deferredInstallPrompt = null;
       installButton.hidden = true;
     });
@@ -61,15 +133,15 @@ window.addEventListener("load", () => {
           if (response.employee) {
             setMatchState(`Employee: ${response.employee.full_name} (${response.employee.emp_id})`, "success");
           } else {
-            setMatchState("No active Ennis machinist found for that ADP number.", "warning");
+            setMatchState("No active Ennis employee with app access found for that ADP number.", "warning");
           }
         } catch {
-          setMatchState("No active Ennis machinist found for that ADP number.", "warning");
+          setMatchState("No active Ennis employee with app access found for that ADP number.", "warning");
         }
       };
       xhr.onerror = () => {
         if (xhr !== activeLookup) return;
-        setMatchState("No active Ennis machinist found for that ADP number.", "warning");
+        setMatchState("No active Ennis employee with app access found for that ADP number.", "warning");
       };
       xhr.abort = xhr.abort || (() => {});
       xhr.send();
@@ -110,5 +182,29 @@ window.addEventListener("load", () => {
       });
     });
     locationSelect.dispatchEvent(new Event("change"));
+  });
+
+  const operationSelects = Array.from(document.querySelectorAll(".operation-select"));
+  operationSelects.forEach((operationSelect) => {
+    const form = operationSelect.closest("form");
+    const workOrderSelect = form ? form.querySelector('select[name="production_number"]') : null;
+    if (!workOrderSelect) return;
+
+    const syncOperations = () => {
+      const workOrder = workOrderSelect.value;
+      let visibleSelection = false;
+      Array.from(operationSelect.options).forEach((option) => {
+        const matches = !workOrder || option.dataset.wo === workOrder;
+        option.hidden = !matches;
+        if (matches && option.selected) visibleSelection = true;
+      });
+      if (!visibleSelection) {
+        const firstVisible = Array.from(operationSelect.options).find((option) => !option.hidden);
+        if (firstVisible) firstVisible.selected = true;
+      }
+    };
+
+    workOrderSelect.addEventListener("change", syncOperations);
+    syncOperations();
   });
 });

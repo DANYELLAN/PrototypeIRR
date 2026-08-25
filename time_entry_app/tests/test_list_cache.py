@@ -8,12 +8,15 @@ class ListCacheTests(unittest.TestCase):
     def setUp(self):
         backend.LIST_CACHE.clear()
         self.postgres_read_enabled = backend.POSTGRES_READ_ENABLED
+        self.allow_direct_sharepoint_reads = backend.ALLOW_DIRECT_SHAREPOINT_READS
         backend.POSTGRES_READ_ENABLED = False
+        backend.ALLOW_DIRECT_SHAREPOINT_READS = True
 
     def tearDown(self):
         backend.POSTGRES_READ_ENABLED = self.postgres_read_enabled
+        backend.ALLOW_DIRECT_SHAREPOINT_READS = self.allow_direct_sharepoint_reads
 
-    @patch.object(backend, "get_access_token", return_value="token")
+    @patch.object(backend, "_get_time_entry_access_token", return_value="token")
     @patch.object(backend, "build_headers", return_value={"Authorization": "Bearer token"})
     @patch.object(backend, "get_site_id", return_value="site-id")
     @patch.object(

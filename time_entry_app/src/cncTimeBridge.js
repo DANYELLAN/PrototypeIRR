@@ -7,6 +7,11 @@ const __dirname = path.dirname(__filename);
 const bridgeScript = path.resolve(__dirname, "..", "bridge", "cnc_time_bridge.py");
 const BRIDGE_CACHE_TTL_MS = 15000;
 const bridgeCache = new Map();
+const CACHEABLE_ACTIONS = new Set([
+  "get_sign_in_context",
+  "get_employee_lookup",
+  "get_dashboard_context",
+]);
 
 function makeCacheKey(action, extra = {}) {
   return JSON.stringify({
@@ -16,14 +21,21 @@ function makeCacheKey(action, extra = {}) {
 }
 
 export function callCncBridge(action, extra = {}) {
+  const cacheable = CACHEABLE_ACTIONS.has(action);
+  if (!cacheable) {
+    bridgeCache.clear();
+  }
+
   const cacheKey = makeCacheKey(action, extra);
   const now = Date.now();
-  const cached = bridgeCache.get(cacheKey);
-  if (cached && cached.expiresAt > now) {
-    return cached.promise;
-  }
-  if (cached) {
-    bridgeCache.delete(cacheKey);
+  if (cacheable) {
+    const cached = bridgeCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return cached.promise;
+    }
+    if (cached) {
+      bridgeCache.delete(cacheKey);
+    }
   }
 
   const promise = new Promise((resolve, reject) => {
@@ -60,10 +72,12 @@ export function callCncBridge(action, extra = {}) {
     });
   });
 
-  bridgeCache.set(cacheKey, {
-    promise,
-    expiresAt: now + BRIDGE_CACHE_TTL_MS,
-  });
+  if (cacheable) {
+    bridgeCache.set(cacheKey, {
+      promise,
+      expiresAt: now + BRIDGE_CACHE_TTL_MS,
+    });
+  }
 
   promise.catch(() => {
     bridgeCache.delete(cacheKey);

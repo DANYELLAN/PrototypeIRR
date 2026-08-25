@@ -692,6 +692,7 @@ def get_employee_by_adp(adp_number):
         FROM sharepoint_items si
         JOIN sharepoint_lists sl ON sl.id = si.list_id
         WHERE sl.list_name = 'Employees'
+          AND sl.app_key = 'irr'
         ORDER BY si.id
         """
     )
@@ -713,6 +714,7 @@ def get_cnc_operators(branch):
         FROM sharepoint_items si
         JOIN sharepoint_lists sl ON sl.id = si.list_id
         WHERE sl.list_name = 'Employees'
+          AND sl.app_key = 'irr'
         ORDER BY si.id
         """
     )
@@ -738,6 +740,7 @@ def get_manager_candidates(branch=None):
         FROM sharepoint_items si
         JOIN sharepoint_lists sl ON sl.id = si.list_id
         WHERE sl.list_name = 'Employees'
+          AND sl.app_key = 'irr'
         ORDER BY si.id
         """
     )
@@ -893,6 +896,7 @@ def get_open_work_orders(branch=None):
         FROM sharepoint_items si
         JOIN sharepoint_lists sl ON sl.id = si.list_id
         WHERE sl.list_name = 'Production Operations'
+          AND sl.app_key = 'irr'
         ORDER BY si.id
         """
     )
@@ -1047,6 +1051,7 @@ def get_recipe_builder_options(branch=None):
         FROM sharepoint_items si
         JOIN sharepoint_lists sl ON sl.id = si.list_id
         WHERE sl.list_name = 'InspectionRecipes'
+          AND sl.app_key = 'irr'
         ORDER BY si.id
         """
     )
@@ -1398,6 +1403,7 @@ def find_recipe_candidates(operation_description, branch=None):
         FROM sharepoint_items si
         JOIN sharepoint_lists sl ON sl.id = si.list_id
         WHERE sl.list_name = 'InspectionRecipes'
+          AND sl.app_key = 'irr'
         ORDER BY si.id
         """
     )
@@ -1515,6 +1521,7 @@ def get_recipe_elements(recipe_name, branch=None):
         FROM sharepoint_items si
         JOIN sharepoint_lists sl ON sl.id = si.list_id
         WHERE sl.list_name = 'InspectionRecipes'
+          AND sl.app_key = 'irr'
         ORDER BY si.id
         """
     )

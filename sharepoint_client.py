@@ -3,13 +3,13 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
-from msal import PublicClientApplication, SerializableTokenCache
+from msal import ConfidentialClientApplication, PublicClientApplication, SerializableTokenCache
 
 from config import get_env_int
 
 TENANT_ID = os.getenv("SHAREPOINT_TENANT_ID", "519943e3-a90d-49f1-a2a4-dd32f586c05f")
 CLIENT_ID = os.getenv("SHAREPOINT_CLIENT_ID", "5520a688-ca19-493f-9050-f5c356fbeaff")
-AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
+CLIENT_SECRET = os.getenv("SHAREPOINT_CLIENT_SECRET", "")
 GRAPH_SCOPES = ["https://graph.microsoft.com/.default"]
 GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 DEFAULT_TOP = get_env_int("SHAREPOINT_DEFAULT_TOP", 100)
@@ -17,61 +17,130 @@ TOKEN_CACHE_FILE = Path(os.getenv("SHAREPOINT_TOKEN_CACHE_FILE", ".msal_token_ca
 
 APP = None
 CACHE = None
+APP_CACHE = {}
+CACHE_BY_FILE = {}
 
 
-def _get_cache():
+def _authority(tenant_id):
+    return f"https://login.microsoftonline.com/{tenant_id}"
+
+
+def _get_cache(token_cache_file=TOKEN_CACHE_FILE):
     """Load a persisted MSAL token cache from disk when available."""
-    global CACHE
-    if CACHE is None:
+    cache_path = Path(token_cache_file)
+    if cache_path not in CACHE_BY_FILE:
         cache = SerializableTokenCache()
-        if TOKEN_CACHE_FILE.exists():
-            cache.deserialize(TOKEN_CACHE_FILE.read_text(encoding="utf-8"))
-        CACHE = cache
-    return CACHE
+        if cache_path.exists():
+            cache.deserialize(cache_path.read_text(encoding="utf-8"))
+        CACHE_BY_FILE[cache_path] = cache
+    return CACHE_BY_FILE[cache_path]
 
 
-def _save_cache():
+def _save_cache(token_cache_file=TOKEN_CACHE_FILE):
     """Persist the MSAL token cache so future refreshes reuse the session."""
-    cache = _get_cache()
+    cache_path = Path(token_cache_file)
+    cache = _get_cache(cache_path)
     if cache.has_state_changed:
-        TOKEN_CACHE_FILE.write_text(cache.serialize(), encoding="utf-8")
+        cache_path.write_text(cache.serialize(), encoding="utf-8")
 
 
 def get_msal_app():
     """Build the MSAL public client lazily so imports do not trigger network calls."""
-    global APP
-    if APP is None:
-        APP = PublicClientApplication(
-            client_id=CLIENT_ID,
-            authority=AUTHORITY,
-            token_cache=_get_cache(),
+    return get_public_msal_app(CLIENT_ID, TENANT_ID, TOKEN_CACHE_FILE)
+
+
+def get_public_msal_app(client_id, tenant_id, token_cache_file=TOKEN_CACHE_FILE):
+    """Build a cached public-client MSAL app for delegated Graph auth."""
+    cache_key = ("public", tenant_id, client_id, str(token_cache_file))
+    if cache_key not in APP_CACHE:
+        APP_CACHE[cache_key] = PublicClientApplication(
+            client_id=client_id,
+            authority=_authority(tenant_id),
+            token_cache=_get_cache(token_cache_file),
         )
-    return APP
+    return APP_CACHE[cache_key]
+
+
+def get_confidential_msal_app(client_id, tenant_id, client_secret):
+    """Build a cached confidential-client MSAL app for background Graph auth."""
+    cache_key = ("confidential", tenant_id, client_id)
+    if cache_key not in APP_CACHE:
+        APP_CACHE[cache_key] = ConfidentialClientApplication(
+            client_id=client_id,
+            authority=_authority(tenant_id),
+            client_credential=client_secret,
+        )
+    return APP_CACHE[cache_key]
 
 
 class SharePointApiError(Exception):
     """Raised when a SharePoint Graph request cannot be completed."""
 
 
-def get_access_token():
-    """Get an access token via MSAL cache or interactive browser login."""
-    app = get_msal_app()
+def get_access_token(
+    tenant_id=None,
+    client_id=None,
+    client_secret=None,
+    token_cache_file=None,
+    allow_interactive=True,
+):
+    """Get an access token via client credentials, token cache, or browser login."""
+    selected_tenant_id = tenant_id or TENANT_ID
+    selected_client_id = client_id or CLIENT_ID
+    selected_client_secret = client_secret if client_secret is not None else CLIENT_SECRET
+    selected_token_cache_file = Path(token_cache_file or TOKEN_CACHE_FILE)
+
+    if selected_client_secret:
+        app = get_confidential_msal_app(
+            selected_client_id,
+            selected_tenant_id,
+            selected_client_secret,
+        )
+        result = app.acquire_token_for_client(scopes=GRAPH_SCOPES)
+        if "access_token" in result:
+            return result["access_token"]
+        error_message = result.get("error_description", result)
+        raise SharePointApiError(f"Authentication failed: {error_message}")
+
+    app = get_public_msal_app(
+        selected_client_id,
+        selected_tenant_id,
+        selected_token_cache_file,
+    )
     accounts = app.get_accounts()
     if accounts:
         result = app.acquire_token_silent(GRAPH_SCOPES, account=accounts[0])
         if result and "access_token" in result:
-            _save_cache()
+            _save_cache(selected_token_cache_file)
             return result["access_token"]
+
+    if not allow_interactive:
+        raise SharePointApiError("Authentication failed: no cached token and interactive login is disabled.")
 
     print("Opening browser for sign-in...")
     result = app.acquire_token_interactive(scopes=GRAPH_SCOPES)
 
     if "access_token" in result:
-        _save_cache()
+        _save_cache(selected_token_cache_file)
         return result["access_token"]
 
     error_message = result.get("error_description", result)
     raise SharePointApiError(f"Authentication failed: {error_message}")
+
+
+def get_access_token_from_env(prefix="SHAREPOINT", allow_interactive=True):
+    """Get a Graph token from a named environment-variable prefix."""
+    tenant_id = os.getenv(f"{prefix}_TENANT_ID") or TENANT_ID
+    client_id = os.getenv(f"{prefix}_CLIENT_ID") or CLIENT_ID
+    client_secret = os.getenv(f"{prefix}_CLIENT_SECRET", "")
+    token_cache_file = os.getenv(f"{prefix}_TOKEN_CACHE_FILE") or TOKEN_CACHE_FILE
+    return get_access_token(
+        tenant_id=tenant_id,
+        client_id=client_id,
+        client_secret=client_secret,
+        token_cache_file=token_cache_file,
+        allow_interactive=allow_interactive,
+    )
 
 
 def build_headers(access_token):

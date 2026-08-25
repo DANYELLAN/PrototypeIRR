@@ -13,8 +13,10 @@ def _utc_now_iso():
 
 def _connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA journal_mode = WAL")
     return conn
 
 
@@ -67,6 +69,23 @@ def ensure_db():
             payload TEXT NOT NULL,
             created_at TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'queued'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS break_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entry_id TEXT NOT NULL,
+            emp_id TEXT,
+            employee_name TEXT,
+            machine_no TEXT,
+            break_type TEXT NOT NULL,
+            comment TEXT,
+            started_at TEXT NOT NULL,
+            ended_at TEXT,
+            duration_minutes INTEGER,
+            created_at TEXT NOT NULL
         )
         """
     )
@@ -210,3 +229,114 @@ def mark_record_synced(record_id):
     )
     conn.commit()
     conn.close()
+
+
+def discard_pending_record(record_id):
+    ensure_db()
+    conn = _connect()
+    conn.execute(
+        "DELETE FROM time_entries WHERE id = ? AND sync_status = 'pending'",
+        (record_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def patch_pending_record_fields(record_id, fields):
+    ensure_db()
+    if not fields:
+        return False
+    conn = _connect()
+    row = conn.execute(
+        "SELECT payload FROM time_entries WHERE id = ? AND sync_status = 'pending'",
+        (record_id,),
+    ).fetchone()
+    if not row:
+        conn.close()
+        return False
+
+    try:
+        payload = json.loads(row["payload"] or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+
+    payload_fields = payload.setdefault("fields", {})
+    payload_fields.update(fields)
+    conn.execute(
+        "UPDATE time_entries SET payload = ? WHERE id = ? AND sync_status = 'pending'",
+        (json.dumps(payload, default=str), record_id),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
+def start_break_event(entry_id, break_type, comment=None, machine_no=None, emp_id=None, employee_name=None, started_at=None):
+    ensure_db()
+    started = started_at or _utc_now_iso()
+    conn = _connect()
+    conn.execute(
+        """
+        INSERT INTO break_events (
+            entry_id, emp_id, employee_name, machine_no, break_type, comment, started_at, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(entry_id or "").strip(),
+            str(emp_id or "").strip(),
+            employee_name or "",
+            str(machine_no or "").strip(),
+            str(break_type or "").strip(),
+            comment or "",
+            started,
+            _utc_now_iso(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def finish_break_event(entry_id, ended_at=None, duration_minutes=None):
+    ensure_db()
+    ended = ended_at or _utc_now_iso()
+    conn = _connect()
+    row = conn.execute(
+        """
+        SELECT id FROM break_events
+        WHERE entry_id = ? AND ended_at IS NULL
+        ORDER BY started_at DESC
+        LIMIT 1
+        """,
+        (str(entry_id or "").strip(),),
+    ).fetchone()
+    if not row:
+        conn.close()
+        return False
+    conn.execute(
+        """
+        UPDATE break_events
+        SET ended_at = ?, duration_minutes = ?
+        WHERE id = ?
+        """,
+        (ended, duration_minutes, row["id"]),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
+def get_active_break_event(entry_id):
+    ensure_db()
+    conn = _connect()
+    row = conn.execute(
+        """
+        SELECT * FROM break_events
+        WHERE entry_id = ? AND ended_at IS NULL
+        ORDER BY started_at DESC
+        LIMIT 1
+        """,
+        (str(entry_id or "").strip(),),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None

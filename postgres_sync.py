@@ -24,10 +24,11 @@ CREATE TABLE IF NOT EXISTS sharepoint_sites (
 CREATE TABLE IF NOT EXISTS sharepoint_lists (
     id SERIAL PRIMARY KEY,
     site_id INTEGER NOT NULL REFERENCES sharepoint_sites(id) ON DELETE CASCADE,
+    app_key TEXT NOT NULL DEFAULT 'irr',
     list_name TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (site_id, list_name)
+    UNIQUE (site_id, app_key, list_name)
 );
 
 CREATE TABLE IF NOT EXISTS sharepoint_items (
@@ -77,6 +78,42 @@ def initialize_database(connection):
     """Create the baseline tables used for SharePoint sync."""
     with connection.cursor() as cursor:
         cursor.execute(CREATE_TABLES_SQL)
+        cursor.execute(
+            """
+            ALTER TABLE sharepoint_lists
+            ADD COLUMN IF NOT EXISTS app_key TEXT NOT NULL DEFAULT 'irr'
+            """
+        )
+        cursor.execute(
+            """
+            UPDATE sharepoint_lists
+            SET app_key = 'irr'
+            WHERE app_key IS NULL OR BTRIM(app_key) = ''
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE sharepoint_lists
+            DROP CONSTRAINT IF EXISTS sharepoint_lists_site_id_list_name_key
+            """
+        )
+        cursor.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = 'sharepoint_lists_site_id_app_key_list_name_key'
+                ) THEN
+                    ALTER TABLE sharepoint_lists
+                    ADD CONSTRAINT sharepoint_lists_site_id_app_key_list_name_key
+                    UNIQUE (site_id, app_key, list_name);
+                END IF;
+            END
+            $$;
+            """
+        )
     connection.commit()
 
 
@@ -102,18 +139,18 @@ def upsert_site(connection, site_url, site_host, site_path, graph_site_id):
     return site_id
 
 
-def upsert_list(connection, site_db_id, list_name):
+def upsert_list(connection, site_db_id, list_name, app_key="irr"):
     """Insert or update a SharePoint list row and return its database ID."""
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            INSERT INTO sharepoint_lists (site_id, list_name)
-            VALUES (%s, %s)
-            ON CONFLICT (site_id, list_name) DO UPDATE
+            INSERT INTO sharepoint_lists (site_id, app_key, list_name)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (site_id, app_key, list_name) DO UPDATE
             SET updated_at = NOW()
             RETURNING id
             """,
-            (site_db_id, list_name),
+            (site_db_id, app_key, list_name),
         )
         list_db_id = cursor.fetchone()[0]
 
@@ -168,9 +205,9 @@ def upsert_items(connection, list_db_id, items):
 
 
 def sync_list_to_postgres(
-    connection, site_url, site_host, site_path, list_name, items, graph_site_id
+    connection, site_url, site_host, site_path, list_name, items, graph_site_id, app_key="irr"
 ):
     """Persist one SharePoint list and its items to PostgreSQL."""
     site_db_id = upsert_site(connection, site_url, site_host, site_path, graph_site_id)
-    list_db_id = upsert_list(connection, site_db_id, list_name)
+    list_db_id = upsert_list(connection, site_db_id, list_name, app_key=app_key)
     return upsert_items(connection, list_db_id, items)

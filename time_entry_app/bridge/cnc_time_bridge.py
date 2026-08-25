@@ -9,9 +9,13 @@ for candidate in (str(PROJECT_ROOT), str(APP_ROOT)):
         sys.path.insert(0, candidate)
 
 from time_entry_app.bridge.cnc_time_backend import (  # noqa: E402
+    correct_time_entry,
+    delete_time_entry,
+    edit_active_time_entry,
     get_dashboard_context,
     get_employee_lookup,
     get_sign_in_context,
+    get_time_export_rows,
     pause_for_lunch,
     resume_from_lunch,
     send_it_request,
@@ -67,6 +71,8 @@ def main():
             )
         if action == "get_dashboard_context":
             return _result(get_dashboard_context(payload.get("emp_id"), payload.get("user_email")))
+        if action == "get_time_export_rows":
+            return _result(get_time_export_rows(payload.get("start_date"), payload.get("end_date")))
         if action == "sync_reference_data_from_sharepoint":
             return _result(sync_reference_data_from_sharepoint())
         if action == "sync_pending_writes_to_sharepoint":
@@ -85,11 +91,47 @@ def main():
                 )
             )
         if action == "pause_for_lunch":
-            return _result(pause_for_lunch(payload.get("entry_id")))
+            return _result(
+                pause_for_lunch(
+                    payload.get("entry_id"),
+                    payload.get("break_type"),
+                    payload.get("comments"),
+                )
+            )
         if action == "resume_from_lunch":
             return _result(resume_from_lunch(payload.get("entry_id")))
         if action == "stop_time_entry":
-            return _result(stop_time_entry(payload.get("entry_id")))
+            return _result(stop_time_entry(payload.get("entry_id"), payload.get("quantity")))
+        if action == "edit_active_time_entry":
+            return _result(
+                edit_active_time_entry(
+                    payload.get("entry_id"),
+                    payload.get("production_number"),
+                    payload.get("operation_id"),
+                    payload.get("detail_type"),
+                    payload.get("downtime_reason"),
+                    payload.get("quantity"),
+                    payload.get("break_minutes"),
+                    payload.get("comments"),
+                )
+            )
+        if action == "correct_time_entry":
+            return _result(
+                correct_time_entry(
+                    payload.get("entry_id"),
+                    payload.get("production_number"),
+                    payload.get("operation_id"),
+                    payload.get("detail_type"),
+                    payload.get("downtime_reason"),
+                    payload.get("quantity"),
+                    payload.get("break_minutes"),
+                    payload.get("total_hours"),
+                    payload.get("total_minutes_remainder"),
+                    payload.get("comments"),
+                )
+            )
+        if action == "delete_time_entry":
+            return _result(delete_time_entry(payload.get("entry_id"), payload.get("entry_list")))
         if action == "submit_misc_time":
             return _result(
                 submit_misc_time(
@@ -97,6 +139,8 @@ def main():
                     payload.get("shift_id"),
                     payload.get("machine_no"),
                     payload.get("detail_type_ii"),
+                    payload.get("production_number"),
+                    payload.get("operation_id"),
                     payload.get("hours"),
                     payload.get("minutes"),
                     payload.get("comments"),

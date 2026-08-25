@@ -15,12 +15,17 @@ LOCAL_MACHINE_CONFIG = APP_ROOT / "config" / "machines.json"
 import requests
 
 from local_store import (
+    discard_pending_record,
     ensure_db,
+    finish_break_event,
+    get_active_break_event,
     get_machine_options,
     list_pending_records,
     mark_record_synced,
+    patch_pending_record_fields,
     queue_record,
     save_session,
+    start_break_event,
     upsert_machine_options,
 )
 from postgres_sync import get_db_connection, initialize_database, sync_list_to_postgres
@@ -29,7 +34,7 @@ from sharepoint_client import (
     GRAPH_BASE_URL,
     SharePointApiError,
     build_headers,
-    get_access_token,
+    get_access_token_from_env,
     get_list_items,
     get_site_id,
 )
@@ -52,7 +57,7 @@ LISTS = {
     "timeentry": {
         "site": MACHINIST_TIME_SITE,
         "id": "a5849673-cc3e-47a3-8e1d-aec90d2374cc",
-        "name": "Ennis Machinist Time Entry",
+        "name": "Ennis Machinist Time Entry1",
     },
     "detail_types": {
         "site": MACHINIST_TIME_SITE,
@@ -96,11 +101,76 @@ SHIFT_OPTIONS = [
     {"id": 41, "title": "Night Shift"},
 ]
 
+DEFAULT_DETAIL_TYPES = [
+    {"item_id": 1, "title": "Set-Up", "option_step": 2, "type_ii": "", "branch": "Ennis"},
+    {"item_id": 2, "title": "Machining", "option_step": 2, "type_ii": "", "branch": "Ennis"},
+    {"item_id": 3, "title": "Downtime", "option_step": 2, "type_ii": "Downtime", "branch": "Ennis"},
+    {"item_id": 4, "title": "Turn & Bore", "option_step": 2, "type_ii": "", "branch": "Ennis"},
+    {"item_id": 5, "title": "Change Over", "option_step": 2, "type_ii": "", "branch": "Ennis"},
+]
+
+DOWNTIME_REASONS = [
+    {"code": "M1", "category": "MACHINE", "label": "DT- M1 (MACHINE)"},
+    {"code": "M2", "category": "MACHINE", "label": "DT- M2 (MACHINE)"},
+    {"code": "M3", "category": "MACHINE", "label": "DT- M3 (MACHINE)"},
+    {"code": "M4", "category": "MACHINE", "label": "DT- M4 (MACHINE)"},
+    {"code": "M5", "category": "MACHINE", "label": "DT- M5 (MACHINE)"},
+    {"code": "M6", "category": "MACHINE", "label": "DT- M6 (MACHINE)"},
+    {"code": "INS 1", "category": "INSPECTION", "label": "DT- INS 1 (INSPECTION)"},
+    {"code": "INS 2", "category": "INSPECTION", "label": "DT- INS 2 (INSPECTION)"},
+    {"code": "INS 3", "category": "INSPECTION", "label": "DT- INS 3 (INSPECTION)"},
+    {"code": "INS 4", "category": "INSPECTION", "label": "DT- INS 4 (INSPECTION)"},
+    {"code": "SB1", "category": "SANDBLAST", "label": "DT- SB1 (SANDBLAST)"},
+    {"code": "SB2", "category": "SANDBLAST", "label": "DT- SB2 (SANDBLAST)"},
+    {"code": "SB3", "category": "SANDBLAST", "label": "DT- SB3 (SANDBLAST)"},
+    {"code": "SB4", "category": "SANDBLAST", "label": "DT- SB4 (SANDBLAST)"},
+    {"code": "SW", "category": "SWAGE", "label": "DT- SW (SWAGE)"},
+    {"code": "QA", "category": "QUALITY", "label": "DT- QA (QUALITY)"},
+    {"code": "OPS", "category": "OPERATIONS", "label": "DT- OPS (OPERATIONS)"},
+    {"code": "AIR", "category": "AIR COMPRESSOR", "label": "DT- AIR (AIR COMPRESSOR)"},
+    {"code": "WOP", "category": "WAITING ON PIPE", "label": "DT- WOP (WAITING ON PIPE)"},
+    {"code": "TT", "category": "TURN AROUND TABLE", "label": "DT- TT (TURN AROUND TABLE)"},
+]
+
+ACUMATICA_DEFAULTS = {
+    "branch": "ENNIS",
+    "uom": "JOINT",
+    "warehouse": "EN-FG SSOT",
+    "location": "CUST REC",
+    "qty_scrapped": 0,
+    "labor_rate": 123.3000,
+}
+
 OUTBOX_FILE = Path(__file__).resolve().parents[1] / "data" / "cnc_time_outbox.jsonl"
 SITE_ID_CACHE = {}
 LIST_CACHE = {}
 CACHE_TTL_SECONDS = 30
 POSTGRES_READ_ENABLED = os.getenv("CNC_TIME_POSTGRES_READ_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+APP_KEY = "time_entry"
+SHARED_REFERENCE_FALLBACK_APP_KEY = "irr"
+SHARED_REFERENCE_LIST_KEYS = {"employees", "work_orders"}
+SHAREPOINT_WRITES_ENABLED = os.getenv("CNC_TIME_SHAREPOINT_WRITES_ENABLED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+ALLOW_DIRECT_SHAREPOINT_READS = os.getenv("CNC_TIME_ALLOW_DIRECT_SHAREPOINT_READS", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+EXPORTER_DEPARTMENT_KEYWORDS = tuple(
+    item.strip().lower()
+    for item in os.getenv("CNC_TIME_EXPORT_DEPARTMENT_KEYWORDS", "Logistics 1,shipping,receiving,shipping and receiving").split(",")
+    if item.strip()
+)
+EXPORTER_ADP_NUMBERS = {
+    (item.strip()[:-2] if item.strip().endswith(".0") else item.strip()).lstrip("0") or item.strip()
+    for item in os.getenv("CNC_TIME_EXPORT_ADP_NUMBERS", "").replace(";", ",").split(",")
+    if item.strip()
+}
 
 WRITE_RECORD_TARGETS = {
     "startstop": {"list_key": "startstop", "mode": "create"},
@@ -112,7 +182,15 @@ WRITE_RECORD_TARGETS = {
     "pause_lunch": {"list_key": "startstop", "mode": "update"},
     "resume_lunch": {"list_key": "startstop", "mode": "update"},
     "complete_startstop": {"list_key": "startstop", "mode": "update"},
+    "active_time_correction": {"list_key": "startstop", "mode": "update"},
+    "timeentry_correction": {"list_key": "timeentry", "mode": "update"},
+    "startstop_delete": {"list_key": "startstop", "mode": "delete"},
+    "timeentry_delete": {"list_key": "timeentry", "mode": "delete"},
 }
+
+
+class SharePointWritesDisabled(Exception):
+    """Raised when the app is running in local-only write mode."""
 
 
 def _utc_now():
@@ -121,6 +199,10 @@ def _utc_now():
 
 def _iso_now():
     return _utc_now().isoformat()
+
+
+def _get_time_entry_access_token():
+    return get_access_token_from_env("CNC_TIME_SHAREPOINT", allow_interactive=False)
 
 
 def _site_id(site_url, headers):
@@ -159,17 +241,13 @@ def _read_synced_list(list_key):
     try:
         initialize_database(connection)
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT si.sharepoint_item_id, si.etag, si.web_url, si.fields_json, si.raw_item_json
-                FROM sharepoint_items si
-                JOIN sharepoint_lists sl ON sl.id = si.list_id
-                WHERE sl.list_name = %s
-                ORDER BY si.id
-                """,
-                (config["name"],),
-            )
-            rows = cursor.fetchall()
+            rows = _fetch_synced_list_rows(cursor, config["name"], APP_KEY)
+            if not rows and list_key in SHARED_REFERENCE_LIST_KEYS:
+                rows = _fetch_synced_list_rows(
+                    cursor,
+                    config["name"],
+                    SHARED_REFERENCE_FALLBACK_APP_KEY,
+                )
     finally:
         connection.close()
 
@@ -185,7 +263,22 @@ def _read_synced_list(list_key):
     return items
 
 
-def _cache_fetched_list(list_key, items):
+def _fetch_synced_list_rows(cursor, list_name, app_key):
+    cursor.execute(
+        """
+        SELECT si.sharepoint_item_id, si.etag, si.web_url, si.fields_json, si.raw_item_json
+        FROM sharepoint_items si
+        JOIN sharepoint_lists sl ON sl.id = si.list_id
+        WHERE sl.list_name = %s
+          AND sl.app_key = %s
+        ORDER BY si.id
+        """,
+        (list_name, app_key),
+    )
+    return cursor.fetchall()
+
+
+def _cache_fetched_list(list_key, items, graph_site_id=None):
     """Persist a directly fetched SharePoint list so later page loads use Postgres."""
     if not POSTGRES_READ_ENABLED or not items:
         return
@@ -200,7 +293,8 @@ def _cache_fetched_list(list_key, items):
             *parse_site_parts(config["site"]),
             config["name"],
             items,
-            _site_id(config["site"], build_headers(get_access_token())),
+            graph_site_id or _site_id(config["site"], build_headers(_get_time_entry_access_token())),
+            app_key=APP_KEY,
         )
     finally:
         connection.close()
@@ -230,9 +324,10 @@ def _patch_synced_item_fields(list_key, item_id, fields):
                 FROM sharepoint_lists sl
                 WHERE sl.id = si.list_id
                   AND sl.list_name = %s
+                  AND sl.app_key = %s
                   AND si.sharepoint_item_id = %s
                 """,
-                (json.dumps(fields), json.dumps(fields), config["name"], str(item_id)),
+                (json.dumps(fields), json.dumps(fields), config["name"], APP_KEY, str(item_id)),
             )
         connection.commit()
     finally:
@@ -262,19 +357,24 @@ def _read_list(list_key, fetch_all=True, top=500):
     except Exception:
         pass
 
-    token = get_access_token()
+    if not ALLOW_DIRECT_SHAREPOINT_READS:
+        LIST_CACHE[cache_key] = {"items": [], "time": now}
+        return []
+
+    token = _get_time_entry_access_token()
     headers = build_headers(token)
     config = LISTS[list_key]
+    site_id = _site_id(config["site"], headers)
     items = get_list_items(
         config["site"],
         config["id"],
         headers=headers,
         top=top,
-        site_id=_site_id(config["site"], headers),
+        site_id=site_id,
         fetch_all=fetch_all,
     )
     try:
-        _cache_fetched_list(list_key, items)
+        _cache_fetched_list(list_key, items, graph_site_id=site_id)
     except Exception:
         pass
     LIST_CACHE[cache_key] = {"items": items, "time": now}
@@ -293,6 +393,15 @@ def sync_pending_writes_to_sharepoint(limit=50):
     """Replay locally queued app writes to SharePoint when connectivity returns."""
     ensure_db()
     records = list_pending_records(limit=limit)
+    if not SHAREPOINT_WRITES_ENABLED:
+        return {
+            "synced": 0,
+            "failed": 0,
+            "skipped": len(records),
+            "dry_run": True,
+            "message": "SharePoint writes are disabled.",
+        }
+
     synced = 0
     failed = 0
     skipped = 0
@@ -307,11 +416,17 @@ def sync_pending_writes_to_sharepoint(limit=50):
         try:
             payload = json.loads(record.get("payload") or "{}")
             fields = payload.get("fields") or {}
-            if not fields:
+            if target["mode"] != "delete" and not fields:
                 skipped += 1
                 continue
 
-            if target["mode"] == "update":
+            if target["mode"] == "delete":
+                item_id = payload.get("item_id") or payload.get("entry_id")
+                if not item_id:
+                    skipped += 1
+                    continue
+                _delete_item(target["list_key"], item_id)
+            elif target["mode"] == "update":
                 item_id = payload.get("item_id") or payload.get("entry_id")
                 if not item_id:
                     skipped += 1
@@ -341,7 +456,10 @@ def sync_background_jobs():
 
 
 def _create_item(list_key, fields):
-    token = get_access_token()
+    if not SHAREPOINT_WRITES_ENABLED:
+        raise SharePointWritesDisabled("SharePoint writes are disabled.")
+
+    token = _get_time_entry_access_token()
     headers = build_headers(token)
     headers["Content-Type"] = "application/json"
     config = LISTS[list_key]
@@ -353,14 +471,17 @@ def _create_item(list_key, fields):
         {"fields": fields},
     )
     try:
-        _cache_fetched_list(list_key, [item])
+        _cache_fetched_list(list_key, [item], graph_site_id=site_id)
     except Exception:
         pass
     return item
 
 
 def _update_item(list_key, item_id, fields):
-    token = get_access_token()
+    if not SHAREPOINT_WRITES_ENABLED:
+        raise SharePointWritesDisabled("SharePoint writes are disabled.")
+
+    token = _get_time_entry_access_token()
     headers = build_headers(token)
     headers["Content-Type"] = "application/json"
     config = LISTS[list_key]
@@ -377,11 +498,64 @@ def _update_item(list_key, item_id, fields):
         pass
 
 
+def _delete_item(list_key, item_id):
+    if not SHAREPOINT_WRITES_ENABLED:
+        raise SharePointWritesDisabled("SharePoint writes are disabled.")
+
+    token = _get_time_entry_access_token()
+    headers = build_headers(token)
+    config = LISTS[list_key]
+    site_id = _site_id(config["site"], headers)
+    _request(
+        "DELETE",
+        f"/sites/{site_id}/lists/{config['id']}/items/{item_id}",
+        headers,
+    )
+    try:
+        _delete_synced_item(list_key, item_id)
+    except Exception:
+        pass
+
+
+def _delete_synced_item(list_key, item_id):
+    if not POSTGRES_READ_ENABLED or not item_id:
+        return
+
+    config = LISTS[list_key]
+    connection = get_db_connection()
+    try:
+        initialize_database(connection)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                DELETE FROM sharepoint_items si
+                USING sharepoint_lists sl
+                WHERE sl.id = si.list_id
+                  AND sl.list_name = %s
+                  AND sl.app_key = %s
+                  AND si.sharepoint_item_id = %s
+                """,
+                (config["name"], APP_KEY, str(item_id)),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def _value(fields, *keys):
     for key in keys:
         if key in fields and fields[key] not in (None, ""):
             return fields[key]
     return None
+
+
+def _joined_values(fields, *keys):
+    values = []
+    for key in keys:
+        value = fields.get(key)
+        if value not in (None, ""):
+            values.append(str(value).strip())
+    return " ".join(value for value in values if value)
 
 
 def _as_bool(value):
@@ -401,6 +575,14 @@ def _as_number(value, default=0):
         return default
 
 
+def _normalize_identifier(value):
+    text = str(value or "").strip()
+    if text.endswith(".0"):
+        text = text[:-2]
+    normalized = text.lstrip("0")
+    return normalized or text
+
+
 def _shift_label(shift_id):
     for option in SHIFT_OPTIONS:
         if str(option["id"]) == str(shift_id):
@@ -418,6 +600,25 @@ def _hhmm_from_minutes(minutes_value):
 def _normalize_employee(item):
     fields = item.get("fields", {})
     full_name = _value(fields, "Full_x0020_Name", "FullName", "Title")
+    department = _value(
+        fields,
+        "DepartmentName",
+        "Department",
+        "HomeDepartment",
+        "field_20",
+        "Dept",
+        "EmployeeDepartment",
+    )
+    title = _value(
+        fields,
+        "PositionTitle",
+        "ADPJobTitleDesc",
+        "JobTitle",
+        "Title_x0020_Position",
+        "Position",
+        "field_6",
+        "field_21",
+    )
     return {
         "item_id": item.get("id"),
         "emp_id": str(_value(fields, "ADPEmpNumber", "field_0", "EmployeeID", "EmpID") or "").strip(),
@@ -427,20 +628,51 @@ def _normalize_employee(item):
         "branch": str(_value(fields, "Branches", "field_22", "Branch") or "").strip(),
         "status": str(_value(fields, "Status", "field_19") or "").strip(),
         "machinist": _as_bool(_value(fields, "Machinist", "machinist", "IsMachinist")),
+        "department": str(department or "").strip(),
+        "job_title": str(title or "").strip(),
+        "role_text": _joined_values(
+            fields,
+            "DepartmentName",
+            "HomeDepartment",
+            "PositionTitle",
+            "ADPJobTitleDesc",
+            "field_6",
+            "JobTitleCode2",
+        ),
     }
 
 
-def lookup_employee_by_adp(adp_number, employee_items=None):
+def _is_active_ennis_employee(employee):
+    return employee["status"].lower() == "active" and employee["branch"].lower() == "ennis"
+
+
+def _employee_roles(employee):
+    roles = []
+    normalized_emp_id = _normalize_identifier(employee.get("emp_id"))
+    if employee.get("machinist"):
+        roles.append("operator")
+    searchable = " ".join(
+        str(employee.get(key) or "").lower()
+        for key in ("department", "job_title", "role_text", "full_name")
+    )
+    if normalized_emp_id in EXPORTER_ADP_NUMBERS or any(keyword in searchable for keyword in EXPORTER_DEPARTMENT_KEYWORDS):
+        roles.append("exporter")
+    return roles
+
+
+def lookup_employee_by_adp(adp_number, employee_items=None, required_role=None):
     items = employee_items if employee_items is not None else _read_list("employees")
+    normalized_adp_number = _normalize_identifier(adp_number)
     for item in items:
         candidate = _normalize_employee(item)
-        if (
-            str(candidate["emp_id"]).strip() == str(adp_number).strip()
-            and candidate["status"].lower() == "active"
-            and candidate["branch"].lower() == "ennis"
-            and candidate["machinist"]
-        ):
-            return candidate
+        if _normalize_identifier(candidate["emp_id"]) != normalized_adp_number or not _is_active_ennis_employee(candidate):
+            continue
+        candidate["roles"] = _employee_roles(candidate)
+        if required_role and required_role not in candidate["roles"]:
+            continue
+        if not required_role and not candidate["roles"]:
+            continue
+        return candidate
     return None
 
 
@@ -453,6 +685,8 @@ def get_employee_lookup(adp_number):
         "full_name": employee["full_name"],
         "first_name": employee["first_name"],
         "last_name": employee["last_name"],
+        "roles": employee.get("roles", []),
+        "department": employee.get("department", ""),
     }
 
 
@@ -480,6 +714,141 @@ def _normalize_detail_type(item):
     }
 
 
+def _detail_types():
+    details = [
+        item
+        for item in (_normalize_detail_type(entry) for entry in _read_list("detail_types"))
+        if item["branch"].lower() == "ennis"
+    ]
+    return details or list(DEFAULT_DETAIL_TYPES)
+
+
+def _downtime_reason_code(value):
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("Downtime reason is required.")
+
+    normalized = raw.upper().removeprefix("DT-").strip()
+    if "(" in normalized:
+        normalized = normalized.split("(", 1)[0].strip()
+    normalized = " ".join(normalized.split())
+
+    for reason in DOWNTIME_REASONS:
+        if normalized in {
+            reason["code"].upper(),
+            reason["label"].upper(),
+            f"DT- {reason['code']}".upper(),
+        }:
+            return reason["code"]
+
+    raise ValueError("The selected downtime reason is not valid.")
+
+
+def _detail_code(detail_type, downtime_reason=None):
+    detail = str(detail_type or "").strip()
+    if detail.lower() in {"downtime", "dt"}:
+        return "DT", _downtime_reason_code(downtime_reason) if str(downtime_reason or "").strip() else ""
+    return detail, ""
+
+
+def _time_entry_comment(detail_code, reason_code="", comments=None, fallback=""):
+    note = str(comments or "").strip()
+    if detail_code == "DT":
+        if reason_code and note:
+            return f"{reason_code} - {note}"
+        return reason_code or note
+    return note or str(fallback or "").strip()
+
+
+def _break_counts_against_production(break_event):
+    break_type = str((break_event or {}).get("break_type") or "Lunch").strip()
+    return break_type in {"Lunch", "No Relief"}
+
+
+def _get_operation_for_employee(employee, production_number, operation_id, error_message):
+    context = get_dashboard_context(employee["emp_id"], "")
+    operation = next(
+        (
+            item
+            for item in context["operations"]
+            if item["production_number"] == production_number and item["operation_id"] == operation_id
+        ),
+        None,
+    )
+    if not operation:
+        raise ValueError(error_message)
+    return operation
+
+
+def _get_operation(production_number, operation_id, error_message):
+    operation = next(
+        (
+            item
+            for item in (_normalize_work_order(entry) for entry in _read_list("work_orders", fetch_all=True))
+            if item["production_number"] == production_number and item["operation_id"] == operation_id
+        ),
+        None,
+    )
+    if not operation:
+        raise ValueError(error_message)
+    return operation
+
+
+def _operation_fields(operation, production_number, operation_id):
+    return {
+        "Title": production_number,
+        "ProductionNo": production_number,
+        "OrderType": operation["order_type"] or "EN",
+        "InventoryID": operation["inventory_id"],
+        "Description": operation["description"],
+        "OperationDescription": operation["operation_description"],
+        "OperationID": operation_id,
+    }
+
+
+def _acumatica_labor_transaction(fields, reason_code="", labor_rate=None):
+    total_minutes = int(_as_number(fields.get("TotalMinutes"), 0))
+    quantity = _as_number(fields.get("Quantity"), 0)
+    rate = _as_number(labor_rate, ACUMATICA_DEFAULTS["labor_rate"])
+    labor_hours = round(total_minutes / 60, 4)
+    return {
+        "tran_description": str(fields.get("TranDescription") or fields.get("DetailsType") or "").strip(),
+        "detail_type": str(fields.get("DetailsType") or "").strip(),
+        "employee_id": str(fields.get("EmployeeID") or "").strip(),
+        "machine_no": str(fields.get("MachineNo") or "").strip(),
+        "labor_type": str(fields.get("LaborType") or "Direct").strip(),
+        "order_type": str(fields.get("OrderType") or "EN").strip(),
+        "production_number": str(fields.get("ProductionNo") or fields.get("Title") or "").strip(),
+        "operation_id": str(fields.get("OperationID") or "").strip(),
+        "inventory_id": str(fields.get("InventoryID") or "").strip(),
+        "branch": ACUMATICA_DEFAULTS["branch"],
+        "shift": str(fields.get("Shift") or "").strip(),
+        "labor_time": _hhmm_from_minutes(total_minutes),
+        "labor_minutes": total_minutes,
+        "labor_hours": labor_hours,
+        "labor_rate": rate,
+        "labor_amount": round(labor_hours * rate, 2),
+        "quantity": quantity,
+        "uom": ACUMATICA_DEFAULTS["uom"],
+        "warehouse": ACUMATICA_DEFAULTS["warehouse"],
+        "location": ACUMATICA_DEFAULTS["location"],
+        "qty_scrapped": ACUMATICA_DEFAULTS["qty_scrapped"],
+        "reason_code": reason_code or "",
+    }
+
+
+def _acumatica_downtime_transactions(fields, reason_code):
+    positive = _acumatica_labor_transaction(fields, reason_code=reason_code)
+    negative = dict(positive)
+    negative["labor_time"] = "-00:01"
+    negative["labor_minutes"] = -1
+    negative["labor_hours"] = round(-1 / 60, 4)
+    negative["labor_amount"] = round(negative["labor_hours"] * negative["labor_rate"], 2)
+    negative["quantity"] = -1
+    negative["qty_scrapped"] = 0
+    return [positive, negative]
+
+
 def _normalize_work_order(item):
     fields = item.get("fields", {})
     return {
@@ -499,6 +868,7 @@ def _normalize_work_order(item):
 def _normalize_startstop(item):
     fields = item.get("fields", {})
     return {
+        "entry_list": "startstop",
         "id": int(_as_number(fields.get("ID"), 0)),
         "sp_id": item.get("id"),
         "status": str(_value(fields, "Status") or "").strip(),
@@ -510,6 +880,7 @@ def _normalize_startstop(item):
         "operation_description": str(_value(fields, "OperationDescription") or "").strip(),
         "machine_no": str(_value(fields, "MachineNo") or "").strip(),
         "details_type": str(_value(fields, "DetailsType") or "").strip(),
+        "tran_description": str(_value(fields, "TranDescription") or "").strip(),
         "emp_id": str(_value(fields, "EmpID", "EmployeeID") or "").strip(),
         "employee_id": str(_value(fields, "EmployeeID") or "").strip(),
         "operators_name": str(_value(fields, "OperatorsName") or "").strip(),
@@ -530,6 +901,7 @@ def _normalize_startstop(item):
 def _normalize_timeentry(item):
     fields = item.get("fields", {})
     return {
+        "entry_list": "timeentry",
         "id": int(_as_number(fields.get("ID"), 0)),
         "sp_id": item.get("id"),
         "status": str(_value(fields, "Status") or "").strip(),
@@ -558,6 +930,140 @@ def _normalize_timeentry(item):
         "average": _as_number(fields.get("Average"), 0),
         "start_stop_id": _as_number(fields.get("StartStopID"), 0),
     }
+
+
+def _pending_payload(record):
+    try:
+        return json.loads(record.get("payload") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+
+def _local_record_key(value):
+    text = str(value or "").strip()
+    return text.removeprefix("local:")
+
+
+def _local_startstop_entries(emp_id=None):
+    starts = {}
+    for record in reversed(list_pending_records(limit=500)):
+        payload = _pending_payload(record)
+        fields = payload.get("fields") or {}
+        record_type = record.get("record_type")
+
+        if record_type == "startstop":
+            local_id = str(record["id"])
+            item = _normalize_startstop({"id": local_id, "fields": fields})
+            item["id"] = record["id"]
+            item["sp_id"] = f"local:{record['id']}"
+            starts[local_id] = item
+            continue
+
+        if record_type in {"pause_lunch", "resume_lunch", "complete_startstop", "active_time_correction"}:
+            target_id = _local_record_key(payload.get("item_id") or payload.get("entry_id"))
+            if target_id in starts:
+                updated = dict(starts[target_id])
+                updated_fields = dict(fields)
+                if "LunchStart" in updated_fields:
+                    updated["lunch_start"] = updated_fields["LunchStart"]
+                if "LunchStop" in updated_fields:
+                    updated["lunch_stop"] = updated_fields["LunchStop"]
+                if "Status" in updated_fields:
+                    updated["status"] = str(updated_fields["Status"] or "").strip()
+                if "End" in updated_fields:
+                    updated["end"] = updated_fields["End"]
+                if "BreakMinutes" in updated_fields:
+                    updated["break_minutes"] = _as_number(updated_fields["BreakMinutes"], updated["break_minutes"])
+                if "TotalMinutes" in updated_fields:
+                    updated["total_minutes"] = _as_number(updated_fields["TotalMinutes"], updated["total_minutes"])
+                if "Total" in updated_fields:
+                    updated["total"] = str(updated_fields["Total"] or "")
+                if "Quantity" in updated_fields:
+                    updated["quantity"] = _as_number(updated_fields["Quantity"], updated["quantity"])
+                if "Average" in updated_fields:
+                    updated["average"] = _as_number(updated_fields["Average"], updated["average"])
+                if "Title" in updated_fields or "ProductionNo" in updated_fields:
+                    updated["production_number"] = str(
+                        updated_fields.get("ProductionNo") or updated_fields.get("Title") or updated["production_number"]
+                    )
+                if "InventoryID" in updated_fields:
+                    updated["inventory_id"] = str(updated_fields["InventoryID"] or "")
+                if "Description" in updated_fields:
+                    updated["description"] = str(updated_fields["Description"] or "")
+                if "OperationID" in updated_fields:
+                    updated["operation_id"] = str(updated_fields["OperationID"] or "")
+                if "OperationDescription" in updated_fields:
+                    updated["operation_description"] = str(updated_fields["OperationDescription"] or "")
+                if "DetailsType" in updated_fields:
+                    updated["details_type"] = str(updated_fields["DetailsType"] or "")
+                if "TranDescription" in updated_fields:
+                    updated["tran_description"] = str(updated_fields["TranDescription"] or "")
+                starts[target_id] = updated
+
+    entries = list(starts.values())
+    if emp_id is not None:
+        entries = [item for item in entries if _normalize_identifier(item.get("emp_id")) == _normalize_identifier(emp_id)]
+    return entries
+
+
+def _local_timeentry_entries(emp_id=None):
+    entries_by_id = {}
+    corrections = []
+    for record in list_pending_records(limit=500):
+        record_type = record.get("record_type")
+        payload = _pending_payload(record)
+        fields = payload.get("fields") or {}
+
+        if record_type == "timeentry_correction":
+            corrections.append((payload, fields))
+            continue
+
+        if record_type not in {"stop_time_entry", "misc_time", "manual_time"}:
+            continue
+        if not fields:
+            continue
+        item = _normalize_timeentry({"id": str(record["id"]), "fields": fields})
+        item["id"] = record["id"]
+        item["sp_id"] = f"local:{record['id']}"
+        entries_by_id[str(record["id"])] = item
+
+    for payload, fields in corrections:
+        target_id = _local_record_key(payload.get("item_id") or payload.get("entry_id"))
+        if target_id in entries_by_id:
+            updated = dict(entries_by_id[target_id])
+            if "Quantity" in fields:
+                updated["quantity"] = _as_number(fields["Quantity"], updated["quantity"])
+            if "BreakMinutes" in fields:
+                updated["break_minutes"] = _as_number(fields["BreakMinutes"], updated["break_minutes"])
+            if "TotalMinutes" in fields:
+                updated["total_minutes"] = _as_number(fields["TotalMinutes"], updated["total_minutes"])
+            if "Total" in fields:
+                updated["total"] = str(fields["Total"] or "")
+            if "Average" in fields:
+                updated["average"] = _as_number(fields["Average"], updated["average"])
+            if "Title" in fields or "ProductionNo" in fields:
+                updated["production_number"] = str(fields.get("ProductionNo") or fields.get("Title") or updated["production_number"])
+            if "InventoryID" in fields:
+                updated["inventory_id"] = str(fields["InventoryID"] or "")
+            if "Description" in fields:
+                updated["description"] = str(fields["Description"] or "")
+            if "OperationID" in fields:
+                updated["operation_id"] = str(fields["OperationID"] or "")
+            if "OperationDescription" in fields:
+                updated["operation_description"] = str(fields["OperationDescription"] or "")
+            if "DetailsType" in fields:
+                updated["details_type"] = str(fields["DetailsType"] or "")
+            if "DetailsTypeII" in fields:
+                updated["details_type_ii"] = str(fields["DetailsTypeII"] or "")
+            if "TranDescription" in fields:
+                updated["tran_description"] = str(fields["TranDescription"] or "")
+            entries_by_id[target_id] = updated
+
+    entries = list(entries_by_id.values())
+
+    if emp_id is not None:
+        entries = [item for item in entries if _normalize_identifier(item.get("emp_id")) == _normalize_identifier(emp_id)]
+    return entries
 
 
 def _normalize_location(item):
@@ -669,7 +1175,7 @@ def get_sign_in_context():
 def sign_in(adp_number, user_email, shift_id, machine_no=None):
     employee = lookup_employee_by_adp(adp_number)
     if not employee:
-        raise ValueError("No active Ennis machinist was found for that ADP number.")
+        raise ValueError("No active Ennis employee with Time Entry access was found for that ADP number.")
 
     station = None
     email_key = str(user_email or "").strip().lower()
@@ -722,6 +1228,7 @@ def sign_in(adp_number, user_email, shift_id, machine_no=None):
     )
     return {
         "employee": employee,
+        "roles": employee.get("roles", []),
         "user_email": email_key,
         "shift_id": int(_as_number(shift_id, 40)),
         "shift_title": _shift_label(shift_id),
@@ -731,11 +1238,7 @@ def sign_in(adp_number, user_email, shift_id, machine_no=None):
 
 
 def get_dashboard_context(emp_id, user_email):
-    details = [
-        item
-        for item in (_normalize_detail_type(entry) for entry in _read_list("detail_types"))
-        if item["branch"].lower() == "ennis"
-    ]
+    details = _detail_types()
     work_orders = [
         item
         for item in (_normalize_work_order(entry) for entry in _read_list("work_orders", fetch_all=True))
@@ -746,11 +1249,13 @@ def get_dashboard_context(emp_id, user_email):
         for item in (_normalize_startstop(entry) for entry in _read_list("startstop", fetch_all=True))
         if item["emp_id"] == str(emp_id)
     ]
+    startstop_entries.extend(_local_startstop_entries(emp_id))
     final_entries = [
         item
         for item in (_normalize_timeentry(entry) for entry in _read_list("timeentry", fetch_all=True))
         if item["emp_id"] == str(emp_id)
     ]
+    final_entries.extend(_local_timeentry_entries(emp_id))
     tech_categories = [
         item for item in (_normalize_tech_category(entry) for entry in _read_list("tech_categories")) if item["id"] in {1, 2, 9}
     ]
@@ -771,8 +1276,13 @@ def get_dashboard_context(emp_id, user_email):
         ),
         None,
     )
+    visible_startstop_entries = [
+        item
+        for item in startstop_entries
+        if item["status"] in {"In Progress", "Paused"}
+    ]
     recent_entries = sorted(
-        final_entries + startstop_entries,
+        final_entries + visible_startstop_entries,
         key=lambda row: (str(row.get("labor_date") or ""), int(row.get("id") or 0)),
         reverse=True,
     )[:40]
@@ -784,9 +1294,11 @@ def get_dashboard_context(emp_id, user_email):
     return {
         "machine_no": station["machine_no"] if station else "",
         "active_entry": active_entry,
+        "active_break": get_active_break_event(active_entry["sp_id"]) if active_entry else None,
         "recent_entries": recent_entries,
         "details_step_one": [item for item in details if item["option_step"] == 1],
         "details_step_two": [item for item in details if item["option_step"] == 2],
+        "downtime_reasons": DOWNTIME_REASONS,
         "work_orders": sorted(grouped_workorders.keys()),
         "operations": work_orders,
         "tech_categories": tech_categories,
@@ -795,8 +1307,51 @@ def get_dashboard_context(emp_id, user_email):
     }
 
 
+def get_time_export_rows(start_date=None, end_date=None):
+    start_text = str(start_date or "").strip()
+    end_text = str(end_date or "").strip()
+    rows = [_normalize_timeentry(entry) for entry in _read_list("timeentry", fetch_all=True)]
+    rows.extend(_local_timeentry_entries())
+    filtered = []
+    for row in rows:
+        labor_date = str(row.get("labor_date") or "")[:10]
+        if start_text and labor_date < start_text:
+            continue
+        if end_text and labor_date > end_text:
+            continue
+        filtered.append({
+            "labor_date": labor_date,
+            "status": row.get("status", ""),
+            "production_number": row.get("production_number", ""),
+            "operation_id": row.get("operation_id", ""),
+            "operation_description": row.get("operation_description", ""),
+            "detail": row.get("details_type", ""),
+            "dt_reason": row.get("details_type_ii", ""),
+            "comments": row.get("tran_description", ""),
+            "employee_id": row.get("employee_id") or row.get("emp_id", ""),
+            "operator": row.get("operators_name", ""),
+            "machine_no": row.get("machine_no", ""),
+            "shift": row.get("shift", ""),
+            "start": row.get("start", ""),
+            "end": row.get("end", ""),
+            "break_minutes": row.get("break_minutes", 0),
+            "total": row.get("total", ""),
+            "total_minutes": row.get("total_minutes", 0),
+            "quantity": row.get("quantity", 0),
+            "average": row.get("average", 0),
+        })
+    return sorted(
+        filtered,
+        key=lambda item: (str(item.get("labor_date") or ""), str(item.get("machine_no") or ""), str(item.get("start") or "")),
+        reverse=True,
+    )
+
+
 def start_time_entry(employee, shift_id, machine_no, production_number, operation_id, detail_type):
     context = get_dashboard_context(employee["emp_id"], "")
+    if context.get("active_entry"):
+        raise ValueError("An active time entry is already running. Stop or edit the active entry before starting another.")
+
     operation = next(
         (
             item
@@ -807,6 +1362,7 @@ def start_time_entry(employee, shift_id, machine_no, production_number, operatio
     )
     if not operation:
         raise ValueError("The selected work order operation could not be found.")
+    detail_code, _ = _detail_code(detail_type)
 
     fields = {
         "Title": production_number,
@@ -825,7 +1381,7 @@ def start_time_entry(employee, shift_id, machine_no, production_number, operatio
         "OperatorsName": employee["full_name"],
         "Shift": str(shift_id),
         "OperationID": operation_id,
-        "DetailsType": detail_type,
+        "DetailsType": detail_code,
         "Quantity": 0,
         "Start": _iso_now(),
         "BreakMinutes": 0,
@@ -837,7 +1393,7 @@ def start_time_entry(employee, shift_id, machine_no, production_number, operatio
     ensure_db()
     queued_id = queue_record(
         "startstop",
-        {"employee": employee, "shift_id": shift_id, "machine_no": machine_no, "production_number": production_number, "operation_id": operation_id, "detail_type": detail_type, "fields": fields},
+        {"employee": employee, "shift_id": shift_id, "machine_no": machine_no, "production_number": production_number, "operation_id": operation_id, "detail_type": detail_code, "fields": fields},
         machine_no=machine_no,
         emp_id=employee.get("emp_id"),
         employee_name=employee.get("full_name"),
@@ -853,25 +1409,288 @@ def start_time_entry(employee, shift_id, machine_no, production_number, operatio
 
 def _get_startstop_by_id(entry_id):
     normalized = [_normalize_startstop(item) for item in _read_list("startstop", fetch_all=True)]
+    normalized.extend(_local_startstop_entries())
     for item in normalized:
         if str(item["sp_id"]) == str(entry_id) or str(item["id"]) == str(entry_id):
             return item
     raise ValueError("The requested active time entry could not be found.")
 
 
-def pause_for_lunch(entry_id):
+def _get_timeentry_by_id(entry_id):
+    normalized = [_normalize_timeentry(item) for item in _read_list("timeentry", fetch_all=True)]
+    normalized.extend(_local_timeentry_entries())
+    for item in normalized:
+        if str(item["sp_id"]) == str(entry_id) or str(item["id"]) == str(entry_id):
+            return item
+    raise ValueError("The requested submitted time entry could not be found.")
+
+
+def _nonnegative_number(value, default=None):
+    if value is None or str(value).strip() == "":
+        return default
+    number = _as_number(value, default if default is not None else 0)
+    if number < 0:
+        raise ValueError("Correction values cannot be negative.")
+    return number
+
+
+def _worked_minutes_from_entry(entry, break_minutes):
+    start_value = entry.get("start")
+    end_value = entry.get("end")
+    if not start_value or not end_value:
+        return None
+    start_dt = datetime.fromisoformat(str(start_value).replace("Z", "+00:00"))
+    end_dt = datetime.fromisoformat(str(end_value).replace("Z", "+00:00"))
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=timezone.utc)
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=timezone.utc)
+    elapsed = max(int((end_dt - start_dt).total_seconds() // 60), 0)
+    return max(elapsed - int(break_minutes), 0)
+
+
+def _recalculate_average(quantity, total_minutes):
+    return round(quantity / (total_minutes / 60), 2) if total_minutes and total_minutes > 0 else 0
+
+
+def edit_active_time_entry(
+    entry_id,
+    production_number=None,
+    operation_id=None,
+    detail_type=None,
+    downtime_reason=None,
+    quantity=None,
+    break_minutes=None,
+    comments=None,
+):
     entry = _get_startstop_by_id(entry_id)
-    fields = {"LunchStart": _iso_now(), "Status": "Paused"}
+    fields = {}
+    qty = _nonnegative_number(quantity, None)
+    corrected_break_minutes = _nonnegative_number(break_minutes, None)
+    selected_production = str(production_number or "").strip()
+    selected_operation = str(operation_id or "").strip()
+    selected_detail = str(detail_type or "").strip()
+    downtime_reason_was_sent = downtime_reason is not None
+
+    if selected_production and selected_operation:
+        if selected_production != entry.get("production_number") or selected_operation != entry.get("operation_id"):
+            operation = _get_operation(
+                selected_production,
+                selected_operation,
+                "The selected work order operation could not be found.",
+            )
+            fields.update(_operation_fields(operation, selected_production, selected_operation))
+    if selected_detail and (selected_detail != entry.get("details_type") or str(downtime_reason or "").strip()):
+        detail_code, reason_code = _detail_code(selected_detail, downtime_reason)
+        fields["DetailsType"] = detail_code
+        if detail_code == "DT":
+            fields["TranDescription"] = _time_entry_comment(detail_code, reason_code, comments)
+    if qty is not None:
+        fields["Quantity"] = qty
+    if corrected_break_minutes is not None:
+        fields["BreakMinutes"] = corrected_break_minutes
+    note = str(comments or "").strip()
+    if note and "TranDescription" not in fields:
+        fields["TranDescription"] = note
+    if not fields:
+        raise ValueError("Enter a correction to save.")
+
+    item_id = entry["sp_id"]
+    if str(item_id).startswith("local:"):
+        local_id = int(_as_number(_local_record_key(item_id), 0))
+        patch_pending_record_fields(local_id, fields)
+        return {"corrected": True, "offline_only": True, "updated_pending_record": True}
+
     queued_id = queue_record(
-        "pause_lunch",
-        {"entry_id": entry_id, "item_id": entry["sp_id"], "fields": fields},
+        "active_time_correction",
+        {"entry_id": item_id, "item_id": item_id, "fields": fields},
         machine_no=entry.get("machine_no"),
         emp_id=entry.get("emp_id"),
         employee_name=entry.get("operators_name"),
         source="offline-first",
     )
     try:
-        _update_item("startstop", entry["sp_id"], fields)
+        _update_item("startstop", item_id, fields)
+        mark_record_synced(queued_id)
+        return {"corrected": True}
+    except Exception:
+        try:
+            _patch_synced_item_fields("startstop", item_id, fields)
+        except Exception:
+            pass
+        return {"corrected": False, "queued": True, "offline_only": True}
+
+
+def correct_time_entry(
+    entry_id,
+    production_number=None,
+    operation_id=None,
+    detail_type=None,
+    downtime_reason=None,
+    quantity=None,
+    break_minutes=None,
+    total_hours=None,
+    total_minutes_remainder=None,
+    comments=None,
+):
+    entry = _get_timeentry_by_id(entry_id)
+    fields = {}
+    qty = _nonnegative_number(quantity, entry.get("quantity"))
+    corrected_break_minutes = _nonnegative_number(break_minutes, entry.get("break_minutes"))
+    selected_production = str(production_number or "").strip()
+    selected_operation = str(operation_id or "").strip()
+    selected_detail = str(detail_type or "").strip()
+
+    if selected_production and selected_operation:
+        if selected_production != entry.get("production_number") or selected_operation != entry.get("operation_id"):
+            operation = _get_operation(
+                selected_production,
+                selected_operation,
+                "The selected work order operation could not be found.",
+            )
+            fields.update(_operation_fields(operation, selected_production, selected_operation))
+
+    detail_code = entry.get("details_type") or ""
+    reason_code = entry.get("details_type_ii") or ""
+    if selected_detail:
+        detail_code, reason_code = _detail_code(selected_detail, downtime_reason)
+        fields["DetailsType"] = detail_code
+        fields["DetailsTypeII"] = reason_code if detail_code == "DT" else ""
+    elif str(downtime_reason or "").strip():
+        detail_code = "DT"
+        reason_code = _downtime_reason_code(downtime_reason)
+        fields["DetailsType"] = detail_code
+        fields["DetailsTypeII"] = reason_code
+
+    if quantity is not None and str(quantity).strip() != "":
+        fields["Quantity"] = qty
+    if break_minutes is not None and str(break_minutes).strip() != "":
+        fields["BreakMinutes"] = corrected_break_minutes
+        total_minutes = _worked_minutes_from_entry(entry, corrected_break_minutes)
+        if total_minutes is not None:
+            fields["TotalMinutes"] = total_minutes
+            fields["Total"] = _hhmm_from_minutes(total_minutes)
+    else:
+        total_minutes = entry.get("total_minutes")
+
+    if total_hours is not None and str(total_hours).strip() != "":
+        hours = _nonnegative_number(total_hours, 0)
+        minutes = _nonnegative_number(total_minutes_remainder, 0)
+        if minutes >= 60:
+            raise ValueError("Total minutes must be less than 60.")
+        total_minutes = int(hours * 60 + minutes)
+        fields["TotalMinutes"] = total_minutes
+        fields["Total"] = _hhmm_from_minutes(total_minutes)
+
+    if "Quantity" in fields or "TotalMinutes" in fields:
+        fields["Average"] = _recalculate_average(qty, _as_number(fields.get("TotalMinutes"), total_minutes))
+    if selected_detail or downtime_reason_was_sent or comments is not None:
+        comment_value = _time_entry_comment(
+            detail_code,
+            reason_code,
+            comments,
+            fields.get("OperationDescription") or entry.get("operation_description"),
+        )
+        fields["TranDescription"] = comment_value
+    if not fields:
+        raise ValueError("Enter a correction to save.")
+
+    item_id = entry["sp_id"]
+    if str(item_id).startswith("local:"):
+        local_id = int(_as_number(_local_record_key(item_id), 0))
+        patch_pending_record_fields(local_id, fields)
+        return {"corrected": True, "offline_only": True, "updated_pending_record": True}
+
+    queued_id = queue_record(
+        "timeentry_correction",
+        {"entry_id": item_id, "item_id": item_id, "fields": fields},
+        machine_no=entry.get("machine_no"),
+        emp_id=entry.get("emp_id"),
+        employee_name=entry.get("operators_name"),
+        source="offline-first",
+    )
+    try:
+        _patch_synced_item_fields("timeentry", item_id, fields)
+    except Exception:
+        pass
+    try:
+        _update_item("timeentry", item_id, fields)
+        mark_record_synced(queued_id)
+        return {"corrected": True}
+    except Exception:
+        return {"corrected": False, "queued": True, "offline_only": True}
+
+
+def delete_time_entry(entry_id, entry_list="timeentry"):
+    list_key = str(entry_list or "timeentry").strip()
+    if list_key not in {"timeentry", "startstop"}:
+        raise ValueError("The selected entry type cannot be deleted.")
+
+    item_id = str(entry_id or "").strip()
+    if not item_id:
+        raise ValueError("The requested time entry could not be found.")
+
+    if item_id.startswith("local:"):
+        local_id = int(_as_number(_local_record_key(item_id), 0))
+        discard_pending_record(local_id)
+        return {"deleted": True, "offline_only": True, "removed_pending_record": True}
+
+    entry = _get_timeentry_by_id(item_id) if list_key == "timeentry" else _get_startstop_by_id(item_id)
+    queued_id = queue_record(
+        f"{list_key}_delete",
+        {"entry_id": item_id, "item_id": item_id},
+        machine_no=entry.get("machine_no"),
+        emp_id=entry.get("emp_id"),
+        employee_name=entry.get("operators_name"),
+        source="offline-first",
+    )
+    try:
+        _delete_synced_item(list_key, item_id)
+    except Exception:
+        pass
+    try:
+        _delete_item(list_key, item_id)
+        mark_record_synced(queued_id)
+        return {"deleted": True}
+    except Exception:
+        return {"deleted": False, "queued": True, "offline_only": True}
+
+
+def pause_for_lunch(entry_id, break_type=None, comments=None):
+    entry = _get_startstop_by_id(entry_id)
+    if entry.get("status") == "Paused":
+        raise ValueError("This entry is already paused.")
+    selected_break_type = str(break_type or "Lunch").strip()
+    if selected_break_type not in {"Lunch", "With Relief", "No Relief"}:
+        raise ValueError("Select a valid break type.")
+    break_start = _iso_now()
+    fields = {"LunchStart": break_start, "LunchStop": None, "Status": "Paused"}
+    item_id = entry["sp_id"]
+    start_break_event(
+        item_id,
+        selected_break_type,
+        comments,
+        machine_no=entry.get("machine_no"),
+        emp_id=entry.get("emp_id"),
+        employee_name=entry.get("operators_name"),
+        started_at=break_start,
+    )
+    queued_id = queue_record(
+        "pause_lunch",
+        {
+            "entry_id": item_id,
+            "item_id": item_id,
+            "fields": fields,
+            "break_type": selected_break_type,
+            "break_comment": str(comments or "").strip(),
+        },
+        machine_no=entry.get("machine_no"),
+        emp_id=entry.get("emp_id"),
+        employee_name=entry.get("operators_name"),
+        source="offline-first",
+    )
+    try:
+        _update_item("startstop", item_id, fields)
         mark_record_synced(queued_id)
         return {"paused": True}
     except Exception:
@@ -885,35 +1704,44 @@ def resume_from_lunch(entry_id):
         raise ValueError("Lunch start time is missing for this entry.")
     lunch_start_dt = datetime.fromisoformat(str(lunch_start).replace("Z", "+00:00"))
     now_dt = _utc_now()
-    break_minutes = entry["break_minutes"] + max(int((now_dt - lunch_start_dt).total_seconds() // 60), 0)
+    current_break_minutes = max(int((now_dt - lunch_start_dt).total_seconds() // 60), 0)
+    item_id = entry["sp_id"]
+    active_break = get_active_break_event(item_id)
+    deducted_minutes = current_break_minutes if _break_counts_against_production(active_break) else 0
+    break_minutes = entry["break_minutes"] + deducted_minutes
     fields = {"LunchStop": now_dt.isoformat(), "Status": "In Progress", "BreakMinutes": break_minutes}
+    finish_break_event(item_id, ended_at=now_dt.isoformat(), duration_minutes=current_break_minutes)
     queued_id = queue_record(
         "resume_lunch",
-        {"entry_id": entry_id, "item_id": entry["sp_id"], "fields": fields},
+        {"entry_id": item_id, "item_id": item_id, "fields": fields},
         machine_no=entry.get("machine_no"),
         emp_id=entry.get("emp_id"),
         employee_name=entry.get("operators_name"),
         source="offline-first",
     )
     try:
-        _update_item("startstop", entry["sp_id"], fields)
+        _update_item("startstop", item_id, fields)
         mark_record_synced(queued_id)
         return {"resumed": True}
     except Exception:
         return {"resumed": False, "queued": True, "offline_only": True}
 
 
-def stop_time_entry(entry_id):
+def stop_time_entry(entry_id, quantity=None):
     entry = _get_startstop_by_id(entry_id)
     start_dt = datetime.fromisoformat(str(entry["start"]).replace("Z", "+00:00"))
     end_dt = _utc_now()
     break_minutes = entry["break_minutes"]
     if entry["lunch_start"] and not entry["lunch_stop"]:
         lunch_start_dt = datetime.fromisoformat(str(entry["lunch_start"]).replace("Z", "+00:00"))
-        break_minutes += max(int((end_dt - lunch_start_dt).total_seconds() // 60), 0)
+        active_break = get_active_break_event(entry["sp_id"])
+        current_break_minutes = max(int((end_dt - lunch_start_dt).total_seconds() // 60), 0)
+        if _break_counts_against_production(active_break):
+            break_minutes += current_break_minutes
+        finish_break_event(entry["sp_id"], ended_at=end_dt.isoformat(), duration_minutes=current_break_minutes)
     worked_minutes = max(int((end_dt - start_dt).total_seconds() // 60) - int(break_minutes), 0)
-    quantity = 1
-    average = round(quantity / (worked_minutes / 60), 2) if worked_minutes > 0 else 0
+    qty = _as_number(quantity, 1)
+    average = round(qty / (worked_minutes / 60), 2) if worked_minutes > 0 else 0
 
     updated_fields = {
         "End": end_dt.isoformat(),
@@ -922,19 +1750,20 @@ def stop_time_entry(entry_id):
         "BreakMinutes": break_minutes,
         "TotalMinutes": worked_minutes,
         "Total": _hhmm_from_minutes(worked_minutes),
-        "Quantity": quantity,
+        "Quantity": qty,
         "Average": average,
     }
+    item_id = entry["sp_id"]
     complete_queued_id = queue_record(
         "complete_startstop",
-        {"entry_id": entry_id, "item_id": entry["sp_id"], "fields": updated_fields},
+        {"entry_id": item_id, "item_id": item_id, "fields": updated_fields},
         machine_no=entry.get("machine_no"),
         emp_id=entry.get("emp_id"),
         employee_name=entry.get("operators_name"),
         source="offline-first",
     )
     try:
-        _update_item("startstop", entry["sp_id"], updated_fields)
+        _update_item("startstop", item_id, updated_fields)
         mark_record_synced(complete_queued_id)
     except Exception:
         pass
@@ -952,7 +1781,7 @@ def stop_time_entry(entry_id):
         "EmpID": int(_as_number(entry["emp_id"], 0)),
         "EmployeeID": entry["employee_id"],
         "OperationID": entry["operation_id"],
-        "Quantity": quantity,
+        "Quantity": qty,
         "BreakMinutes": break_minutes,
         "TotalMinutes": worked_minutes,
         "Total": _hhmm_from_minutes(worked_minutes),
@@ -965,14 +1794,15 @@ def stop_time_entry(entry_id):
         "LunchStart": entry["lunch_start"],
         "LunchStop": entry["lunch_stop"],
         "End": end_dt.isoformat(),
-        "TranDescription": entry["description"],
+        "TranDescription": entry.get("tran_description") or entry["operation_description"] or entry["description"],
         "Year": datetime.now().year,
         "StartStopID": int(_as_number(entry["id"], 0)),
     }
+    acumatica_transaction = _acumatica_labor_transaction(final_fields)
     ensure_db()
     queued_id = queue_record(
         "stop_time_entry",
-        {"entry_id": entry_id, "fields": final_fields},
+        {"entry_id": entry_id, "fields": final_fields, "acumatica_labor_transaction": acumatica_transaction},
         machine_no=entry.get("machine_no"),
         emp_id=entry.get("emp_id"),
         employee_name=entry.get("operators_name"),
@@ -986,33 +1816,64 @@ def stop_time_entry(entry_id):
         return {"submitted": False, "queued": True, "offline_only": True, "worked_minutes": worked_minutes}
 
 
-def submit_misc_time(employee, shift_id, machine_no, detail_type_ii, hours, minutes, comments):
+def submit_misc_time(
+    employee,
+    shift_id,
+    machine_no,
+    detail_type_ii,
+    production_number,
+    operation_id,
+    hours,
+    minutes,
+    comments,
+):
+    operation = _get_operation_for_employee(
+        employee,
+        production_number,
+        operation_id,
+        "The selected downtime operation could not be found.",
+    )
     total_minutes = int(_as_number(hours, 0) * 60 + _as_number(minutes, 0))
     if total_minutes <= 0:
         raise ValueError("Misc time must be greater than zero.")
     total = _hhmm_from_minutes(total_minutes)
-    description = f"{detail_type_ii}-{comments}".strip("-")
+    downtime_reason = _downtime_reason_code(detail_type_ii)
+    comments_text = str(comments or "").strip()
+    tran_description = downtime_reason if not comments_text else f"{downtime_reason} - {comments_text}"
     fields = {
         "Title": employee["full_name"],
         "LaborDate": datetime.now().date().isoformat(),
         "Status": "Submitted",
-        "LaborType": "Indirect",
+        "LaborType": "Direct",
+        "OrderType": operation["order_type"] or "EN",
+        "ProductionNo": production_number,
+        "InventoryID": operation["inventory_id"],
+        "Description": operation["description"],
+        "OperationDescription": operation["operation_description"],
+        "OperationID": operation_id,
         "Shift": str(shift_id),
         "EmpID": int(_as_number(employee["emp_id"], 0)),
         "EmployeeID": str(employee["emp_id"]).zfill(6),
         "OperatorsName": employee["full_name"],
         "MachineNo": machine_no or "",
-        "DetailsType": "Downtime",
-        "DetailsTypeII": detail_type_ii,
+        "DetailsType": "DT",
+        "DetailsTypeII": downtime_reason,
+        "Quantity": 1,
         "Total": total,
         "TotalMinutes": total_minutes,
-        "TranDescription": description,
+        "TranDescription": tran_description,
         "Year": datetime.now().year,
     }
+    acumatica_transactions = _acumatica_downtime_transactions(fields, downtime_reason)
     ensure_db()
     queued_id = queue_record(
         "misc_time",
-        {"employee": employee, "fields": fields},
+        {
+            "employee": employee,
+            "fields": fields,
+            "acumatica_labor_transaction": acumatica_transactions[0],
+            "acumatica_labor_transactions": acumatica_transactions,
+        },
         machine_no=machine_no,
         emp_id=employee.get("emp_id"),
         employee_name=employee.get("full_name"),
@@ -1038,21 +1899,17 @@ def submit_manual_time(
     minutes,
     comments,
 ):
-    context = get_dashboard_context(employee["emp_id"], "")
-    operation = next(
-        (
-            item
-            for item in context["operations"]
-            if item["production_number"] == production_number and item["operation_id"] == operation_id
-        ),
-        None,
+    operation = _get_operation_for_employee(
+        employee,
+        production_number,
+        operation_id,
+        "The selected manual-time operation could not be found.",
     )
-    if not operation:
-        raise ValueError("The selected manual-time operation could not be found.")
     total_minutes = int(_as_number(hours, 0) * 60 + _as_number(minutes, 0))
     qty = _as_number(quantity, 0)
     if total_minutes <= 0:
         raise ValueError("Manual time must be greater than zero.")
+    detail_code, _ = _detail_code(detail_type)
     average = round(qty / (total_minutes / 60), 2) if total_minutes > 0 else 0
     fields = {
         "Title": production_number,
@@ -1068,20 +1925,21 @@ def submit_manual_time(
         "InventoryID": operation["inventory_id"],
         "Description": operation["description"],
         "OperationDescription": operation["operation_description"],
-        "DetailsType": detail_type,
+        "DetailsType": detail_code,
         "OperationID": operation_id,
         "MachineNo": machine_no or "",
         "Total": _hhmm_from_minutes(total_minutes),
         "TotalMinutes": total_minutes,
         "Quantity": qty,
         "Average": average,
-        "TranDescription": comments or "",
+        "TranDescription": comments or operation["operation_description"] or operation["description"],
         "Year": datetime.now().year,
     }
+    acumatica_transaction = _acumatica_labor_transaction(fields)
     ensure_db()
     queued_id = queue_record(
         "manual_time",
-        {"employee": employee, "fields": fields},
+        {"employee": employee, "fields": fields, "acumatica_labor_transaction": acumatica_transaction},
         machine_no=machine_no,
         emp_id=employee.get("emp_id"),
         employee_name=employee.get("full_name"),
