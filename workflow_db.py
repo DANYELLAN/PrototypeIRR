@@ -1043,6 +1043,12 @@ def get_inspection_entry_options(branch=None):
     }
 
 
+def _add_recipe_builder_option(options, value):
+    normalized = re.sub(r"\s+", " ", str(value or "").strip())
+    if normalized:
+        options.setdefault(normalized.casefold(), normalized)
+
+
 def get_recipe_builder_options(branch=None):
     """Return dropdown options for the admin recipe builder."""
     recipe_rows = _fetch_all_dicts(
@@ -1056,8 +1062,24 @@ def get_recipe_builder_options(branch=None):
         """
     )
 
-    element_options = set(DEFAULT_RECIPE_ELEMENT_OPTIONS)
-    gauge_options = set(DEFAULT_GAUGE_OPTIONS)
+    local_element_rows = _fetch_all_dicts(
+        """
+        SELECT re.element_description, re.gauge
+        FROM app_recipe_elements re
+        JOIN app_recipe_headers rh ON rh.id = re.recipe_header_id
+        WHERE rh.is_active = TRUE
+          AND (%s IS NULL OR rh.branch = %s OR rh.branch IS NULL OR rh.branch = '')
+        ORDER BY re.element_description ASC, re.gauge ASC
+        """,
+        (branch, branch),
+    )
+
+    element_options = {}
+    gauge_options = {}
+    for option in DEFAULT_RECIPE_ELEMENT_OPTIONS:
+        _add_recipe_builder_option(element_options, option)
+    for option in DEFAULT_GAUGE_OPTIONS:
+        _add_recipe_builder_option(gauge_options, option)
 
     for row in recipe_rows:
         recipe = _normalize_recipe_row(row)
@@ -1068,19 +1090,19 @@ def get_recipe_builder_options(branch=None):
             for element in recipe_json["elements"]:
                 if not isinstance(element, dict):
                     continue
-                if element.get("element"):
-                    element_options.add(str(element["element"]).strip())
-                if element.get("gauge"):
-                    gauge_options.add(str(element["gauge"]).strip())
+                _add_recipe_builder_option(element_options, element.get("element"))
+                _add_recipe_builder_option(gauge_options, element.get("gauge"))
         else:
-            if recipe.get("element_description"):
-                element_options.add(str(recipe["element_description"]).strip())
-            if recipe.get("gauge"):
-                gauge_options.add(str(recipe["gauge"]).strip())
+            _add_recipe_builder_option(element_options, recipe.get("element_description"))
+            _add_recipe_builder_option(gauge_options, recipe.get("gauge"))
+
+    for row in local_element_rows:
+        _add_recipe_builder_option(element_options, row.get("element_description"))
+        _add_recipe_builder_option(gauge_options, row.get("gauge"))
 
     return {
-        "element_options": sorted(item for item in element_options if item),
-        "gauge_options": sorted(item for item in gauge_options if item),
+        "element_options": sorted(element_options.values(), key=str.casefold),
+        "gauge_options": sorted(gauge_options.values(), key=str.casefold),
         "measurement_modes": [
             {"value": "nominal_tolerance", "label": "Nominal +/- Tolerance"},
             {"value": "asymmetric_tolerance", "label": "Nominal + / - Tolerance"},

@@ -7,6 +7,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from sharepoint_api import sync_inspection_recipes_to_postgres, sync_work_orders_to_postgres  # noqa: E402
+from irr_import import parse_irr_upload  # noqa: E402
 from workflow_db import (  # noqa: E402
     close_inspector_session,
     complete_inspection_attempt,
@@ -55,10 +56,11 @@ from workflow_db import (  # noqa: E402
 
 
 def _payload():
-    if len(sys.argv) < 2:
+    raw_payload = sys.argv[1] if len(sys.argv) >= 2 else sys.stdin.read()
+    if not raw_payload:
         return {}
     try:
-        return json.loads(sys.argv[1])
+        return json.loads(raw_payload)
     except json.JSONDecodeError:
         return {}
 
@@ -105,6 +107,13 @@ def main():
             return _result(get_open_work_orders(payload.get("branch")))
         if action == "get_recipe_builder_options":
             return _result(get_recipe_builder_options(payload.get("branch")))
+        if action == "parse_irr_upload":
+            return _result(
+                parse_irr_upload(
+                    payload.get("file_name"),
+                    payload.get("file_content"),
+                )
+            )
         if action == "list_local_recipes":
             return _result(list_local_recipes(payload.get("branch")))
         if action == "list_recipe_catalog":

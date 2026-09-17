@@ -9,10 +9,13 @@ const bridgeScript = path.resolve(__dirname, "..", "bridge", "workflow_bridge.py
 export function callBridge(action, extra = {}) {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify({ action, ...extra });
-    const child = spawn("python", [bridgeScript, payload], {
+    const sendThroughStdin = payload.length > 16000;
+    const child = spawn("python", sendThroughStdin ? [bridgeScript] : [bridgeScript, payload], {
       cwd: path.resolve(__dirname, "..", ".."),
       windowsHide: true,
     });
+
+    if (sendThroughStdin) child.stdin.end(payload);
 
     let stdout = "";
     let stderr = "";

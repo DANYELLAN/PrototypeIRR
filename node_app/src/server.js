@@ -12,8 +12,8 @@ const WORKORDER_SYNC_RUN_ON_START = process.env.WORKORDER_SYNC_RUN_ON_START !== 
 let workOrderSyncInProgress = false;
 
 const app = express();
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
+app.use(express.urlencoded({ extended: true, limit: "12mb" }));
+app.use(express.json({ limit: "12mb" }));
 app.use(
   session({
     secret: process.env.SESSION_SECRET || "autoirr-node-dev",
@@ -1238,6 +1238,39 @@ function layout({ title, sidebar, content, theme = "Light" }) {
               apply(next);
             });
           }
+          document.querySelectorAll("[data-irr-import-form]").forEach((form) => {
+            form.addEventListener("submit", (event) => {
+              const fileInput = form.querySelector("[data-irr-import-file]");
+              const nameInput = form.querySelector("input[name='file_name']");
+              const contentInput = form.querySelector("input[name='file_content']");
+              const submitButton = form.querySelector("button[type='submit']");
+              const file = fileInput?.files?.[0];
+              if (!file || !nameInput || !contentInput || contentInput.value) return;
+              event.preventDefault();
+              if (file.size > 8 * 1024 * 1024) {
+                window.alert("Choose a report smaller than 8 MB.");
+                return;
+              }
+              if (submitButton) {
+                submitButton.disabled = true;
+                submitButton.textContent = "Reading Report...";
+              }
+              const reader = new FileReader();
+              reader.addEventListener("load", () => {
+                nameInput.value = file.name;
+                contentInput.value = String(reader.result || "").split(",", 2)[1] || "";
+                form.submit();
+              });
+              reader.addEventListener("error", () => {
+                if (submitButton) {
+                  submitButton.disabled = false;
+                  submitButton.textContent = "Create Draft";
+                }
+                window.alert("That report could not be read.");
+              });
+              reader.readAsDataURL(file);
+            });
+          });
         })();
 
         (function () {
@@ -3386,8 +3419,25 @@ app.get("/admin", async (req, res, next) => {
         </div>
       </section>
       <section class="card">
+        <div class="catalog-heading-row">
+          <div>
+            <h2 class="section-title">Import Digital IRR</h2>
+            <p>Load an existing PDF, Excel, or CSV inspection report into the builder for review before saving.</p>
+          </div>
+          <form method="post" action="/admin/recipes/import" class="irr-import-form" data-irr-import-form>
+            <label class="file-picker">
+              <span>Inspection report</span>
+              <input type="file" accept=".pdf,.xlsx,.csv" data-irr-import-file required />
+            </label>
+            <input type="hidden" name="file_name" />
+            <input type="hidden" name="file_content" />
+            <button class="button compact-button" type="submit">Create Draft</button>
+          </form>
+        </div>
+      </section>
+      <section class="card" id="build-digital-irr">
         <h2 class="section-title">Build Digital IRR</h2>
-        <p>Create an app-managed Digital IRR with up to 25 inspection elements. Saved Digital IRRs are immediately available to the inspection workflow.</p>
+        <p>${createRecipeDraft.imported_file_name ? `Review the imported values from <strong>${escapeHtml(createRecipeDraft.imported_file_name)}</strong>, then save when they are correct.` : "Create an app-managed Digital IRR with up to 25 inspection elements. Saved Digital IRRs are immediately available to the inspection workflow."}</p>
         <form method="post" action="/admin/recipes" class="form-grid">
           <div class="form-grid two">
             <div class="field"><label>Size</label><input name="size_label" placeholder='2.875' value="${escapeHtml(createRecipeDraft.size_label || "")}" required /></div>
@@ -3517,6 +3567,27 @@ app.post("/admin/recipes/refresh", async (req, res, next) => {
     res.redirect("/admin");
   } catch (error) {
     next(error);
+  }
+});
+
+app.post("/admin/recipes/import", async (req, res) => {
+  try {
+    if (!req.session.inspector || !req.session.canAccessAdmin) return res.redirect("/");
+    const draft = await callBridge("parse_irr_upload", {
+      file_name: req.body.file_name,
+      file_content: req.body.file_content,
+    });
+    draft.branch = req.session.inspector.branch || "";
+    draft.created_by = req.session.inspector.name;
+    req.session.createRecipeDraft = draft;
+    req.session.notice = {
+      kind: "success",
+      message: `${draft.rows.length} elements imported from ${draft.imported_file_name}. Review the draft below before saving.`,
+    };
+    res.redirect("/admin#build-digital-irr");
+  } catch (error) {
+    req.session.notice = { kind: "warning", message: error.message || "Unable to import that inspection report." };
+    res.redirect("/admin");
   }
 });
 
