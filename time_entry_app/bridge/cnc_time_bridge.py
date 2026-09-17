@@ -9,15 +9,18 @@ for candidate in (str(PROJECT_ROOT), str(APP_ROOT)):
         sys.path.insert(0, candidate)
 
 from time_entry_app.bridge.cnc_time_backend import (  # noqa: E402
+    approve_time_entry,
     correct_time_entry,
     delete_time_entry,
     edit_active_time_entry,
+    get_admin_dashboard_context,
     get_dashboard_context,
     get_employee_lookup,
     get_sign_in_context,
     get_time_export_rows,
     pause_for_lunch,
     resume_from_lunch,
+    reject_time_entry,
     send_it_request,
     send_supervisor_message,
     sign_in,
@@ -30,6 +33,7 @@ from time_entry_app.bridge.cnc_time_backend import (  # noqa: E402
     submit_maintenance_request,
     submit_manual_time,
     submit_misc_time,
+    update_approval_time_entry,
 )
 
 
@@ -71,6 +75,8 @@ def main():
             )
         if action == "get_dashboard_context":
             return _result(get_dashboard_context(payload.get("emp_id"), payload.get("user_email")))
+        if action == "get_admin_dashboard_context":
+            return _result(get_admin_dashboard_context())
         if action == "get_time_export_rows":
             return _result(get_time_export_rows(payload.get("start_date"), payload.get("end_date")))
         if action == "sync_reference_data_from_sharepoint":
@@ -132,6 +138,24 @@ def main():
             )
         if action == "delete_time_entry":
             return _result(delete_time_entry(payload.get("entry_id"), payload.get("entry_list")))
+        if action == "approve_time_entry":
+            return _result(
+                approve_time_entry(
+                    payload.get("approval_id"),
+                    payload.get("reviewer") or {},
+                    payload.get("note"),
+                )
+            )
+        if action == "reject_time_entry":
+            return _result(
+                reject_time_entry(
+                    payload.get("approval_id"),
+                    payload.get("reviewer") or {},
+                    payload.get("note"),
+                )
+            )
+        if action == "update_approval_time_entry":
+            return _result(update_approval_time_entry(payload.get("approval_id"), payload.get("fields") or {}))
         if action == "submit_misc_time":
             return _result(
                 submit_misc_time(

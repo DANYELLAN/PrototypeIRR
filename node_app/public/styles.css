@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;700;800&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
 :root {
   --bg-start: #f4f1ea;
   --bg-end: #efe8da;
@@ -1711,6 +1713,677 @@ details summary::-webkit-details-marker {
   margin-bottom: 1rem;
 }
 
+.admin-hero-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.admin-logout-form {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.admin-logout-form .button {
+  width: auto;
+}
+
+.catalog-heading-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.catalog-heading-row p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.catalog-heading-row form {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.source-badge {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.catalog-muted,
+.catalog-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.catalog-empty {
+  padding: 20px;
+  text-align: center;
+}
+
+/* Match the shared Benoit Time Entry and LiveView visual language. */
+:root {
+  --bg-start: #e5e7e6;
+  --bg-end: #e5e7e6;
+  --text: #1a1c1c;
+  --muted: #59413e;
+  --surface: #ffffff;
+  --surface-soft: #eef0ef;
+  --panel-muted: #dfe2e1;
+  --control-bg: #ffffff;
+  --border: rgba(0, 0, 0, 0.13);
+  --hero-start: #eef0ef;
+  --hero-end: #eef0ef;
+  --hero-text: #1a1c1c;
+  --button-start: #9e1b1e;
+  --button-end: #9e1b1e;
+  --button-hover-start: #5a0008;
+  --button-hover-end: #5a0008;
+  --brand: #9e1b1e;
+  --brand-dark: #5a0008;
+  --good: #2e7d32;
+  --warn: #a66f00;
+  --bad: #ba1a1a;
+  --ready: #3b5e97;
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --font-ui: "Manrope", sans-serif;
+  --font-data: "IBM Plex Mono", "Cascadia Code", "Consolas", monospace;
+}
+
+body[data-theme="dark"] {
+  --bg-start: #151515;
+  --bg-end: #151515;
+  --text: #f2f2f2;
+  --muted: #c6b8b6;
+  --surface: #222222;
+  --surface-soft: #2b2b2b;
+  --panel-muted: #303030;
+  --control-bg: #252525;
+  --border: rgba(255, 255, 255, 0.13);
+  --hero-start: #222222;
+  --hero-end: #222222;
+  --hero-text: #f2f2f2;
+  --button-start: #b82429;
+  --button-end: #b82429;
+  --button-hover-start: #d03439;
+  --button-hover-end: #d03439;
+}
+
+html,
+body {
+  min-height: 100%;
+  background: var(--bg-start);
+  font-family: Inter, "Segoe UI", sans-serif;
+  font-size: 13px;
+}
+
+body {
+  background: var(--bg-start);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.benoit-app-frame {
+  width: 100%;
+  min-height: 100vh;
+  padding: 14px 16px 40px;
+  background: var(--bg-start);
+}
+
+.benoit-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 9px 13px;
+  border-radius: 2px;
+  background: var(--brand);
+  color: #ffffff;
+  box-shadow: var(--shadow);
+}
+
+.brand-block {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.brand-logo-panel {
+  width: 132px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 4px;
+  background: #ffffff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.18);
+}
+
+.brand-logo-panel img {
+  display: block;
+  width: 90%;
+  height: 82%;
+  object-fit: contain;
+}
+
+.brand-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.brand-copy span {
+  color: #ffffff;
+  font-family: var(--font-ui);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.brand-copy small {
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.72);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.topbar-product {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  margin-left: auto;
+  padding: 5px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.app-shell {
+  grid-template-columns: 238px minmax(0, 1fr);
+  min-height: calc(100vh - 82px);
+  gap: 10px;
+  overflow: visible;
+}
+
+.sidebar {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--panel-muted);
+  color: #1a1c1c;
+  box-shadow: var(--shadow);
+}
+
+body[data-theme="dark"] .sidebar {
+  background: #292929;
+  color: var(--text);
+}
+
+.sidebar h2 {
+  margin: 42px 0 10px;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.sidebar p {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sidebar hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 14px 0;
+}
+
+.sidebar select,
+.sidebar button,
+.sidebar-link-button {
+  min-height: 36px;
+  margin-top: 5px;
+  margin-bottom: 10px;
+  padding: 7px 10px;
+  border-radius: 2px;
+}
+
+.sidebar select {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.sidebar button,
+.button,
+.button.secondary,
+.button.warning,
+.button.danger {
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: var(--brand);
+  box-shadow: none;
+  color: #ffffff;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sidebar button:hover,
+.button:hover,
+.button.secondary:hover {
+  background: var(--brand-dark);
+}
+
+.button.warning {
+  background: var(--warn);
+}
+
+.button.danger {
+  background: var(--bad);
+}
+
+.button {
+  min-width: 130px;
+  min-height: 36px;
+  padding: 8px 14px;
+}
+
+.sidebar-toggle {
+  top: 10px;
+  right: 10px;
+  width: 32px !important;
+  min-width: 32px;
+  height: 32px;
+  border: 1px solid var(--border) !important;
+  border-radius: 2px !important;
+  background: var(--surface) !important;
+  color: var(--brand) !important;
+  font-size: 18px;
+}
+
+.sidebar-toggle:hover {
+  background: #ffffff !important;
+  border-color: rgba(158, 27, 30, 0.35) !important;
+}
+
+.sidebar-collapsed .app-shell {
+  grid-template-columns: 42px minmax(0, 1fr);
+}
+
+.sidebar-collapsed .sidebar {
+  padding: 6px;
+}
+
+.sidebar-collapsed .sidebar-toggle {
+  top: 10px;
+  right: 4px;
+}
+
+.content {
+  padding: 0;
+}
+
+.hero,
+.card,
+.notice,
+.table-card,
+details,
+.measurement-field,
+.signature-card,
+.report-doc-meta,
+.pipe-history-entry-action-row {
+  border-radius: 2px;
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: var(--shadow);
+}
+
+.hero {
+  padding: 18px;
+  color: var(--hero-text);
+  border-left: 4px solid var(--brand);
+  background: var(--surface-soft);
+}
+
+.hero h1,
+.hero h2,
+.section-title,
+.worksheet-title {
+  font-family: var(--font-ui);
+  letter-spacing: 0;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.15;
+  text-transform: uppercase;
+}
+
+.hero p {
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.home-hero-logo {
+  display: none;
+}
+
+.hero .badge,
+.pill,
+.scope-badge {
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.card,
+.table-card {
+  margin-top: 10px;
+  padding: 14px 16px;
+  background: var(--surface-soft);
+}
+
+.workflow-nav {
+  margin-top: 10px;
+  padding: 4px;
+  border-radius: 2px;
+  background: var(--panel-muted);
+}
+
+body[data-theme="dark"] .workflow-nav {
+  background: #292929;
+}
+
+.workflow-nav-links {
+  gap: 2px;
+}
+
+.workflow-tab {
+  min-height: 34px;
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.workflow-tab:hover {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.workflow-tab.active {
+  border: 1px solid var(--border);
+  border-bottom: 2px solid var(--brand);
+  border-radius: 2px;
+  background: var(--surface);
+  color: var(--brand);
+  box-shadow: var(--shadow);
+}
+
+.workflow-action-button {
+  min-width: 150px;
+  min-height: 34px;
+}
+
+.field label,
+.connection-header-label,
+.result-label {
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.field input,
+.field select,
+.field textarea,
+.recipe-builder-table select,
+.recipe-builder-table input,
+.connection-header-form input {
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--control-bg);
+  color: var(--text);
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus,
+.recipe-builder-table select:focus,
+.recipe-builder-table input:focus,
+.connection-header-form input:focus {
+  border-color: var(--brand);
+  outline: 2px solid rgba(158, 27, 30, 0.12);
+}
+
+.notice {
+  margin-top: 10px;
+  padding: 8px 12px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.notice.success {
+  background: rgba(46, 125, 50, 0.1);
+  color: var(--good);
+}
+
+.notice.warning {
+  background: rgba(192, 138, 0, 0.1);
+  color: var(--warn);
+}
+
+.notice.info {
+  background: rgba(59, 94, 151, 0.1);
+  color: var(--ready);
+}
+
+.notice.error {
+  background: rgba(186, 26, 26, 0.1);
+  color: var(--bad);
+}
+
+th {
+  background: var(--panel-muted);
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+body[data-theme="dark"] th {
+  background: #303030;
+}
+
+tbody tr:nth-child(even) td {
+  background-color: rgba(0, 0, 0, 0.025);
+}
+
+.inspection-entry-panel,
+.login-panel {
+  border-left: 3px solid rgba(158, 27, 30, 0.65);
+  padding-left: 12px;
+}
+
+.inspection-sheet-card,
+.report-card {
+  border-top: 3px solid var(--brand);
+}
+
+th,
+td {
+  padding: 9px 10px;
+  border-color: var(--border);
+}
+
+.inspection-sheet-wrap {
+  border-color: var(--border);
+  border-radius: 2px;
+}
+
+.inspection-sheet-table thead th,
+.inspection-sheet-table thead th:nth-child(-n+4) {
+  background: #e7e7e7;
+  box-shadow: none;
+}
+
+.inspection-sheet-table td:nth-child(-n+4),
+.inspection-result-label-piece,
+.inspection-result-label-gauge {
+  background: #f5f5f5 !important;
+  box-shadow: none;
+}
+
+.inspection-sheet-table th,
+.inspection-sheet-table td {
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+.inspection-measure-cell {
+  background: rgba(255, 244, 194, 0.55);
+}
+
+.measurement-short-entry,
+.measurement-checkbox-row,
+.result-panel,
+.worksheet-connection-row,
+.pipe-number-step-button,
+.pipe-history-action-menu-toggle,
+.pipe-history-action-menu-panel,
+.pipe-history-action-menu-item,
+.approval-modal-panel,
+.approval-modal-close {
+  border-radius: 2px;
+}
+
+.measurement-prefix,
+.pipe-number-step-button {
+  background: #eeeeee;
+}
+
+.pipe-number-step-button:hover {
+  background: #dddddd;
+}
+
+.approval-modal-panel,
+.pipe-history-action-menu-panel {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.report-sheet-header,
+.worksheet-report-header {
+  border-bottom-color: var(--brand);
+}
+
+.worksheet-pass {
+  color: var(--good);
+}
+
+.worksheet-fail {
+  color: var(--bad);
+}
+
+@media (max-width: 720px) {
+  .benoit-app-frame {
+    padding: 8px 8px 24px;
+  }
+
+  .benoit-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .brand-logo-panel {
+    width: 104px;
+  }
+
+  .brand-copy span {
+    font-size: 17px;
+  }
+
+  .topbar-product {
+    margin-left: 0;
+  }
+
+  .app-shell,
+  .sidebar,
+  .content,
+  .hero,
+  .card,
+  .table-card {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .hero h1 {
+    font-size: 22px;
+  }
+
+  .catalog-heading-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .catalog-heading-row .button {
+    width: 100%;
+  }
+
+  .admin-hero-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-logout-form .button {
+    width: 100%;
+  }
+}
+
 @media (max-width: 1100px) {
   .app-shell { grid-template-columns: 1fr; }
   .split,
@@ -1762,6 +2435,11 @@ details summary::-webkit-details-marker {
     font-size: 11pt;
   }
 
+  .benoit-app-frame {
+    padding: 0;
+  }
+
+  .benoit-topbar,
   .sidebar,
   .hero,
   .workflow-nav,

@@ -1,9 +1,10 @@
-const CACHE_NAME = "cnc-time-v3";
+const CACHE_NAME = "cnc-time-v6";
 const ASSETS = [
   "/public/cnc-time.css",
-  "/public/cnc-time.js",
+  "/public/cnc-time.js?v=5",
   "/public/cnc-time.webmanifest",
   "/public/BenoitLogoRegistered-Red.png",
+  "/public/BenoitIconRegistered-Red.png",
 ];
 
 self.addEventListener("install", (event) => {

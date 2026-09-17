@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from sharepoint_api import sync_work_orders_to_postgres  # noqa: E402
+from sharepoint_api import sync_inspection_recipes_to_postgres, sync_work_orders_to_postgres  # noqa: E402
 from workflow_db import (  # noqa: E402
     close_inspector_session,
     complete_inspection_attempt,
@@ -33,6 +33,7 @@ from workflow_db import (  # noqa: E402
     get_pipe_unit,
     get_recipe_elements,
     list_local_recipes,
+    list_recipe_catalog,
     publish_session_history,
     publish_local_recipe_to_sharepoint,
     remember_inspection_entry_values,
@@ -106,6 +107,10 @@ def main():
             return _result(get_recipe_builder_options(payload.get("branch")))
         if action == "list_local_recipes":
             return _result(list_local_recipes(payload.get("branch")))
+        if action == "list_recipe_catalog":
+            return _result(list_recipe_catalog(payload.get("branch")))
+        if action == "sync_inspection_recipes":
+            return _result(sync_inspection_recipes_to_postgres())
         if action == "get_local_recipe_by_id":
             return _result(get_local_recipe_by_id(payload.get("recipe_header_id")))
         if action == "get_connection_types":

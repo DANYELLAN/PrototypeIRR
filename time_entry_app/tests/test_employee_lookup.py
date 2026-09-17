@@ -69,6 +69,28 @@ class EmployeeLookupTests(unittest.TestCase):
         self.assertEqual(result["full_name"], "Martha Y Medrano")
         self.assertEqual(result["roles"], ["exporter"])
 
+    def test_lookup_employee_by_adp_allows_manager_to_approve_and_operate(self):
+        employees = [
+            {
+                "id": 701,
+                "fields": {
+                    "ADPEmpNumber": "990",
+                    "Full_x0020_Name": "Chris Manager",
+                    "Branches": "Ennis",
+                    "Status": "Active",
+                    "Machinist": False,
+                    "DepartmentName": "Production Manager",
+                    "PositionTitle": "CNC Supervisor",
+                },
+            }
+        ]
+
+        result = lookup_employee_by_adp("990", employees)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["full_name"], "Chris Manager")
+        self.assertEqual(result["roles"], ["operator", "approver"])
+
 
 if __name__ == "__main__":
     unittest.main()

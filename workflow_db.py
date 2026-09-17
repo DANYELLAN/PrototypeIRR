@@ -1117,6 +1117,121 @@ def list_local_recipes(branch=None):
     )
 
 
+def _normalize_recipe_catalog_key(recipe_name):
+    return re.sub(r"\s+", " ", str(recipe_name or "").strip()).casefold()
+
+
+def _merge_recipe_catalog(local_recipes, sharepoint_recipes, branch=None):
+    """Merge local and SharePoint recipes into one latest-revision catalog."""
+    catalog = {}
+    requested_branch = str(branch or "").strip().casefold()
+
+    def include_recipe(recipe):
+        recipe_branch = str(recipe.get("branch") or "").strip().casefold()
+        return not requested_branch or not recipe_branch or recipe_branch == requested_branch
+
+    def add_recipe(recipe, source):
+        if not include_recipe(recipe):
+            return
+        name_key = _normalize_recipe_catalog_key(recipe.get("recipe_name"))
+        if not name_key:
+            return
+        recipe_branch = str(recipe.get("branch") or "").strip().casefold()
+        key = name_key if requested_branch else (name_key, recipe_branch)
+
+        entry = catalog.setdefault(
+            key,
+            {
+                "sources": set(),
+                "local_recipe_id": None,
+                "sharepoint_item_id": None,
+                "last_edit_comment": "",
+                "_rank": (-1, "", -1),
+            },
+        )
+        entry["sources"].add(source)
+        if source == "local":
+            entry["local_recipe_id"] = recipe.get("id") or entry["local_recipe_id"]
+            entry["last_edit_comment"] = recipe.get("last_edit_comment") or entry["last_edit_comment"]
+        else:
+            entry["sharepoint_item_id"] = recipe.get("item_id") or entry["sharepoint_item_id"]
+
+        rank = (
+            _recipe_revision_key(recipe),
+            str(recipe.get("updated_at") or ""),
+            1 if source == "local" else 0,
+        )
+        if rank < entry["_rank"]:
+            return
+
+        entry["_rank"] = rank
+        for field in (
+            "recipe_name",
+            "branch",
+            "connection_type",
+            "drawing",
+            "source_report",
+            "recipe_version",
+            "updated_at",
+        ):
+            entry[field] = recipe.get(field)
+
+    for recipe in local_recipes or []:
+        add_recipe(recipe, "local")
+    for recipe in sharepoint_recipes or []:
+        add_recipe(recipe, "sharepoint")
+
+    results = []
+    for entry in catalog.values():
+        sources = entry.pop("sources")
+        entry.pop("_rank", None)
+        entry["source"] = (
+            "Local + SharePoint"
+            if sources == {"local", "sharepoint"}
+            else "Local"
+            if "local" in sources
+            else "SharePoint"
+        )
+        results.append(entry)
+
+    return sorted(
+        results,
+        key=lambda recipe: str(recipe.get("recipe_name") or "").casefold(),
+    )
+
+
+def list_recipe_catalog(branch=None):
+    """Return local and synced SharePoint Digital IRRs without duplicate names."""
+    local_recipes = list_local_recipes(branch)
+    sharepoint_rows = _fetch_all_dicts(
+        """
+        SELECT si.sharepoint_item_id, si.fields_json,
+               si.last_modified_datetime, si.synced_at
+        FROM sharepoint_items si
+        JOIN sharepoint_lists sl ON sl.id = si.list_id
+        WHERE sl.list_name = 'InspectionRecipes'
+          AND sl.app_key = 'irr'
+        ORDER BY si.last_modified_datetime DESC NULLS LAST, si.id DESC
+        """
+    )
+
+    sharepoint_recipes = []
+    for row in sharepoint_rows:
+        recipe = _normalize_recipe_row(row)
+        recipe_json = recipe.get("recipe_json")
+        recipe_json = recipe_json if isinstance(recipe_json, dict) else {}
+        recipe.update(
+            {
+                "drawing": recipe_json.get("drawing"),
+                "source_report": recipe_json.get("sourceReport") or recipe_json.get("source_report"),
+                "updated_at": row.get("last_modified_datetime") or row.get("synced_at"),
+            }
+        )
+        sharepoint_recipes.append(recipe)
+
+    return _merge_recipe_catalog(local_recipes, sharepoint_recipes, branch)
+
+
 def get_local_recipe_by_id(recipe_header_id):
     """Return one locally managed recipe with its element rows for editing."""
     header = _fetch_one_dict(

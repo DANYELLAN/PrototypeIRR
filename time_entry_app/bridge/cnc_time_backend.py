@@ -15,14 +15,21 @@ LOCAL_MACHINE_CONFIG = APP_ROOT / "config" / "machines.json"
 import requests
 
 from local_store import (
+    approve_approval_record,
     discard_pending_record,
     ensure_db,
     finish_break_event,
+    get_approval_record,
     get_active_break_event,
     get_machine_options,
+    list_approval_records,
     list_pending_records,
+    mark_approval_reviewed,
     mark_record_synced,
+    patch_approval_record_fields,
+    patch_approval_record_payload,
     patch_pending_record_fields,
+    queue_approval,
     queue_record,
     save_session,
     start_break_event,
@@ -56,8 +63,8 @@ LISTS = {
     },
     "timeentry": {
         "site": MACHINIST_TIME_SITE,
-        "id": "a5849673-cc3e-47a3-8e1d-aec90d2374cc",
-        "name": "Ennis Machinist Time Entry1",
+        "id": "07d68d05-cb88-4571-b199-c47af3f27ac0",
+        "name": "Ennis Machinist Time Entry",
     },
     "detail_types": {
         "site": MACHINIST_TIME_SITE,
@@ -107,6 +114,13 @@ DEFAULT_DETAIL_TYPES = [
     {"item_id": 3, "title": "Downtime", "option_step": 2, "type_ii": "Downtime", "branch": "Ennis"},
     {"item_id": 4, "title": "Turn & Bore", "option_step": 2, "type_ii": "", "branch": "Ennis"},
     {"item_id": 5, "title": "Change Over", "option_step": 2, "type_ii": "", "branch": "Ennis"},
+]
+
+STATION_DETAIL_TYPES = [
+    {"item_id": 901, "title": "Inspection", "option_step": 2, "type_ii": "", "branch": "Ennis"},
+    {"item_id": 902, "title": "Sandblast", "option_step": 2, "type_ii": "", "branch": "Ennis"},
+    {"item_id": 903, "title": "Drift", "option_step": 2, "type_ii": "", "branch": "Ennis"},
+    {"item_id": 904, "title": "Stenciling", "option_step": 2, "type_ii": "", "branch": "Ennis"},
 ]
 
 DOWNTIME_REASONS = [
@@ -169,6 +183,16 @@ EXPORTER_DEPARTMENT_KEYWORDS = tuple(
 EXPORTER_ADP_NUMBERS = {
     (item.strip()[:-2] if item.strip().endswith(".0") else item.strip()).lstrip("0") or item.strip()
     for item in os.getenv("CNC_TIME_EXPORT_ADP_NUMBERS", "").replace(";", ",").split(",")
+    if item.strip()
+}
+APPROVER_DEPARTMENT_KEYWORDS = tuple(
+    item.strip().lower()
+    for item in os.getenv("CNC_TIME_APPROVER_DEPARTMENT_KEYWORDS", "supervisor,manager,lead,production manager").split(",")
+    if item.strip()
+)
+APPROVER_ADP_NUMBERS = {
+    (item.strip()[:-2] if item.strip().endswith(".0") else item.strip()).lstrip("0") or item.strip()
+    for item in os.getenv("CNC_TIME_APPROVER_ADP_NUMBERS", "").replace(";", ",").split(",")
     if item.strip()
 }
 
@@ -657,6 +681,10 @@ def _employee_roles(employee):
     )
     if normalized_emp_id in EXPORTER_ADP_NUMBERS or any(keyword in searchable for keyword in EXPORTER_DEPARTMENT_KEYWORDS):
         roles.append("exporter")
+    if normalized_emp_id in APPROVER_ADP_NUMBERS or any(keyword in searchable for keyword in APPROVER_DEPARTMENT_KEYWORDS):
+        roles.append("approver")
+        if "operator" not in roles:
+            roles.insert(0, "operator")
     return roles
 
 
@@ -720,7 +748,15 @@ def _detail_types():
         for item in (_normalize_detail_type(entry) for entry in _read_list("detail_types"))
         if item["branch"].lower() == "ennis"
     ]
-    return details or list(DEFAULT_DETAIL_TYPES)
+    if not details:
+        details = list(DEFAULT_DETAIL_TYPES)
+
+    existing_titles = {item["title"].strip().lower() for item in details}
+    for detail in STATION_DETAIL_TYPES:
+        if detail["title"].lower() not in existing_titles:
+            details.append(dict(detail))
+            existing_titles.add(detail["title"].lower())
+    return details
 
 
 def _downtime_reason_code(value):
@@ -804,6 +840,35 @@ def _operation_fields(operation, production_number, operation_id):
         "OperationDescription": operation["operation_description"],
         "OperationID": operation_id,
     }
+
+
+def _is_cnc_machine(machine_no):
+    text = str(machine_no or "").strip().lower()
+    if not text:
+        return False
+    if text.startswith("cnc "):
+        text = text.removeprefix("cnc ").strip()
+    return text.isdigit()
+
+
+def _is_cnc_machinist_time(employee, machine_no):
+    return bool((employee or {}).get("machinist")) and _is_cnc_machine(machine_no)
+
+
+def _attach_acumatica_payload(payload, employee, fields, reason_code=""):
+    payload.pop("acumatica_labor_transaction", None)
+    payload.pop("acumatica_labor_transactions", None)
+    if not _is_cnc_machinist_time(employee, fields.get("MachineNo")):
+        return payload
+
+    detail_code = str(fields.get("DetailsType") or "").strip()
+    if detail_code == "DT" and reason_code:
+        transactions = _acumatica_downtime_transactions(fields, reason_code)
+        payload["acumatica_labor_transaction"] = transactions[0]
+        payload["acumatica_labor_transactions"] = transactions
+    else:
+        payload["acumatica_labor_transaction"] = _acumatica_labor_transaction(fields, reason_code=reason_code)
+    return payload
 
 
 def _acumatica_labor_transaction(fields, reason_code="", labor_rate=None):
@@ -939,9 +1004,64 @@ def _pending_payload(record):
         return {}
 
 
+def _approval_payload(record):
+    try:
+        return json.loads(record.get("payload") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+
+def _approval_context_entry(record):
+    payload = _approval_payload(record)
+    fields = payload.get("fields") or {}
+    entry = _normalize_timeentry({"id": str(record["id"]), "fields": fields})
+    entry.update(
+        {
+            "approval_id": record["id"],
+            "record_type": record.get("record_type"),
+            "submitted_at": record.get("submitted_at"),
+            "reviewed_at": record.get("reviewed_at"),
+            "reviewed_by_emp_id": record.get("reviewed_by_emp_id"),
+            "reviewed_by_name": record.get("reviewed_by_name"),
+            "review_note": record.get("review_note"),
+            "approval_status": record.get("approval_status"),
+            "employee_name": record.get("employee_name") or entry.get("operators_name"),
+            "emp_id": record.get("emp_id") or entry.get("emp_id"),
+            "machine_no": record.get("machine_no") or entry.get("machine_no"),
+            "has_acumatica_payload": bool(
+                payload.get("acumatica_labor_transaction") or payload.get("acumatica_labor_transactions")
+            ),
+        }
+    )
+    if entry.get("approval_status") == "pending":
+        entry["status"] = "Pending Approval"
+    return entry
+
+
+def _refresh_approval_acumatica_payload(payload, fields):
+    detail_code = str(fields.get("DetailsType") or "").strip()
+    reason_code = str(fields.get("DetailsTypeII") or "").strip()
+    had_acumatica_payload = bool(
+        payload.get("acumatica_labor_transaction") or payload.get("acumatica_labor_transactions")
+    )
+    employee = payload.get("employee") or {
+        "machinist": bool(
+            payload.get("is_cnc_machinist_time")
+            or _is_cnc_machine(fields.get("MachineNo"))
+            or (had_acumatica_payload and _is_cnc_machine(fields.get("MachineNo")))
+        )
+    }
+    return _attach_acumatica_payload(payload, employee, fields, reason_code if detail_code == "DT" else "")
+
+
 def _local_record_key(value):
     text = str(value or "").strip()
     return text.removeprefix("local:")
+
+
+def _approval_record_key(value):
+    text = str(value or "").strip()
+    return text.removeprefix("approval:")
 
 
 def _local_startstop_entries(emp_id=None):
@@ -1026,6 +1146,17 @@ def _local_timeentry_entries(emp_id=None):
         item["id"] = record["id"]
         item["sp_id"] = f"local:{record['id']}"
         entries_by_id[str(record["id"])] = item
+
+    for record in list_approval_records(status="pending", limit=500):
+        payload = _approval_payload(record)
+        fields = payload.get("fields") or {}
+        if not fields:
+            continue
+        item = _normalize_timeentry({"id": str(record["id"]), "fields": fields})
+        item["id"] = record["id"]
+        item["sp_id"] = f"approval:{record['id']}"
+        item["status"] = "Pending Approval"
+        entries_by_id[f"approval:{record['id']}"] = item
 
     for payload, fields in corrections:
         target_id = _local_record_key(payload.get("item_id") or payload.get("entry_id"))
@@ -1123,7 +1254,7 @@ def _load_local_machine_config():
             normalized.append({
                 "machine_no": machine_no,
                 "email": email,
-                "label": f"Machine {machine_no}",
+                "label": str(entry.get("label") or f"Machine {machine_no}").strip(),
             })
     return normalized
 
@@ -1153,7 +1284,7 @@ def get_sign_in_context():
         machine_options.append({
             "machine_no": machine_no,
             "email": str(station["email"]).strip().lower(),
-            "label": f"Machine {machine_no}",
+            "label": local_machine_map.get(machine_no, {}).get("label") or f"Machine {machine_no}",
         })
 
     if not machine_options:
@@ -1347,6 +1478,156 @@ def get_time_export_rows(start_date=None, end_date=None):
     )
 
 
+def get_admin_dashboard_context():
+    details = _detail_types()
+    work_orders = [
+        item
+        for item in (_normalize_work_order(entry) for entry in _read_list("work_orders", fetch_all=True))
+        if item["order_type"] in {"EN", "RD"} and item["status"] in {"In Process", "Released", "Planned"}
+    ]
+    grouped_workorders = {}
+    for item in work_orders:
+        grouped_workorders.setdefault(item["production_number"], []).append(item)
+    pending = [_approval_context_entry(record) for record in list_approval_records(status="pending", limit=500)]
+    reviewed = [
+        _approval_context_entry(record)
+        for record in list_approval_records(status=None, limit=50)
+        if record.get("approval_status") != "pending"
+    ]
+    return {
+        "pending_approvals": pending,
+        "reviewed_approvals": reviewed[:25],
+        "pending_count": len(pending),
+        "details_step_two": [item for item in details if item["option_step"] == 2],
+        "downtime_reasons": DOWNTIME_REASONS,
+        "work_orders": sorted(grouped_workorders.keys()),
+        "operations": work_orders,
+        "shift_options": SHIFT_OPTIONS,
+        "machine_options": get_machine_options(),
+    }
+
+
+def approve_time_entry(approval_id, reviewer=None, note=None):
+    record = get_approval_record(int(_as_number(approval_id, 0)))
+    if not record or record.get("approval_status") != "pending":
+        raise ValueError("The selected approval record could not be found.")
+    payload = _approval_payload(record)
+    fields = payload.get("fields") or {}
+    if not fields:
+        raise ValueError("The selected approval record has no time entry fields.")
+
+    approval_result = approve_approval_record(record["id"], reviewer=reviewer, note=note)
+    if not approval_result:
+        raise ValueError("The selected approval record was already reviewed.")
+    queued_id = approval_result["queued_id"]
+
+    try:
+        _create_item("timeentry", fields)
+        mark_record_synced(queued_id)
+        return {"approved": True, "synced": True}
+    except Exception:
+        return {"approved": True, "queued": True, "offline_only": True}
+
+
+def update_approval_time_entry(approval_id, fields_update=None):
+    record = get_approval_record(int(_as_number(approval_id, 0)))
+    if not record or record.get("approval_status") != "pending":
+        raise ValueError("The selected approval record could not be found.")
+    payload = _approval_payload(record)
+    fields = dict(payload.get("fields") or {})
+    if not fields:
+        raise ValueError("The selected approval record has no time entry fields.")
+
+    update = fields_update or {}
+    production_number = str(update.get("production_number") or fields.get("ProductionNo") or fields.get("Title") or "").strip()
+    operation_id = str(update.get("operation_id") or fields.get("OperationID") or "").strip()
+    if production_number and operation_id:
+        operation = _get_operation(
+            production_number,
+            operation_id,
+            "The selected work order operation could not be found.",
+        )
+        fields.update(_operation_fields(operation, production_number, operation_id))
+
+    detail_type = update.get("detail_type")
+    downtime_reason = update.get("downtime_reason")
+    detail_code = str(fields.get("DetailsType") or "").strip()
+    reason_code = str(fields.get("DetailsTypeII") or "").strip()
+    if detail_type is not None:
+        detail_code, reason_code = _detail_code(detail_type, downtime_reason)
+        fields["DetailsType"] = detail_code
+        fields["DetailsTypeII"] = reason_code if detail_code == "DT" else ""
+    elif downtime_reason is not None and str(downtime_reason or "").strip():
+        detail_code = "DT"
+        reason_code = _downtime_reason_code(downtime_reason)
+        fields["DetailsType"] = detail_code
+        fields["DetailsTypeII"] = reason_code
+
+    direct_text_fields = {
+        "labor_date": "LaborDate",
+        "status": "Status",
+        "operator_name": "OperatorsName",
+        "shift": "Shift",
+        "machine_no": "MachineNo",
+        "start": "Start",
+        "lunch_start": "LunchStart",
+        "lunch_stop": "LunchStop",
+        "end": "End",
+    }
+    for source_key, target_key in direct_text_fields.items():
+        if source_key in update:
+            fields[target_key] = str(update.get(source_key) or "").strip()
+
+    if "emp_id" in update:
+        emp_id = str(update.get("emp_id") or "").strip()
+        fields["EmpID"] = int(_as_number(emp_id, 0)) if emp_id.isdigit() else emp_id
+    if "employee_id" in update:
+        fields["EmployeeID"] = str(update.get("employee_id") or "").strip()
+    elif "emp_id" in update:
+        fields["EmployeeID"] = str(update.get("emp_id") or "").strip()
+
+    if "quantity" in update:
+        fields["Quantity"] = _nonnegative_number(update.get("quantity"), fields.get("Quantity", 0))
+    if "break_minutes" in update:
+        fields["BreakMinutes"] = _nonnegative_number(update.get("break_minutes"), fields.get("BreakMinutes", 0))
+
+    if "total_hours" in update or "total_minutes_remainder" in update:
+        hours = _nonnegative_number(update.get("total_hours"), 0)
+        minutes = _nonnegative_number(update.get("total_minutes_remainder"), 0)
+        if minutes >= 60:
+            raise ValueError("Total minutes must be less than 60.")
+        total_minutes = int(hours * 60 + minutes)
+        fields["TotalMinutes"] = total_minutes
+        fields["Total"] = _hhmm_from_minutes(total_minutes)
+
+    qty = _as_number(fields.get("Quantity"), 0)
+    total_minutes = _as_number(fields.get("TotalMinutes"), 0)
+    fields["Average"] = _recalculate_average(qty, total_minutes)
+
+    if "comments" in update:
+        fields["TranDescription"] = _time_entry_comment(
+            str(fields.get("DetailsType") or "").strip(),
+            str(fields.get("DetailsTypeII") or "").strip(),
+            update.get("comments"),
+            fields.get("OperationDescription") or fields.get("Description") or "",
+        )
+
+    payload["fields"] = fields
+    _refresh_approval_acumatica_payload(payload, fields)
+    if not patch_approval_record_payload(record["id"], payload):
+        raise ValueError("The selected approval record was already reviewed.")
+    return {"updated": True, "pending_approval": True}
+
+
+def reject_time_entry(approval_id, reviewer=None, note=None):
+    record = get_approval_record(int(_as_number(approval_id, 0)))
+    if not record or record.get("approval_status") != "pending":
+        raise ValueError("The selected approval record could not be found.")
+    if not mark_approval_reviewed(record["id"], "rejected", reviewer=reviewer, note=note):
+        raise ValueError("The selected approval record was already reviewed.")
+    return {"rejected": True}
+
+
 def start_time_entry(employee, shift_id, machine_no, production_number, operation_id, detail_type):
     context = get_dashboard_context(employee["emp_id"], "")
     if context.get("active_entry"):
@@ -1496,6 +1777,12 @@ def edit_active_time_entry(
         raise ValueError("Enter a correction to save.")
 
     item_id = entry["sp_id"]
+    if str(item_id).startswith("approval:"):
+        approval_id = int(_as_number(_approval_record_key(item_id), 0))
+        if not patch_approval_record_fields(approval_id, fields):
+            raise ValueError("The pending approval record could not be updated.")
+        return {"corrected": True, "pending_approval": True}
+
     if str(item_id).startswith("local:"):
         local_id = int(_as_number(_local_record_key(item_id), 0))
         patch_pending_record_fields(local_id, fields)
@@ -1540,6 +1827,7 @@ def correct_time_entry(
     selected_production = str(production_number or "").strip()
     selected_operation = str(operation_id or "").strip()
     selected_detail = str(detail_type or "").strip()
+    downtime_reason_was_sent = downtime_reason is not None
 
     if selected_production and selected_operation:
         if selected_production != entry.get("production_number") or selected_operation != entry.get("operation_id"):
@@ -1596,6 +1884,12 @@ def correct_time_entry(
         raise ValueError("Enter a correction to save.")
 
     item_id = entry["sp_id"]
+    if str(item_id).startswith("approval:"):
+        approval_id = int(_as_number(_approval_record_key(item_id), 0))
+        if not patch_approval_record_fields(approval_id, fields):
+            raise ValueError("The pending approval record could not be updated.")
+        return {"corrected": True, "pending_approval": True}
+
     if str(item_id).startswith("local:"):
         local_id = int(_as_number(_local_record_key(item_id), 0))
         patch_pending_record_fields(local_id, fields)
@@ -1634,6 +1928,12 @@ def delete_time_entry(entry_id, entry_list="timeentry"):
         local_id = int(_as_number(_local_record_key(item_id), 0))
         discard_pending_record(local_id)
         return {"deleted": True, "offline_only": True, "removed_pending_record": True}
+
+    if item_id.startswith("approval:"):
+        approval_id = int(_as_number(_approval_record_key(item_id), 0))
+        if not mark_approval_reviewed(approval_id, "rejected", note="Deleted by operator before approval."):
+            raise ValueError("The pending approval record could not be deleted.")
+        return {"deleted": True, "pending_approval": True}
 
     entry = _get_timeentry_by_id(item_id) if list_key == "timeentry" else _get_startstop_by_id(item_id)
     queued_id = queue_record(
@@ -1798,22 +2098,18 @@ def stop_time_entry(entry_id, quantity=None):
         "Year": datetime.now().year,
         "StartStopID": int(_as_number(entry["id"], 0)),
     }
-    acumatica_transaction = _acumatica_labor_transaction(final_fields)
+    employee_for_acumatica = lookup_employee_by_adp(entry.get("emp_id")) or {}
+    approval_payload = {"entry_id": entry_id, "fields": final_fields, "employee": employee_for_acumatica}
+    _attach_acumatica_payload(approval_payload, employee_for_acumatica, final_fields)
     ensure_db()
-    queued_id = queue_record(
+    approval_id = queue_approval(
         "stop_time_entry",
-        {"entry_id": entry_id, "fields": final_fields, "acumatica_labor_transaction": acumatica_transaction},
+        approval_payload,
         machine_no=entry.get("machine_no"),
         emp_id=entry.get("emp_id"),
         employee_name=entry.get("operators_name"),
-        source="offline-first",
     )
-    try:
-        _create_item("timeentry", final_fields)
-        mark_record_synced(queued_id)
-        return {"submitted": True, "worked_minutes": worked_minutes}
-    except Exception:
-        return {"submitted": False, "queued": True, "offline_only": True, "worked_minutes": worked_minutes}
+    return {"submitted": False, "pending_approval": True, "approval_id": approval_id, "worked_minutes": worked_minutes}
 
 
 def submit_misc_time(
@@ -1864,27 +2160,17 @@ def submit_misc_time(
         "TranDescription": tran_description,
         "Year": datetime.now().year,
     }
-    acumatica_transactions = _acumatica_downtime_transactions(fields, downtime_reason)
+    approval_payload = {"employee": employee, "fields": fields}
+    _attach_acumatica_payload(approval_payload, employee, fields, downtime_reason)
     ensure_db()
-    queued_id = queue_record(
+    approval_id = queue_approval(
         "misc_time",
-        {
-            "employee": employee,
-            "fields": fields,
-            "acumatica_labor_transaction": acumatica_transactions[0],
-            "acumatica_labor_transactions": acumatica_transactions,
-        },
+        approval_payload,
         machine_no=machine_no,
         emp_id=employee.get("emp_id"),
         employee_name=employee.get("full_name"),
-        source="offline-first",
     )
-    try:
-        _create_item("timeentry", fields)
-        mark_record_synced(queued_id)
-        return {"submitted": True}
-    except Exception:
-        return {"submitted": False, "queued": True, "offline_only": True}
+    return {"submitted": False, "pending_approval": True, "approval_id": approval_id}
 
 
 def submit_manual_time(
@@ -1935,22 +2221,17 @@ def submit_manual_time(
         "TranDescription": comments or operation["operation_description"] or operation["description"],
         "Year": datetime.now().year,
     }
-    acumatica_transaction = _acumatica_labor_transaction(fields)
+    approval_payload = {"employee": employee, "fields": fields}
+    _attach_acumatica_payload(approval_payload, employee, fields)
     ensure_db()
-    queued_id = queue_record(
+    approval_id = queue_approval(
         "manual_time",
-        {"employee": employee, "fields": fields, "acumatica_labor_transaction": acumatica_transaction},
+        approval_payload,
         machine_no=machine_no,
         emp_id=employee.get("emp_id"),
         employee_name=employee.get("full_name"),
-        source="offline-first",
     )
-    try:
-        _create_item("timeentry", fields)
-        mark_record_synced(queued_id)
-        return {"submitted": True}
-    except Exception:
-        return {"submitted": False, "queued": True, "offline_only": True}
+    return {"submitted": False, "pending_approval": True, "approval_id": approval_id}
 
 
 def submit_daily_checklist(employee, shift_id, machine_no, initials, notes, checks):

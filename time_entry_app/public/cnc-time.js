@@ -1,21 +1,5 @@
 let deferredInstallPrompt = null;
-const INSTALL_FLAG_KEY = "cnc_time_app_installed";
-
-function hasInstallFlag() {
-  try {
-    return window.localStorage.getItem(INSTALL_FLAG_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function setInstallFlag() {
-  try {
-    window.localStorage.setItem(INSTALL_FLAG_KEY, "true");
-  } catch {
-    // Ignore storage restrictions; standalone detection will still work.
-  }
-}
+let installAcceptedThisSession = false;
 
 function hasInstalledLaunchFlag() {
   try {
@@ -27,7 +11,7 @@ function hasInstalledLaunchFlag() {
 
 function isInstalledApp() {
   return (
-    hasInstallFlag() ||
+    installAcceptedThisSession ||
     hasInstalledLaunchFlag() ||
     window.matchMedia("(display-mode: standalone)").matches ||
     window.navigator.standalone === true
@@ -48,14 +32,14 @@ window.addEventListener("beforeinstallprompt", (event) => {
 });
 
 window.addEventListener("appinstalled", () => {
-  setInstallFlag();
+  installAcceptedThisSession = true;
   deferredInstallPrompt = null;
   hideInstallButton();
 });
 
 window.addEventListener("load", () => {
   if (hasInstalledLaunchFlag()) {
-    setInstallFlag();
+    installAcceptedThisSession = true;
     if (window.history.replaceState) {
       window.history.replaceState({}, document.title, window.location.pathname);
     }
@@ -80,11 +64,14 @@ window.addEventListener("load", () => {
       hideInstallButton();
     }
     installButton.addEventListener("click", async () => {
-      if (!deferredInstallPrompt) return;
+      if (!deferredInstallPrompt) {
+        window.alert("Use the install icon in the browser address bar if the install prompt is not ready here.");
+        return;
+      }
       deferredInstallPrompt.prompt();
       const choice = await deferredInstallPrompt.userChoice;
       if (choice?.outcome === "accepted") {
-        setInstallFlag();
+        installAcceptedThisSession = true;
       }
       deferredInstallPrompt = null;
       installButton.hidden = true;
@@ -207,4 +194,50 @@ window.addEventListener("load", () => {
     workOrderSelect.addEventListener("change", syncOperations);
     syncOperations();
   });
+
+  const liveMachineDashboard = document.querySelector("[data-live-machine-dashboard]");
+  if (liveMachineDashboard) {
+    const summaryTarget = document.getElementById("live_machine_summary");
+    const graphTarget = document.getElementById("live_machine_graph");
+    const errorTarget = document.getElementById("live_machine_error");
+    const pollMs = Math.max(Number(liveMachineDashboard.dataset.pollMs || 30000), 5000);
+    let activeRefresh = false;
+
+    const setLiveError = (message) => {
+      if (!errorTarget) return;
+      errorTarget.innerHTML = message
+        ? `<div class="cnc-notice warning">${message.replace(/[&<>"']/g, (character) => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;",
+          })[character])}</div>`
+        : "";
+    };
+
+    const refreshLiveMachine = async () => {
+      if (activeRefresh) return;
+      activeRefresh = true;
+      try {
+        const response = await fetch("/dashboard/live-machine.json", {
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.ok === false) {
+          throw new Error(payload.message || "LiveView data is unavailable.");
+        }
+        if (summaryTarget && payload.summary_html) summaryTarget.innerHTML = payload.summary_html;
+        if (graphTarget && payload.graph_html) graphTarget.innerHTML = payload.graph_html;
+        setLiveError("");
+      } catch (error) {
+        setLiveError(error.message || "LiveView data is unavailable.");
+      } finally {
+        activeRefresh = false;
+      }
+    };
+
+    window.setInterval(refreshLiveMachine, pollMs);
+  }
 });

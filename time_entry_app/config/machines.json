@@ -1,7 +1,20 @@
 [
-  {"machine_no": "1", "email": "encnc1@benoit-inc.com"},
-  {"machine_no": "2", "email": "encnc2@benoit-inc.com"},
-  {"machine_no": "3", "email": "encnc3@benoit-inc.com"},
-  {"machine_no": "4", "email": "encnc4@benoit-inc.com"},
-  {"machine_no": "6", "email": "encnc6@benoit-inc.com"}
+  {"machine_no": "1", "email": "encnc1@benoit-inc.com", "label": "CNC 1"},
+  {"machine_no": "2", "email": "encnc2@benoit-inc.com", "label": "CNC 2"},
+  {"machine_no": "3", "email": "encnc3@benoit-inc.com", "label": "CNC 3"},
+  {"machine_no": "4", "email": "encnc4@benoit-inc.com", "label": "CNC 4"},
+  {"machine_no": "5", "email": "encnc5@benoit-inc.com", "label": "CNC 5"},
+  {"machine_no": "6", "email": "encnc6@benoit-inc.com", "label": "CNC 6"},
+  {"machine_no": "Line 1- Inspection 1", "email": "line1-inspection1@local.benoit", "label": "Line 1- Inspection 1"},
+  {"machine_no": "Line 1- Inspection 2", "email": "line1-inspection2@local.benoit", "label": "Line 1- Inspection 2"},
+  {"machine_no": "Line 1- Sandblast 1", "email": "line1-sandblast1@local.benoit", "label": "Line 1- Sandblast 1"},
+  {"machine_no": "Line 1- Sandblast 2", "email": "line1-sandblast2@local.benoit", "label": "Line 1- Sandblast 2"},
+  {"machine_no": "Line 1 - Drift", "email": "line1-drift@local.benoit", "label": "Line 1 - Drift"},
+  {"machine_no": "Line 1 - Stenciling", "email": "line1-stenciling@local.benoit", "label": "Line 1 - Stenciling"},
+  {"machine_no": "Line 2 - Inspection 1", "email": "line2-inspection1@local.benoit", "label": "Line 2 - Inspection 1"},
+  {"machine_no": "Line 2 - Inspection 2", "email": "line2-inspection2@local.benoit", "label": "Line 2 - Inspection 2"},
+  {"machine_no": "Line 2 - Sandblast 1", "email": "line2-sandblast1@local.benoit", "label": "Line 2 - Sandblast 1"},
+  {"machine_no": "Line 2 - Sandblast 2", "email": "line2-sandblast2@local.benoit", "label": "Line 2 - Sandblast 2"},
+  {"machine_no": "Line 2 - Drift", "email": "line2-drift@local.benoit", "label": "Line 2 - Drift"},
+  {"machine_no": "Line 2 - Stenciling", "email": "line2-stenciling@local.benoit", "label": "Line 2 - Stenciling"}
 ]

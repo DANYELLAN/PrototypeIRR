@@ -89,6 +89,24 @@ def ensure_db():
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS approval_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_type TEXT NOT NULL,
+            machine_no TEXT,
+            emp_id TEXT,
+            employee_name TEXT,
+            payload TEXT NOT NULL,
+            approval_status TEXT NOT NULL DEFAULT 'pending',
+            submitted_at TEXT NOT NULL,
+            reviewed_at TEXT,
+            reviewed_by_emp_id TEXT,
+            reviewed_by_name TEXT,
+            review_note TEXT
+        )
+        """
+    )
     conn.commit()
     conn.close()
     _seed_machine_config()
@@ -108,7 +126,11 @@ def _load_local_machine_config():
         machine_no = str(item.get("machine_no") or "").strip()
         email = str(item.get("email") or "").strip().lower()
         if machine_no and email:
-            machines.append({"machine_no": machine_no, "email": email, "label": f"Machine {machine_no}"})
+            machines.append({
+                "machine_no": machine_no,
+                "email": email,
+                "label": str(item.get("label") or f"Machine {machine_no}").strip(),
+            })
     return machines
 
 
@@ -142,7 +164,14 @@ def get_machine_options():
     ensure_db()
     conn = _connect()
     rows = conn.execute(
-        "SELECT machine_no, email, label FROM machines ORDER BY CAST(machine_no AS INTEGER)"
+        """
+        SELECT machine_no, email, label
+        FROM machines
+        ORDER BY
+            CASE WHEN machine_no GLOB '[0-9]*' THEN 0 ELSE 1 END,
+            CAST(machine_no AS INTEGER),
+            label
+        """
     ).fetchall()
     conn.close()
     return [
@@ -269,6 +298,200 @@ def patch_pending_record_fields(record_id, fields):
     conn.commit()
     conn.close()
     return True
+
+
+def queue_approval(record_type, payload, machine_no=None, emp_id=None, employee_name=None):
+    ensure_db()
+    conn = _connect()
+    cursor = conn.execute(
+        """
+        INSERT INTO approval_queue (
+            record_type, machine_no, emp_id, employee_name, payload, approval_status, submitted_at
+        )
+        VALUES (?, ?, ?, ?, ?, 'pending', ?)
+        """,
+        (
+            record_type,
+            str(machine_no or "").strip(),
+            str(emp_id or "").strip(),
+            employee_name or "",
+            json.dumps(payload, default=str),
+            _utc_now_iso(),
+        ),
+    )
+    record_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return record_id
+
+
+def list_approval_records(status="pending", limit=500):
+    ensure_db()
+    conn = _connect()
+    if status:
+        rows = conn.execute(
+            "SELECT * FROM approval_queue WHERE approval_status = ? ORDER BY submitted_at DESC LIMIT ?",
+            (status, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM approval_queue ORDER BY submitted_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_approval_record(record_id):
+    ensure_db()
+    conn = _connect()
+    row = conn.execute("SELECT * FROM approval_queue WHERE id = ?", (record_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def mark_approval_reviewed(record_id, status, reviewer=None, note=None):
+    ensure_db()
+    conn = _connect()
+    conn.execute(
+        """
+        UPDATE approval_queue
+        SET approval_status = ?,
+            reviewed_at = ?,
+            reviewed_by_emp_id = ?,
+            reviewed_by_name = ?,
+            review_note = ?
+        WHERE id = ? AND approval_status = 'pending'
+        """,
+        (
+            status,
+            _utc_now_iso(),
+            str((reviewer or {}).get("emp_id") or "").strip(),
+            (reviewer or {}).get("full_name") or "",
+            note or "",
+            record_id,
+        ),
+    )
+    changed = conn.total_changes > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def approve_approval_record(record_id, reviewer=None, note=None):
+    ensure_db()
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT * FROM approval_queue WHERE id = ? AND approval_status = 'pending'",
+            (record_id,),
+        ).fetchone()
+        if not row:
+            conn.close()
+            return None
+
+        cursor = conn.execute(
+            """
+            INSERT INTO time_entries (record_type, machine_no, emp_id, employee_name, payload, created_at, sync_status, source)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', 'approved')
+            """,
+            (
+                row["record_type"],
+                row["machine_no"] or "",
+                row["emp_id"] or "",
+                row["employee_name"] or "",
+                row["payload"],
+                _utc_now_iso(),
+            ),
+        )
+        queued_id = cursor.lastrowid
+        update = conn.execute(
+            """
+            UPDATE approval_queue
+            SET approval_status = 'approved',
+                reviewed_at = ?,
+                reviewed_by_emp_id = ?,
+                reviewed_by_name = ?,
+                review_note = ?
+            WHERE id = ? AND approval_status = 'pending'
+            """,
+            (
+                _utc_now_iso(),
+                str((reviewer or {}).get("emp_id") or "").strip(),
+                (reviewer or {}).get("full_name") or "",
+                note or "",
+                record_id,
+            ),
+        )
+        if update.rowcount != 1:
+            conn.rollback()
+            conn.close()
+            return None
+        conn.commit()
+        conn.close()
+        return {"approval": dict(row), "queued_id": queued_id}
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+
+
+def patch_approval_record_fields(record_id, fields):
+    ensure_db()
+    if not fields:
+        return False
+    conn = _connect()
+    row = conn.execute(
+        "SELECT payload FROM approval_queue WHERE id = ? AND approval_status = 'pending'",
+        (record_id,),
+    ).fetchone()
+    if not row:
+        conn.close()
+        return False
+
+    try:
+        payload = json.loads(row["payload"] or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+
+    payload_fields = payload.setdefault("fields", {})
+    payload_fields.update(fields)
+    conn.execute(
+        "UPDATE approval_queue SET payload = ? WHERE id = ? AND approval_status = 'pending'",
+        (json.dumps(payload, default=str), record_id),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
+def patch_approval_record_payload(record_id, payload):
+    ensure_db()
+    if not payload:
+        return False
+    fields = payload.get("fields") or {}
+    conn = _connect()
+    cursor = conn.execute(
+        """
+        UPDATE approval_queue
+        SET payload = ?,
+            machine_no = ?,
+            emp_id = ?,
+            employee_name = ?
+        WHERE id = ? AND approval_status = 'pending'
+        """,
+        (
+            json.dumps(payload, default=str),
+            str(fields.get("MachineNo") or "").strip(),
+            str(fields.get("EmpID") or fields.get("EmployeeID") or "").strip(),
+            fields.get("OperatorsName") or "",
+            record_id,
+        ),
+    )
+    changed = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
 
 
 def start_break_event(entry_id, break_type, comment=None, machine_no=None, emp_id=None, employee_name=None, started_at=None):

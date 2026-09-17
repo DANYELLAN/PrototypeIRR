@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 from msal import ConfidentialClientApplication, PublicClientApplication, SerializableTokenCache
@@ -14,6 +14,16 @@ GRAPH_SCOPES = ["https://graph.microsoft.com/.default"]
 GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 DEFAULT_TOP = get_env_int("SHAREPOINT_DEFAULT_TOP", 100)
 TOKEN_CACHE_FILE = Path(os.getenv("SHAREPOINT_TOKEN_CACHE_FILE", ".msal_token_cache.json"))
+PLACEHOLDER_SECRET_VALUES = {
+    "your-client-secret",
+    "your-sharepoint-client-secret",
+    "your-time-entry-app-client-secret",
+}
+PLACEHOLDER_CLIENT_ID_VALUES = {
+    "your-client-id",
+    "your-sharepoint-client-id",
+    "your-time-entry-app-client-id",
+}
 
 APP = None
 CACHE = None
@@ -132,7 +142,11 @@ def get_access_token_from_env(prefix="SHAREPOINT", allow_interactive=True):
     """Get a Graph token from a named environment-variable prefix."""
     tenant_id = os.getenv(f"{prefix}_TENANT_ID") or TENANT_ID
     client_id = os.getenv(f"{prefix}_CLIENT_ID") or CLIENT_ID
+    if client_id.strip().lower() in PLACEHOLDER_CLIENT_ID_VALUES:
+        client_id = CLIENT_ID
     client_secret = os.getenv(f"{prefix}_CLIENT_SECRET", "")
+    if client_secret.strip().lower() in PLACEHOLDER_SECRET_VALUES:
+        client_secret = ""
     token_cache_file = os.getenv(f"{prefix}_TOKEN_CACHE_FILE") or TOKEN_CACHE_FILE
     return get_access_token(
         tenant_id=tenant_id,
@@ -240,12 +254,13 @@ def get_site_id(site_url, headers):
 def get_list_items(site_url, list_name, headers, top=DEFAULT_TOP, site_id=None, fetch_all=False):
     """Fetch list items for a SharePoint list."""
     resolved_site_id = site_id or get_site_id(site_url, headers)
+    list_identifier = quote(str(list_name), safe="")
     params = {"expand": "fields"}
     if top:
         params["$top"] = top
 
     data = graph_get(
-        f"/sites/{resolved_site_id}/lists/{list_name}/items",
+        f"/sites/{resolved_site_id}/lists/{list_identifier}/items",
         headers=headers,
         params=params,
     )
@@ -266,8 +281,9 @@ def get_list_items(site_url, list_name, headers, top=DEFAULT_TOP, site_id=None, 
 def get_list_columns(site_url, list_name, headers, site_id=None):
     """Fetch SharePoint list column metadata so writes can use internal field names."""
     resolved_site_id = site_id or get_site_id(site_url, headers)
+    list_identifier = quote(str(list_name), safe="")
     data = graph_get(
-        f"/sites/{resolved_site_id}/lists/{list_name}/columns",
+        f"/sites/{resolved_site_id}/lists/{list_identifier}/columns",
         headers=headers,
     )
     return data.get("value", [])
@@ -276,8 +292,9 @@ def get_list_columns(site_url, list_name, headers, site_id=None):
 def create_list_item(site_url, list_name, fields, headers, site_id=None):
     """Create a SharePoint list item using Microsoft Graph."""
     resolved_site_id = site_id or get_site_id(site_url, headers)
+    list_identifier = quote(str(list_name), safe="")
     return graph_post(
-        f"/sites/{resolved_site_id}/lists/{list_name}/items",
+        f"/sites/{resolved_site_id}/lists/{list_identifier}/items",
         headers=headers,
         payload={"fields": fields},
     )
@@ -286,11 +303,24 @@ def create_list_item(site_url, list_name, fields, headers, site_id=None):
 def update_list_item_fields(site_url, list_name, item_id, fields, headers, site_id=None):
     """Update SharePoint list item fields using Microsoft Graph."""
     resolved_site_id = site_id or get_site_id(site_url, headers)
+    list_identifier = quote(str(list_name), safe="")
     return graph_patch(
-        f"/sites/{resolved_site_id}/lists/{list_name}/items/{item_id}/fields",
+        f"/sites/{resolved_site_id}/lists/{list_identifier}/items/{item_id}/fields",
         headers=headers,
         payload=fields,
     )
+
+
+def parse_list_config(list_config):
+    """Return the local list name and Graph list identifier for a sync entry."""
+    if isinstance(list_config, dict):
+        list_name = list_config.get("name") or list_config.get("title") or list_config.get("id")
+        list_identifier = list_config.get("id") or list_name
+    else:
+        list_name = list_config
+        list_identifier = list_config
+
+    return str(list_name), str(list_identifier)
 
 
 def get_multiple_lists(site_to_lists_map, headers, top=DEFAULT_TOP, fetch_all=False):
@@ -303,10 +333,11 @@ def get_multiple_lists(site_to_lists_map, headers, top=DEFAULT_TOP, fetch_all=Fa
         site_ids[site_url] = site_id
         site_results = {}
 
-        for list_name in list_names:
+        for list_config in list_names:
+            list_name, list_identifier = parse_list_config(list_config)
             site_results[list_name] = get_list_items(
                 site_url,
-                list_name,
+                list_identifier,
                 headers=headers,
                 top=top,
                 site_id=site_id,

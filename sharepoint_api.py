@@ -36,6 +36,17 @@ WORK_ORDER_SITE_LISTS = {
     ],
 }
 
+INSPECTION_RECIPES_SITE_URL = os.getenv(
+    "INSPECTION_RECIPES_SITE_URL",
+    "https://benoitinc.sharepoint.com/sites/QMS1061",
+)
+INSPECTION_RECIPES_LIST_NAME = os.getenv("INSPECTION_RECIPES_LIST_NAME", "InspectionRecipes")
+INSPECTION_RECIPE_SITE_LISTS = {
+    INSPECTION_RECIPES_SITE_URL: [
+        INSPECTION_RECIPES_LIST_NAME,
+    ],
+}
+
 CNC_TIME_SITE_LISTS = {
     "https://benoitinc.sharepoint.com/sites/QMS1061": [
         "Employees",
@@ -43,14 +54,17 @@ CNC_TIME_SITE_LISTS = {
     "https://benoitinc.sharepoint.com/sites/MachinistTime": [
         "Stations",
         "Ennis Start and Stop Time Inputs",
-        "Ennis Machinist Time Entry1",
+        "Ennis Machinist Time Entry",
         "Details Type",
     ],
     "https://benoitinc.sharepoint.com/sites/BenoitMaintenance1": [
         "Assets",
         "Locations",
         "Ennis Maintenance Request",
-        "CNC Maintenace Pre-Use/Daily Checklist",
+        {
+            "name": "CNC Maintenace Pre-Use/Daily Checklist",
+            "id": "e5d9d01b-fb27-4abb-8d93-eb285c98c228",
+        },
     ],
     "https://benoitinc.sharepoint.com/sites/BenoitIT677": [
         "tblTechnicalSupportCategories",
@@ -157,14 +171,25 @@ def sync_work_orders_to_postgres():
     )
 
 
+def sync_inspection_recipes_to_postgres():
+    """Refresh the SharePoint Digital IRR recipe list used by the inspection app."""
+    return sync_sharepoint_lists_to_postgres(
+        site_lists=INSPECTION_RECIPE_SITE_LISTS,
+        fetch_all=True,
+        app_key="irr",
+        token_env_prefix="SHAREPOINT",
+    )
+
+
 def sync_cnc_time_lists_to_postgres():
     """Refresh the SharePoint lists used by the CNC Time Entry app."""
+    allow_interactive = get_env_bool("CNC_TIME_SHAREPOINT_ALLOW_INTERACTIVE", True)
     return sync_sharepoint_lists_to_postgres(
         site_lists=CNC_TIME_SITE_LISTS,
         fetch_all=True,
         app_key="time_entry",
         token_env_prefix="CNC_TIME_SHAREPOINT",
-        allow_interactive=False,
+        allow_interactive=allow_interactive,
     )
 
 

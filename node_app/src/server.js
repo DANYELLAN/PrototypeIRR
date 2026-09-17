@@ -1139,12 +1139,24 @@ function layout({ title, sidebar, content, theme = "Light" }) {
     <link rel="stylesheet" href="/public/styles.css" />
     </head>
     <body data-theme="${theme === "Dark" ? "dark" : "light"}">
-      <div class="app-shell">
+      <div class="benoit-app-frame">
+        <header class="benoit-topbar">
+          <div class="brand-block">
+            <div class="brand-logo-panel"><img src="/public/BenoitLogoRegistered-Red.png" alt="Benoit" /></div>
+            <div class="brand-copy">
+              <span>Inspection Run Report</span>
+              <small>Benoit Connect · Ennis</small>
+            </div>
+          </div>
+          <div class="topbar-product">Quality Operations</div>
+        </header>
+        <div class="app-shell">
         <aside class="sidebar">
           <button type="button" class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">«</button>
           <div class="sidebar-inner">${sidebar}</div>
         </aside>
-        <main class="content">${content}</main>
+          <main class="content">${content}</main>
+        </div>
       </div>
       ${renderPopupNoticeModal()}
       <script>
@@ -1990,18 +2002,6 @@ app.get("/", async (req, res, next) => {
         : req.session.notice;
 
     const content = `
-      <section class="hero home-hero">
-        <div class="home-hero-copy">
-          <h1>Inspection Run Report</h1>
-          <p>Manage inspector login, inspection entry, pipe history, NCR follow-up, and supervisor approvals in one place.</p>
-          <div class="badges">
-            <span class="badge">Login</span>
-            <span class="badge">Workflow</span>
-            <span class="badge">Admin</span>
-          </div>
-        </div>
-        <img class="home-hero-logo" src="/public/BenoitLogoRegistered-Red.png" alt="Benoit" />
-      </section>
       ${renderNotice(req.session.notice)}
       <section class="card">
         <details class="login-panel"${pending ? "" : " open"}>
@@ -3293,7 +3293,7 @@ app.get("/admin", async (req, res, next) => {
       return res.redirect("/workflow");
     }
     const builderOptions = await callBridge("get_recipe_builder_options", { branch: inspector.branch });
-    const localRecipes = await callBridge("list_local_recipes", { branch: inspector.branch });
+    const recipeCatalog = await callBridge("list_recipe_catalog", { branch: inspector.branch });
     const locations = await callBridge("get_locations");
     const lockedLocations = locations.filter((item) => item.is_locked);
     const pending = req.session.pendingLoginContext || null;
@@ -3305,10 +3305,17 @@ app.get("/admin", async (req, res, next) => {
         : [];
     const content = `
       <section class="hero">
-        <h1>Inspection Run Report Admin</h1>
-        <p>Administrative tools for setup and maintenance.</p>
-        <div class="badges">
-          ${req.session.sessionRecord?.id ? `<a class="badge" href="/workflow/inspection">Back to Inspection Workflow</a>` : ""}
+        <div class="admin-hero-heading">
+          <div>
+            <h1>Inspection Run Report Admin</h1>
+            <p>Administrative tools for setup and maintenance.</p>
+            <div class="badges">
+              ${req.session.sessionRecord?.id ? `<a class="badge" href="/workflow/inspection">Back to Inspection Workflow</a>` : ""}
+            </div>
+          </div>
+          <form method="post" action="/logout" class="admin-logout-form" onsubmit="return confirm('Log out and save today\'s completed pipe history? Any unfinished pipe stays unpublished.');">
+            <button class="button danger compact-button" type="submit">Log Out</button>
+          </form>
         </div>
       </section>
       ${renderNotice(req.session.notice)}
@@ -3419,12 +3426,22 @@ app.get("/admin", async (req, res, next) => {
         </form>
       </section>
       <section class="card">
-        <h2 class="section-title">Local Digital IRRs</h2>
+        <div class="catalog-heading-row">
+          <div>
+            <h2 class="section-title">All Digital IRRs</h2>
+            <p>Local and SharePoint Digital IRRs are combined by name, with the latest revision shown once.</p>
+          </div>
+          <form method="post" action="/admin/recipes/refresh">
+            <button class="button secondary compact-button" type="submit">Refresh SharePoint</button>
+          </form>
+        </div>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
                 <th>Digital IRR</th>
+                <th>Source</th>
+                <th>Branch</th>
                 <th>Connection</th>
                 <th>Drawing</th>
                 <th>Revision</th>
@@ -3436,25 +3453,39 @@ app.get("/admin", async (req, res, next) => {
               </tr>
             </thead>
             <tbody>
-              ${localRecipes
-                .map(
-                  (recipe) => `<tr>
+              ${
+                recipeCatalog.length
+                  ? recipeCatalog
+                      .map(
+                        (recipe) => `<tr>
                     <td>${escapeHtml(formatDigitalIrrName(recipe.recipe_name, recipe.drawing))}</td>
+                    <td><span class="pill source-badge">${escapeHtml(recipe.source)}</span></td>
+                    <td>${escapeHtml(recipe.branch || "All")}</td>
                     <td>${escapeHtml(recipe.connection_type)}</td>
                     <td>${escapeHtml(recipe.drawing)}</td>
                     <td>${escapeHtml(recipe.recipe_version || 1)}</td>
                     <td>${escapeHtml(recipe.source_report)}</td>
                     <td>${escapeHtml(recipe.last_edit_comment || "")}</td>
                     <td>${escapeHtml(formatDateValue(recipe.updated_at))}</td>
-                    <td><a class="button secondary compact-button" href="/admin/recipes/${encodeURIComponent(recipe.id)}/edit">Edit</a></td>
+                    <td>${
+                      recipe.local_recipe_id
+                        ? `<a class="button secondary compact-button" href="/admin/recipes/${encodeURIComponent(recipe.local_recipe_id)}/edit">Edit</a>`
+                        : '<span class="catalog-muted">SharePoint managed</span>'
+                    }</td>
                     <td>
-                      <form method="post" action="/admin/recipes/${encodeURIComponent(recipe.id)}/publish">
-                        <button class="button compact-button" type="submit">Publish</button>
-                      </form>
+                      ${
+                        recipe.local_recipe_id
+                          ? `<form method="post" action="/admin/recipes/${encodeURIComponent(recipe.local_recipe_id)}/publish">
+                               <button class="button compact-button" type="submit">Publish</button>
+                             </form>`
+                          : '<span class="catalog-muted">Published</span>'
+                      }
                     </td>
                   </tr>`,
-                )
-                .join("")}
+                      )
+                      .join("")
+                  : '<tr><td colspan="11" class="catalog-empty">No Digital IRRs are available for this branch.</td></tr>'
+              }
             </tbody>
           </table>
         </div>
@@ -3462,6 +3493,28 @@ app.get("/admin", async (req, res, next) => {
     `;
     req.session.notice = null;
     res.send(layout({ title: "Inspection Run Report Admin", sidebar: baseSidebar(req), content, theme: req.session.themeMode }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/admin/recipes/refresh", async (req, res, next) => {
+  try {
+    if (!req.session.inspector) return res.redirect("/");
+    if (!req.session.canAccessAdmin) {
+      req.session.notice = { kind: "warning", message: "Only admin users can refresh Digital IRRs." };
+      return res.redirect("/workflow/inspection");
+    }
+    const result = await callBridge("sync_inspection_recipes");
+    const refreshedCount = Object.values(result?.sync_counts || {}).reduce(
+      (total, siteCounts) => total + Number(siteCounts?.InspectionRecipes || 0),
+      0,
+    );
+    req.session.notice = {
+      kind: "success",
+      message: `SharePoint Digital IRRs refreshed. ${refreshedCount} item${refreshedCount === 1 ? "" : "s"} synchronized.`,
+    };
+    res.redirect("/admin");
   } catch (error) {
     next(error);
   }

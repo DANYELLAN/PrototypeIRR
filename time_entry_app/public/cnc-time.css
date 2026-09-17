@@ -65,18 +65,23 @@ button, input, select, textarea { font: inherit; }
 }
 
 .brand-mark {
-  width: 38px;
-  height: 38px;
+  width: 42px;
+  height: 42px;
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.15);
-  color: #fff;
-  font-family: var(--font-ui);
-  font-size: 22px;
-  font-weight: 800;
-  line-height: 1;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.18);
+}
+
+.brand-mark img {
+  display: block;
+  width: 82%;
+  height: 82%;
+  object-fit: contain;
 }
 
 .brand-copy {
@@ -217,6 +222,7 @@ button, input, select, textarea { font: inherit; }
 .cnc-notice.info { color: var(--ready); background: var(--ready-dim); border-color: rgba(59, 94, 151, 0.18); }
 
 .overview-panel,
+.liveview-panel,
 .panel-block,
 .data-card,
 .cnc-card,
@@ -276,6 +282,255 @@ button, input, select, textarea { font: inherit; }
 
 .overview-panel { padding: 0 0 16px; }
 
+.liveview-panel {
+  margin-top: 12px;
+  padding: 14px 16px 16px;
+}
+
+.live-machine-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 18px;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--brand);
+  background: var(--surface);
+}
+
+.live-machine-summary.is-good { border-left-color: var(--good); }
+.live-machine-summary.is-warn { border-left-color: var(--warn); }
+.live-machine-summary.is-bad { border-left-color: var(--brand); }
+
+.live-machine-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 190px;
+}
+
+.live-machine-title h3 {
+  margin: 0;
+  color: var(--brand);
+  font-family: var(--font-ui);
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.live-machine-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 30px;
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.live-metric {
+  display: grid;
+  gap: 4px;
+  min-width: 86px;
+  text-align: center;
+}
+
+.live-metric-value {
+  color: var(--ink);
+  font-family: var(--font-data);
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.live-metric-value.is-good,
+.live-pph-meter-header strong.is-good { color: var(--good); }
+.live-metric-value.is-warn,
+.live-pph-meter-header strong.is-warn { color: var(--warn); }
+.live-metric-value.is-bad,
+.live-pph-meter-header strong.is-bad { color: var(--brand); }
+
+.live-metric-label {
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.live-machine-meta {
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.live-machine-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(270px, 0.32fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.live-chart-card,
+.live-pph-meter {
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.live-chart-card {
+  min-width: 0;
+  padding: 12px 12px 8px;
+}
+
+.live-chart-card h3 {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.live-trend-svg {
+  display: block;
+  width: 100%;
+  min-height: 260px;
+  background: #f7f7f7;
+}
+
+.live-trend-grid {
+  stroke: rgba(0, 0, 0, 0.07);
+  stroke-dasharray: 4 5;
+}
+
+.live-trend-axis {
+  stroke: rgba(0, 0, 0, 0.18);
+  stroke-width: 1;
+}
+
+.live-trend-ytext,
+.live-trend-xtext,
+.live-trend-ylabel,
+.live-trend-ref-label {
+  fill: var(--muted);
+  font-family: var(--font-data);
+  font-size: 11px;
+}
+
+.live-trend-ytext { text-anchor: end; }
+.live-trend-xtext { text-anchor: middle; }
+
+.live-trend-ref {
+  fill: none;
+  stroke-width: 2;
+  stroke-dasharray: 6 6;
+}
+
+.live-trend-ref.target { stroke: rgba(46, 125, 50, 0.62); }
+.live-trend-ref.minimum { stroke: rgba(192, 138, 0, 0.7); }
+.live-trend-ref-label.target { fill: var(--good); }
+.live-trend-ref-label.minimum { fill: var(--warn); }
+
+.live-trend-line {
+  fill: none;
+  stroke: var(--brand-dark);
+  stroke-width: 3;
+}
+
+.live-trend-point {
+  fill: var(--brand-dark);
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+
+.live-chart-empty,
+.live-machine-unavailable {
+  padding: 28px 16px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.live-pph-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.live-pph-meter {
+  display: grid;
+  align-content: center;
+  gap: 22px;
+  min-height: 158px;
+  padding: 20px 16px;
+}
+
+.live-pph-meter-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.live-pph-meter-header h4 {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.live-pph-meter-header span {
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+
+.live-pph-meter-header strong {
+  font-family: var(--font-data);
+  font-size: 22px;
+}
+
+.live-pph-track {
+  position: relative;
+  height: 12px;
+  background: var(--bg-soft);
+  overflow: visible;
+}
+
+.live-pph-fill {
+  height: 100%;
+  background: var(--brand);
+}
+
+.live-pph-marker {
+  position: absolute;
+  top: -7px;
+  width: 3px;
+  height: 26px;
+  transform: translateX(-50%);
+}
+
+.live-pph-marker.minimum { background: var(--warn); }
+.live-pph-marker.target { background: var(--good); }
+
+.live-pph-labels {
+  position: relative;
+  height: 14px;
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: 10px;
+}
+
+.live-pph-labels span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+}
+
 .overview-header {
   display: flex;
   align-items: baseline;
@@ -295,6 +550,12 @@ button, input, select, textarea { font: inherit; }
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   padding: 0 18px 14px;
+}
+
+.metrics-row.standalone {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 0;
+  margin: 0 0 12px;
 }
 
 .metric-box {
@@ -485,6 +746,14 @@ button, input, select, textarea { font: inherit; }
 .cnc-status-card,
 .status-card { border-left: 3px solid var(--brand); }
 
+.liveview-panel .panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
 .status-card strong,
 .cnc-status-card strong {
   display: block;
@@ -626,6 +895,150 @@ button, input, select, textarea { font: inherit; }
 
 .delete-entry-form {
   margin-top: 6px;
+}
+
+.approval-table small {
+  display: inline-block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  white-space: normal;
+}
+
+.approval-table strong {
+  display: block;
+  font-family: var(--font-ui);
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.approval-type,
+.approval-destinations span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 3px 7px;
+  border: 1px solid rgba(158, 27, 30, 0.18);
+  border-radius: 2px;
+  background: rgba(158, 27, 30, 0.08);
+  color: var(--brand-dark);
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.approval-type.approved {
+  border-color: rgba(33, 122, 54, 0.22);
+  background: rgba(33, 122, 54, 0.1);
+  color: var(--good);
+}
+
+.approval-type.rejected {
+  border-color: rgba(193, 24, 24, 0.24);
+  background: rgba(193, 24, 24, 0.1);
+  color: var(--bad);
+}
+
+.approval-destinations {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.approval-destinations span {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.approval-action-form {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto;
+  gap: 6px;
+  min-width: 270px;
+  margin: 0 0 6px;
+  align-items: center;
+}
+
+.approval-action-form:last-child {
+  margin-bottom: 0;
+}
+
+.approval-action-form input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--ink-soft);
+  color: var(--ink);
+  padding: 6px 8px;
+  font-family: var(--font-data);
+  font-size: 12px;
+}
+
+.approval-edit-details {
+  margin-top: 8px;
+  min-width: 420px;
+}
+
+.approval-edit-details summary {
+  cursor: pointer;
+  color: var(--brand-dark);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.approval-edit-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(150px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.approval-edit-form label {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.approval-edit-form label.wide,
+.approval-edit-form label.full {
+  grid-column: 1 / -1;
+}
+
+.approval-edit-form span {
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.approval-edit-form input,
+.approval-edit-form select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--ink-soft);
+  color: var(--ink);
+  padding: 6px 8px;
+  font-family: var(--font-data);
+  font-size: 12px;
+}
+
+.approval-edit-form button {
+  justify-self: start;
 }
 
 .cnc-inline-actions {
@@ -912,6 +1325,8 @@ button, input, select, textarea { font: inherit; }
 
   .utility-grid,
   .metrics-row,
+  .metrics-row.standalone,
+  .live-machine-panel,
   .cnc-grid,
   .cnc-grid.two,
   .cnc-grid.single,
@@ -937,6 +1352,15 @@ button, input, select, textarea { font: inherit; }
 
   .login-layout {
     grid-template-columns: 1fr;
+  }
+
+  .live-machine-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .live-machine-metrics {
+    justify-content: flex-start;
   }
 
   .cnc-login-card {
