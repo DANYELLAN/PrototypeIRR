@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/cncTimeServer.js",
-    "dev": "node --watch src/cncTimeServer.js"
+    "dev": "node --watch src/cncTimeServer.js",
+    "sync:acumatica": "python scripts/sync_acumatica.py"
   },
   "dependencies": {
     "express": "^4.21.2",

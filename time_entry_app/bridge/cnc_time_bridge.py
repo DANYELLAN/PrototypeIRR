@@ -27,6 +27,7 @@ from time_entry_app.bridge.cnc_time_backend import (  # noqa: E402
     start_time_entry,
     stop_time_entry,
     sync_background_jobs,
+    sync_approved_entries,
     sync_pending_writes_to_sharepoint,
     sync_reference_data_from_sharepoint,
     submit_daily_checklist,
@@ -85,6 +86,13 @@ def main():
             return _result(sync_pending_writes_to_sharepoint(payload.get("limit") or 50))
         if action == "sync_background_jobs":
             return _result(sync_background_jobs())
+        if action == "sync_approved_entries":
+            return _result(
+                sync_approved_entries(
+                    trigger_name=payload.get("trigger_name") or "manual",
+                    actor=payload.get("actor") or {},
+                )
+            )
         if action == "start_time_entry":
             return _result(
                 start_time_entry(
@@ -155,7 +163,14 @@ def main():
                 )
             )
         if action == "update_approval_time_entry":
-            return _result(update_approval_time_entry(payload.get("approval_id"), payload.get("fields") or {}))
+            return _result(
+                update_approval_time_entry(
+                    payload.get("approval_id"),
+                    payload.get("fields") or {},
+                    editor=payload.get("editor") or {},
+                    reason=payload.get("reason"),
+                )
+            )
         if action == "submit_misc_time":
             return _result(
                 submit_misc_time(

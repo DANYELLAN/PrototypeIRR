@@ -180,6 +180,12 @@ function noticeMarkup(notice) {
   return `<div class="cnc-notice ${escapeHtml(notice.kind || "info")}">${escapeHtml(notice.message)}</div>`;
 }
 
+function noticeAlertScript(notice) {
+  if (!notice?.popup) return "";
+  const message = JSON.stringify(String(notice.message || "")).replace(/</g, "\\u003c");
+  return `<script>window.addEventListener("DOMContentLoaded", () => window.alert(${message}));</script>`;
+}
+
 function machineBadge(sessionData) {
   if (!sessionData?.machine_no) return "";
   return `<span class="cnc-chip">${escapeHtml(stationDisplayName(sessionData.machine_no))}</span>`;
@@ -318,6 +324,7 @@ function layout({ title, body, sessionData, notice, active = "" }) {
           ${noticeMarkup(notice)}
           ${body}
         </main>
+        ${noticeAlertScript(notice)}
       </div>
     </body>
   </html>`;
@@ -734,8 +741,9 @@ function shiftOptionList(shifts, selectedValue = "") {
 
 function approvalEditForm(row, editContext = {}) {
   const totalMinutes = Number(row.total_minutes || 0);
+  const isApproved = row.approval_status === "approved";
   return `<details class="approval-edit-details">
-    <summary>Edit time entry</summary>
+    <summary>${isApproved ? "Correct approved entry" : "Edit time entry"}</summary>
     <form method="post" action="/admin/update" class="approval-edit-form">
       <input type="hidden" name="approval_id" value="${escapeHtml(row.approval_id)}" />
       <label><span>Labor Date</span><input name="labor_date" type="date" value="${escapeHtml(row.labor_date || "")}" /></label>
@@ -762,7 +770,8 @@ function approvalEditForm(row, editContext = {}) {
       <label class="wide"><span>Lunch Stop</span><input name="lunch_stop" value="${escapeHtml(row.lunch_stop || "")}" /></label>
       <label class="wide"><span>End</span><input name="end" value="${escapeHtml(row.end || "")}" /></label>
       <label class="full"><span>Comments / Tran Description</span><input name="comments" value="${escapeHtml(row.tran_description || "")}" /></label>
-      <button class="cnc-button ghost" type="submit">Save Changes</button>
+      ${isApproved ? '<label class="full"><span>Correction Reason</span><textarea name="correction_reason" rows="2" required></textarea></label>' : ""}
+      <button class="cnc-button ghost" type="submit">${isApproved ? "Save Correction" : "Save Changes"}</button>
     </form>
   </details>`;
 }
@@ -803,10 +812,10 @@ function approvalTable(rows, editContext = {}) {
   </table></div>`;
 }
 
-function approvalHistoryTable(rows) {
+function approvalHistoryTable(rows, editContext = {}) {
   if (!rows?.length) return "<p class='cnc-empty'>No reviewed time entries yet.</p>";
   return `<div class="cnc-table-wrap"><table class="cnc-table approval-table approval-history-table">
-    <thead><tr><th>Reviewed</th><th>Status</th><th>Operator</th><th>Machine</th><th>Work</th><th>Time</th><th>Reviewer</th><th>Note</th></tr></thead>
+    <thead><tr><th>Reviewed</th><th>Status</th><th>Operator</th><th>Machine</th><th>Work</th><th>Time</th><th>Acumatica</th><th>Reviewer</th><th>Note</th><th>Correction</th></tr></thead>
     <tbody>
       ${rows
         .map(
@@ -817,8 +826,10 @@ function approvalHistoryTable(rows) {
             <td>${escapeHtml(row.machine_no || "")}</td>
             <td>${approvalWorkSummary(row)}</td>
             <td>${approvalTimeSummary(row)}</td>
+            <td><strong>${escapeHtml(String(row.acumatica_status || "not_sent").replaceAll("_", " "))}</strong><br><small>${escapeHtml(row.acumatica_batch_nbr || "")}</small>${row.acumatica_last_error ? `<br><small>${escapeHtml(row.acumatica_last_error)}</small>` : ""}</td>
             <td>${escapeHtml(row.reviewed_by_name || "")}<br><small>${escapeHtml(row.reviewed_by_emp_id || "")}</small></td>
             <td>${escapeHtml(row.review_note || "")}</td>
+            <td>${row.approval_status === "approved" ? approvalEditForm(row, editContext) : ""}</td>
           </tr>`,
         )
         .join("")}
@@ -999,7 +1010,8 @@ app.get("/admin", requireApprover, async (req, res, next) => {
     const reviewed = context.reviewed_approvals || [];
     const totalMinutes = pending.reduce((sum, row) => sum + Number(row.total_minutes || 0), 0);
     const totalQty = pending.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
-    const acumaticaCount = pending.filter((row) => row.has_acumatica_payload).length;
+    const acumaticaSync = context.acumatica_sync || { counts: {} };
+    const acumaticaUnsent = Number(acumaticaSync.counts?.not_sent || 0) + Number(acumaticaSync.counts?.failed || 0) + Number(acumaticaSync.counts?.changed_after_send || 0);
     const approvalEditContext = {
       workOrders: context.work_orders || [],
       operations: context.operations || [],
@@ -1034,8 +1046,16 @@ app.get("/admin", requireApprover, async (req, res, next) => {
             <div class="metric-label">Pending Quantity</div>
           </div>
           <div class="metric-box">
-            <div class="metric-value">${escapeHtml(acumaticaCount)}</div>
-            <div class="metric-label">Acumatica Ready</div>
+            <div class="metric-value">${escapeHtml(acumaticaUnsent)}</div>
+            <div class="metric-label">Acumatica Pending</div>
+          </div>
+        </section>
+        <section class="cnc-card">
+          <div class="cnc-section-header">
+            <h3>Acumatica Labor Sync</h3>
+            <form method="post" action="/admin/send-acumatica" onsubmit="return confirm('Send all approved, unsent labor entries to Acumatica?');">
+              <button class="cnc-button" type="submit">Send to Acumatica</button>
+            </form>
           </div>
         </section>
         <section class="cnc-card">
@@ -1044,7 +1064,7 @@ app.get("/admin", requireApprover, async (req, res, next) => {
         </section>
         <section class="cnc-card">
           <div class="cnc-section-header"><h3>Recent Reviews</h3></div>
-          ${approvalHistoryTable(reviewed)}
+          ${approvalHistoryTable(reviewed, approvalEditContext)}
         </section>`,
       }),
     );
@@ -1056,8 +1076,10 @@ app.get("/admin", requireApprover, async (req, res, next) => {
 
 app.post("/admin/update", requireApprover, async (req, res) => {
   try {
-    await callCncBridge("update_approval_time_entry", {
+    const result = await callCncBridge("update_approval_time_entry", {
       approval_id: req.body.approval_id,
+      editor: req.session.cncUser.employee,
+      reason: req.body.correction_reason,
       fields: {
         labor_date: req.body.labor_date,
         status: req.body.status,
@@ -1081,7 +1103,37 @@ app.post("/admin/update", requireApprover, async (req, res) => {
         comments: req.body.comments,
       },
     });
-    req.session.notice = { kind: "success", message: "Pending approval updated." };
+    req.session.notice = result.released_notification_required
+      ? {
+          kind: "warning",
+          popup: true,
+          message: `Acumatica batch ${result.batch_nbr || ""} has already been released. Please notify Logistics of this correction.`,
+        }
+      : { kind: "success", message: result.pending_approval ? "Pending approval updated." : "Approved entry correction saved for Acumatica sync." };
+  } catch (error) {
+    req.session.notice = { kind: "warning", message: error.message };
+  }
+  res.redirect("/admin");
+});
+
+app.post("/admin/send-acumatica", requireApprover, async (req, res) => {
+  try {
+    const result = await callCncBridge("sync_approved_entries", {
+      trigger_name: "manual",
+      actor: req.session.cncUser.employee,
+    });
+    if (result.status === "disabled") {
+      req.session.notice = { kind: "warning", message: "Acumatica sync is disabled. Enable it after local testing is complete." };
+    } else if (result.status === "configuration_error") {
+      req.session.notice = { kind: "warning", message: result.error || "Acumatica sync configuration is incomplete." };
+    } else if (result.status === "already_running") {
+      req.session.notice = { kind: "info", message: "An Acumatica sync is already running." };
+    } else {
+      req.session.notice = {
+        kind: result.failed ? "warning" : "success",
+        message: `Acumatica sync complete: ${result.sent || 0} sent, ${result.skipped || 0} skipped, ${result.failed || 0} failed.${result.batches?.length ? ` Batches: ${result.batches.join(", ")}.` : ""}`,
+      };
+    }
   } catch (error) {
     req.session.notice = { kind: "warning", message: error.message };
   }

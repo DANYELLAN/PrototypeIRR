@@ -47,3 +47,21 @@ This app is intentionally separate, but it still shares the same project environ
 - Submitted production, manual, and misc labor records are held in a local approval queue first. Users with the `approver` role can review them at `/admin`; approval releases the stored payload into the existing downstream SharePoint/Acumatica queue, while rejection keeps it out of downstream systems.
 - Approval access is granted from employee department/title text using `CNC_TIME_APPROVER_DEPARTMENT_KEYWORDS`, or explicitly with `CNC_TIME_APPROVER_ADP_NUMBERS`.
 - If `CNC_TIME_IT_WEBHOOK_URL` or `CNC_TIME_SUPERVISOR_WEBHOOK_URL` are not set, support requests are queued locally in `data/cnc_time_outbox.jsonl`.
+
+## Acumatica labor sync
+
+Approved CNC entries are grouped by labor date and area (`L1`, `L2`, or `T&B`) and sent to the configured Acumatica `Labor` endpoint as on-hold batches. The integration is disabled unless `ACUMATICA_ENABLED=true` is set in the ignored root `.env` file. `ACUMATICA_CUTOVER_AT` must also contain the UTC go-live timestamp; approvals reviewed before that timestamp are never selected.
+
+Run the same idempotent sync used by the approval-page button:
+
+```powershell
+npm run sync:acumatica
+```
+
+On the always-on Windows server, install the daily 6:00 AM local-time task from an elevated PowerShell prompt:
+
+```powershell
+.\scripts\install_acumatica_task.ps1
+```
+
+Keep the server time zone set to Central Time. Task history and Acumatica send results are also retained in the local SQLite database.

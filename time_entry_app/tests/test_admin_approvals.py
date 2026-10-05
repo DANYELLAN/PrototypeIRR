@@ -56,13 +56,49 @@ class AdminApprovalStoreTests(unittest.TestCase):
 
 
 class AdminApprovalBackendTests(unittest.TestCase):
-    def test_admin_update_refreshes_pending_payload_and_acumatica(self):
+    def test_approval_rebuilds_acumatica_payload_from_reviewed_fields(self):
         captured = {}
+        record = {
+            "id": 45,
+            "record_type": "stop_time_entry",
+            "approval_status": "pending",
+            "payload": (
+                '{"fields":{"ProductionNo":"EWO26-00090","OperationID":"0050",'
+                '"DetailsType":"Machining","Quantity":1,"TotalMinutes":15,"Total":"00:15",'
+                '"EmployeeID":"001005","MachineNo":"1","LaborType":"Direct","Shift":"40"},'
+                '"employee":{"machinist":true},'
+                '"acumatica_labor_transaction":{"labor_minutes":0}}'
+            ),
+        }
 
         def capture_payload(record_id, payload):
             captured["record_id"] = record_id
             captured["payload"] = payload
             return True
+
+        with (
+            patch.object(backend, "get_approval_record", return_value=record),
+            patch.object(backend, "patch_approval_record_payload", side_effect=capture_payload),
+            patch.object(backend, "approve_approval_record", return_value={"queued_id": 91}),
+            patch.object(backend, "_create_item"),
+            patch.object(backend, "mark_record_synced"),
+        ):
+            result = backend.approve_time_entry(45)
+
+        transaction = captured["payload"]["acumatica_labor_transaction"]
+        self.assertTrue(result["approved"])
+        self.assertEqual(captured["record_id"], 45)
+        self.assertEqual(transaction["labor_minutes"], 15)
+        self.assertEqual(transaction["labor_time"], "00:15")
+        self.assertEqual(transaction["labor_amount"], 30.83)
+
+    def test_admin_update_refreshes_pending_payload_and_acumatica(self):
+        captured = {}
+
+        def capture_payload(record_id, payload, editor=None, reason=None):
+            captured["record_id"] = record_id
+            captured["payload"] = payload
+            return {"approval_status": "pending", "revision_no": 2, "had_sync_record": False}
 
         record = {
             "id": 44,
@@ -84,7 +120,7 @@ class AdminApprovalBackendTests(unittest.TestCase):
         with (
             patch.object(backend, "get_approval_record", return_value=record),
             patch.object(backend, "_get_operation", return_value=operation),
-            patch.object(backend, "patch_approval_record_payload", side_effect=capture_payload),
+            patch.object(backend, "update_approval_with_revision", side_effect=capture_payload),
         ):
             result = backend.update_approval_time_entry(
                 44,
@@ -104,7 +140,9 @@ class AdminApprovalBackendTests(unittest.TestCase):
 
         fields = captured["payload"]["fields"]
         acumatica = captured["payload"]["acumatica_labor_transaction"]
-        self.assertEqual(result, {"updated": True, "pending_approval": True})
+        self.assertTrue(result["updated"])
+        self.assertTrue(result["pending_approval"])
+        self.assertEqual(result["revision_no"], 2)
         self.assertEqual(captured["record_id"], 44)
         self.assertEqual(fields["ProductionNo"], "EWO26-00002")
         self.assertEqual(fields["OperationID"], "0020")

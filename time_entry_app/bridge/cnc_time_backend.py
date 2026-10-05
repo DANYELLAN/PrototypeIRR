@@ -2,6 +2,7 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -9,6 +10,10 @@ PROJECT_ROOT = APP_ROOT.parent
 for candidate in (str(APP_ROOT), str(PROJECT_ROOT)):
     if candidate not in sys.path:
         sys.path.insert(0, candidate)
+
+from config import load_env_file
+
+load_env_file()
 
 LOCAL_MACHINE_CONFIG = APP_ROOT / "config" / "machines.json"
 
@@ -19,6 +24,8 @@ from local_store import (
     discard_pending_record,
     ensure_db,
     finish_break_event,
+    get_acumatica_sync_item,
+    get_acumatica_sync_summary,
     get_approval_record,
     get_active_break_event,
     get_machine_options,
@@ -33,8 +40,10 @@ from local_store import (
     queue_record,
     save_session,
     start_break_event,
+    update_approval_with_revision,
     upsert_machine_options,
 )
+from time_entry_app.acumatica_sync import get_approval_batch_status, sync_approved_entries
 from postgres_sync import get_db_connection, initialize_database, sync_list_to_postgres
 from sharepoint_api import sync_cnc_time_lists_to_postgres
 from sharepoint_client import (
@@ -876,6 +885,11 @@ def _acumatica_labor_transaction(fields, reason_code="", labor_rate=None):
     quantity = _as_number(fields.get("Quantity"), 0)
     rate = _as_number(labor_rate, ACUMATICA_DEFAULTS["labor_rate"])
     labor_hours = round(total_minutes / 60, 4)
+    labor_amount = float(
+        (Decimal(total_minutes) * Decimal(str(rate)) / Decimal(60)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+    )
     return {
         "tran_description": str(fields.get("TranDescription") or fields.get("DetailsType") or "").strip(),
         "detail_type": str(fields.get("DetailsType") or "").strip(),
@@ -892,7 +906,7 @@ def _acumatica_labor_transaction(fields, reason_code="", labor_rate=None):
         "labor_minutes": total_minutes,
         "labor_hours": labor_hours,
         "labor_rate": rate,
-        "labor_amount": round(labor_hours * rate, 2),
+        "labor_amount": labor_amount,
         "quantity": quantity,
         "uom": ACUMATICA_DEFAULTS["uom"],
         "warehouse": ACUMATICA_DEFAULTS["warehouse"],
@@ -1015,6 +1029,7 @@ def _approval_context_entry(record):
     payload = _approval_payload(record)
     fields = payload.get("fields") or {}
     entry = _normalize_timeentry({"id": str(record["id"]), "fields": fields})
+    sync_item = get_acumatica_sync_item(record["id"])
     entry.update(
         {
             "approval_id": record["id"],
@@ -1025,6 +1040,10 @@ def _approval_context_entry(record):
             "reviewed_by_name": record.get("reviewed_by_name"),
             "review_note": record.get("review_note"),
             "approval_status": record.get("approval_status"),
+            "revision_no": record.get("revision_no") or 1,
+            "acumatica_status": (sync_item or {}).get("status") or "not_sent",
+            "acumatica_batch_nbr": (sync_item or {}).get("batch_nbr") or "",
+            "acumatica_last_error": (sync_item or {}).get("last_error") or "",
             "employee_name": record.get("employee_name") or entry.get("operators_name"),
             "emp_id": record.get("emp_id") or entry.get("emp_id"),
             "machine_no": record.get("machine_no") or entry.get("machine_no"),
@@ -1504,6 +1523,7 @@ def get_admin_dashboard_context():
         "operations": work_orders,
         "shift_options": SHIFT_OPTIONS,
         "machine_options": get_machine_options(),
+        "acumatica_sync": get_acumatica_sync_summary(os.getenv("ACUMATICA_CUTOVER_AT") or None),
     }
 
 
@@ -1515,6 +1535,12 @@ def approve_time_entry(approval_id, reviewer=None, note=None):
     fields = payload.get("fields") or {}
     if not fields:
         raise ValueError("The selected approval record has no time entry fields.")
+
+    # Pending corrections update the reviewed fields. Rebuild the integration
+    # payload here so Acumatica receives the manager-approved values.
+    _refresh_approval_acumatica_payload(payload, fields)
+    if not patch_approval_record_payload(record["id"], payload):
+        raise ValueError("The selected approval record could not be prepared for Acumatica.")
 
     approval_result = approve_approval_record(record["id"], reviewer=reviewer, note=note)
     if not approval_result:
@@ -1529,10 +1555,12 @@ def approve_time_entry(approval_id, reviewer=None, note=None):
         return {"approved": True, "queued": True, "offline_only": True}
 
 
-def update_approval_time_entry(approval_id, fields_update=None):
+def update_approval_time_entry(approval_id, fields_update=None, editor=None, reason=None):
     record = get_approval_record(int(_as_number(approval_id, 0)))
-    if not record or record.get("approval_status") != "pending":
+    if not record or record.get("approval_status") not in {"pending", "approved"}:
         raise ValueError("The selected approval record could not be found.")
+    if record.get("approval_status") == "approved" and not str(reason or "").strip():
+        raise ValueError("A correction reason is required after manager approval.")
     payload = _approval_payload(record)
     fields = dict(payload.get("fields") or {})
     if not fields:
@@ -1614,9 +1642,25 @@ def update_approval_time_entry(approval_id, fields_update=None):
 
     payload["fields"] = fields
     _refresh_approval_acumatica_payload(payload, fields)
-    if not patch_approval_record_payload(record["id"], payload):
-        raise ValueError("The selected approval record was already reviewed.")
-    return {"updated": True, "pending_approval": True}
+    revision = update_approval_with_revision(record["id"], payload, editor=editor, reason=reason)
+    if not revision:
+        raise ValueError("The selected approval record could not be updated.")
+    result = {
+        "updated": True,
+        "pending_approval": record.get("approval_status") == "pending",
+        "revision_no": revision["revision_no"],
+        "released_notification_required": False,
+    }
+    if record.get("approval_status") == "approved" and revision["had_sync_record"]:
+        try:
+            batch_status = get_approval_batch_status(record["id"])
+            result["batch_status"] = batch_status.get("status")
+            result["batch_nbr"] = batch_status.get("batch_nbr")
+            result["released_notification_required"] = bool(batch_status.get("released"))
+        except Exception as exc:
+            result["batch_status"] = "Unknown"
+            result["status_check_error"] = str(exc)
+    return result
 
 
 def reject_time_entry(approval_id, reviewer=None, note=None):
