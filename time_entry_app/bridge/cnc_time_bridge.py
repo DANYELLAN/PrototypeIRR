@@ -16,11 +16,14 @@ from time_entry_app.bridge.cnc_time_backend import (  # noqa: E402
     get_admin_dashboard_context,
     get_dashboard_context,
     get_employee_lookup,
+    get_notification_context,
     get_sign_in_context,
     get_time_export_rows,
     pause_for_lunch,
     resume_from_lunch,
     reject_time_entry,
+    respond_to_mold_approval,
+    retry_acumatica_entry,
     send_it_request,
     send_supervisor_message,
     sign_in,
@@ -34,6 +37,7 @@ from time_entry_app.bridge.cnc_time_backend import (  # noqa: E402
     submit_maintenance_request,
     submit_manual_time,
     submit_misc_time,
+    submit_notification_request,
     update_approval_time_entry,
 )
 
@@ -80,6 +84,8 @@ def main():
             return _result(get_admin_dashboard_context())
         if action == "get_time_export_rows":
             return _result(get_time_export_rows(payload.get("start_date"), payload.get("end_date")))
+        if action == "get_notification_context":
+            return _result(get_notification_context(payload.get("emp_id")))
         if action == "sync_reference_data_from_sharepoint":
             return _result(sync_reference_data_from_sharepoint())
         if action == "sync_pending_writes_to_sharepoint":
@@ -90,6 +96,13 @@ def main():
             return _result(
                 sync_approved_entries(
                     trigger_name=payload.get("trigger_name") or "manual",
+                    actor=payload.get("actor") or {},
+                )
+            )
+        if action == "retry_acumatica_entry":
+            return _result(
+                retry_acumatica_entry(
+                    payload.get("approval_id"),
                     actor=payload.get("actor") or {},
                 )
             )
@@ -223,6 +236,27 @@ def main():
                     payload.get("location_id"),
                     payload.get("asset_id"),
                     payload.get("user_email"),
+                )
+            )
+        if action == "submit_notification_request":
+            return _result(
+                submit_notification_request(
+                    payload.get("employee") or {},
+                    payload.get("machine_no"),
+                    payload.get("notification_type"),
+                    payload.get("work_order"),
+                    payload.get("material_change_type"),
+                    payload.get("message"),
+                )
+            )
+        if action == "respond_to_mold_approval":
+            return _result(
+                respond_to_mold_approval(
+                    payload.get("request_id"),
+                    payload.get("decision_token"),
+                    payload.get("decision"),
+                    payload.get("responder_name"),
+                    payload.get("response_note"),
                 )
             )
         if action == "send_it_request":

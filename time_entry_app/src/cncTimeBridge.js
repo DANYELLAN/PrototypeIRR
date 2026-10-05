@@ -5,12 +5,15 @@ import { spawn } from "child_process";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const bridgeScript = path.resolve(__dirname, "..", "bridge", "cnc_time_bridge.py");
+const pythonExecutable =
+  process.env.CNC_TIME_PYTHON_EXECUTABLE || process.env.PYTHON_EXECUTABLE || "python";
 const BRIDGE_CACHE_TTL_MS = 15000;
 const bridgeCache = new Map();
 const CACHEABLE_ACTIONS = new Set([
   "get_sign_in_context",
   "get_employee_lookup",
   "get_dashboard_context",
+  "get_notification_context",
 ]);
 
 function makeCacheKey(action, extra = {}) {
@@ -40,7 +43,7 @@ export function callCncBridge(action, extra = {}) {
 
   const promise = new Promise((resolve, reject) => {
     const payload = JSON.stringify({ action, ...extra });
-    const child = spawn("python", [bridgeScript, payload], {
+    const child = spawn(pythonExecutable, [bridgeScript, payload], {
       cwd: path.resolve(__dirname, "..", ".."),
       windowsHide: true,
     });

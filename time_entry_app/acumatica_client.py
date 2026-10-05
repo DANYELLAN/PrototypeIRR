@@ -19,6 +19,21 @@ def wrapped(value):
     return {"value": value}
 
 
+def response_errors(value, path=""):
+    errors = []
+    if isinstance(value, dict):
+        error = str(value.get("error") or "").strip()
+        if error:
+            errors.append(f"{path or 'entity'}: {error}")
+        for key, child in value.items():
+            if key != "error":
+                errors.extend(response_errors(child, f"{path}.{key}" if path else key))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            errors.extend(response_errors(child, f"{path}[{index}]"))
+    return errors
+
+
 class AcumaticaClient:
     def __init__(self, session=None):
         self.base_url = os.getenv("ACUMATICA_BASE_URL", "https://benoit-inc.acumatica.com").rstrip("/")
@@ -42,9 +57,13 @@ class AcumaticaClient:
         except requests.RequestException as exc:
             raise AcumaticaError(f"Acumatica request failed: {exc}") from exc
         if response.status_code not in {200, 201, 202, 204}:
-            detail = response.text.strip()
-            if len(detail) > 800:
-                detail = f"{detail[:800]}..."
+            try:
+                errors = response_errors(response.json())
+            except ValueError:
+                errors = []
+            detail = "; ".join(errors) or response.text.strip()
+            if len(detail) > 4000:
+                detail = f"{detail[:4000]}..."
             raise AcumaticaError(
                 f"Acumatica returned HTTP {response.status_code} for {method} {url}: {detail or 'No response body'}"
             )

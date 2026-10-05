@@ -266,11 +266,12 @@ function layout({ title, body, sessionData, notice, active = "" }) {
     { key: "home", href: "/dashboard", label: "Machine Overview" },
     { key: "time", href: "/time", label: "Time Entry" },
     { key: "checklist", href: "/checklist", label: "Daily Checklist" },
+    { key: "notifications", href: "/notifications", label: "Notifications" },
     { key: "maintenance", href: "/maintenance", label: "Maintenance" },
     { key: "it", href: "/contact/it", label: "IT Support" },
   ].filter((item) => {
     if (!authed) return true;
-    if (item.key === "home" || item.key === "time" || item.key === "checklist" || item.key === "maintenance" || item.key === "it") {
+    if (item.key === "home" || item.key === "time" || item.key === "checklist" || item.key === "notifications" || item.key === "maintenance" || item.key === "it") {
       return hasRole(sessionData, "operator");
     }
     return true;
@@ -337,6 +338,48 @@ function optionList(values, selectedValue = "") {
       return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(value)}</option>`;
     })
     .join("");
+}
+
+function notificationTypeLabel(value) {
+  return {
+    mold_approval: "Mold Approval",
+    change_material: "Change Material",
+    assistance_asap: "Assistance Needed ASAP",
+  }[value] || value || "Notification";
+}
+
+function notificationStatus(value) {
+  return {
+    pending: { label: "Waiting for Quality", className: "inactive" },
+    approved_to_run: { label: "Approved to Run", className: "" },
+    do_not_run: { label: "Do Not Run", className: "stopped" },
+    notified: { label: "Notification Sent", className: "secondary" },
+    assistance_requested: { label: "Assistance Requested", className: "warning" },
+  }[value] || { label: value || "Pending", className: "inactive" };
+}
+
+function notificationStatusBadge(value, requestId = "") {
+  const status = notificationStatus(value);
+  return `<span class="status-badge ${escapeHtml(status.className)}"${requestId ? ` data-notification-status="${escapeHtml(requestId)}"` : ""}>${escapeHtml(status.label)}</span>`;
+}
+
+function notificationRequestTable(requests) {
+  if (!requests?.length) return "<p class='cnc-empty'>No notifications have been sent.</p>";
+  const rows = requests
+    .map((request) => {
+      const details = request.details || {};
+      const detailText = details.material_change_type || details.message || "";
+      const delivery = request.delivery_status === "failed" ? "Delivery failed" : request.delivery_status === "delivered" ? "Delivered" : "Queued";
+      return `<tr>
+        <td>${escapeHtml(new Date(request.created_at).toLocaleString())}</td>
+        <td><strong>${escapeHtml(notificationTypeLabel(request.notification_type))}</strong>${detailText ? `<br><small>${escapeHtml(detailText)}</small>` : ""}</td>
+        <td>${escapeHtml(request.work_order || "-")}</td>
+        <td>${notificationStatusBadge(request.status, request.id)}</td>
+        <td>${escapeHtml(delivery)}</td>
+      </tr>`;
+    })
+    .join("");
+  return `<div class="cnc-table-wrap"><table class="cnc-table notification-table"><thead><tr><th>Sent</th><th>Request</th><th>Work Order</th><th>Status</th><th>Teams</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function detailOptionList(details, selectedValue = "") {
@@ -826,7 +869,7 @@ function approvalHistoryTable(rows, editContext = {}) {
             <td>${escapeHtml(row.machine_no || "")}</td>
             <td>${approvalWorkSummary(row)}</td>
             <td>${approvalTimeSummary(row)}</td>
-            <td><strong>${escapeHtml(String(row.acumatica_status || "not_sent").replaceAll("_", " "))}</strong><br><small>${escapeHtml(row.acumatica_batch_nbr || "")}</small>${row.acumatica_last_error ? `<br><small>${escapeHtml(row.acumatica_last_error)}</small>` : ""}</td>
+            <td><strong>${escapeHtml(String(row.acumatica_status || "not_sent").replaceAll("_", " "))}</strong><br><small>${escapeHtml(row.acumatica_batch_nbr || "")}</small>${row.acumatica_last_error ? `<br><small>${escapeHtml(row.acumatica_last_error)}</small>` : ""}${row.approval_status === "approved" && row.acumatica_status === "failed" ? `<form method="post" action="/admin/retry-acumatica" class="approval-action-form" onsubmit="return confirm('Retry only this failed Acumatica entry?');"><input type="hidden" name="approval_id" value="${escapeHtml(row.approval_id)}" /><button class="cnc-button small" type="submit">Retry</button></form>` : ""}</td>
             <td>${escapeHtml(row.reviewed_by_name || "")}<br><small>${escapeHtml(row.reviewed_by_emp_id || "")}</small></td>
             <td>${escapeHtml(row.review_note || "")}</td>
             <td>${row.approval_status === "approved" ? approvalEditForm(row, editContext) : ""}</td>
@@ -1132,6 +1175,28 @@ app.post("/admin/send-acumatica", requireApprover, async (req, res) => {
       req.session.notice = {
         kind: result.failed ? "warning" : "success",
         message: `Acumatica sync complete: ${result.sent || 0} sent, ${result.skipped || 0} skipped, ${result.failed || 0} failed.${result.batches?.length ? ` Batches: ${result.batches.join(", ")}.` : ""}`,
+      };
+    }
+  } catch (error) {
+    req.session.notice = { kind: "warning", message: error.message };
+  }
+  res.redirect("/admin");
+});
+
+app.post("/admin/retry-acumatica", requireApprover, async (req, res) => {
+  try {
+    const result = await callCncBridge("retry_acumatica_entry", {
+      approval_id: req.body.approval_id,
+      actor: req.session.cncUser.employee,
+    });
+    if (result.status === "already_running") {
+      req.session.notice = { kind: "info", message: "An Acumatica sync is already running." };
+    } else {
+      req.session.notice = {
+        kind: result.failed ? "warning" : "success",
+        message: result.failed
+          ? `Retry failed. ${result.failed} entry was not sent.`
+          : `Retry complete: ${result.sent || 0} entry sent.${result.batches?.length ? ` Batch: ${result.batches.join(", ")}.` : ""}`,
       };
     }
   } catch (error) {
@@ -1620,6 +1685,135 @@ app.post("/checklist", requireOperator, async (req, res) => {
   res.redirect("/checklist");
 });
 
+app.get("/notifications", requireOperator, async (req, res, next) => {
+  try {
+    const context = await callCncBridge("get_notification_context", {
+      emp_id: req.session.cncUser.employee.emp_id,
+    });
+    const selectedType = ["mold_approval", "change_material", "assistance_asap"].includes(req.query.type)
+      ? req.query.type
+      : "mold_approval";
+    const workOrderOptions = (context.work_orders || [])
+      .map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)
+      .join("");
+    const materialOptions = (context.material_change_types || [])
+      .map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)
+      .join("");
+    const watchedRequest = (context.requests || []).find((request) => String(request.id) === String(req.query.watch || ""));
+
+    let requestForm = "";
+    if (selectedType === "mold_approval") {
+      requestForm = `<form method="post" action="/notifications" class="cnc-form two-col">
+        <input type="hidden" name="notification_type" value="mold_approval" />
+        <label class="full"><span>Work Order</span><select name="work_order" required><option value="">Select work order</option>${workOrderOptions}</select></label>
+        <button class="cnc-button" type="submit">Request Mold Approval</button>
+      </form>`;
+    } else if (selectedType === "change_material") {
+      requestForm = `<form method="post" action="/notifications" class="cnc-form two-col">
+        <input type="hidden" name="notification_type" value="change_material" />
+        <label><span>Work Order</span><select name="work_order" required><option value="">Select work order</option>${workOrderOptions}</select></label>
+        <label><span>Material Change</span><select name="material_change_type" required><option value="">Select change</option>${materialOptions}</select></label>
+        <label class="full"><span>Additional Note</span><textarea name="message" rows="3"></textarea></label>
+        <button class="cnc-button" type="submit">Send Change Notification</button>
+      </form>`;
+    } else {
+      requestForm = `<form method="post" action="/notifications" class="cnc-form two-col">
+        <input type="hidden" name="notification_type" value="assistance_asap" />
+        <label><span>Work Order (Optional)</span><select name="work_order"><option value="">No work order</option>${workOrderOptions}</select></label>
+        <label class="full"><span>Assistance Needed</span><textarea name="message" rows="5" required></textarea></label>
+        <button class="cnc-button danger" type="submit">Request Assistance ASAP</button>
+      </form>`;
+    }
+
+    const watchPanel = watchedRequest
+      ? `<section class="notification-watch" data-notification-watch="${escapeHtml(watchedRequest.id)}" data-notification-state="${escapeHtml(watchedRequest.status)}">
+          <span class="notification-watch-label">${escapeHtml(notificationTypeLabel(watchedRequest.notification_type))}</span>
+          ${notificationStatusBadge(watchedRequest.status, watchedRequest.id)}
+          <strong>${escapeHtml(watchedRequest.work_order || watchedRequest.details?.message || "")}</strong>
+          <small data-notification-response>${escapeHtml(watchedRequest.responder_name ? `Response by ${watchedRequest.responder_name}` : "")}</small>
+        </section>`
+      : "";
+
+    res.send(
+      layout({
+        title: "Notifications",
+        sessionData: req.session.cncUser,
+        notice: req.session.notice,
+        active: "notifications",
+        body: `<section class="cnc-hero compact"><div><p class="eyebrow">Operations</p><h2>Notifications</h2></div></section>
+        ${watchPanel}
+        <nav class="notification-tabs" aria-label="Notification type">
+          <a class="${selectedType === "mold_approval" ? "active" : ""}" href="/notifications?type=mold_approval">Mold Approval</a>
+          <a class="${selectedType === "change_material" ? "active" : ""}" href="/notifications?type=change_material">Change Material</a>
+          <a class="${selectedType === "assistance_asap" ? "active" : ""}" href="/notifications?type=assistance_asap">Assistance ASAP</a>
+        </nav>
+        <section class="cnc-card notification-form"><div class="cnc-section-header"><h3>${escapeHtml(notificationTypeLabel(selectedType))}</h3></div>${requestForm}</section>
+        <section class="panel-block"><div class="panel-title-row"><h3>Recent Notifications</h3></div>${notificationRequestTable(context.requests)}</section>`,
+      }),
+    );
+    req.session.notice = null;
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/notifications", requireOperator, async (req, res) => {
+  const notificationType = String(req.body.notification_type || "mold_approval");
+  try {
+    const result = await callCncBridge("submit_notification_request", {
+      employee: req.session.cncUser.employee,
+      machine_no: req.session.cncUser.machine_no,
+      notification_type: notificationType,
+      work_order: req.body.work_order,
+      material_change_type: req.body.material_change_type,
+      message: req.body.message,
+    });
+    const label = notificationTypeLabel(notificationType);
+    req.session.notice = {
+      kind: result.delivered ? "success" : "info",
+      message: result.delivered ? `${label} sent to Teams.` : `${label} saved and queued for Teams configuration.`,
+    };
+    return res.redirect(`/notifications?type=${encodeURIComponent(notificationType)}&watch=${encodeURIComponent(result.id)}`);
+  } catch (error) {
+    req.session.notice = { kind: "warning", message: error.message };
+    return res.redirect(`/notifications?type=${encodeURIComponent(notificationType)}`);
+  }
+});
+
+app.get("/notifications/status.json", requireOperator, async (req, res) => {
+  try {
+    const context = await callCncBridge("get_notification_context", {
+      emp_id: req.session.cncUser.employee.emp_id,
+    });
+    const request = (context.requests || []).find((item) => String(item.id) === String(req.query.id || ""));
+    if (!request) return res.status(404).json({ error: "Notification not found." });
+    return res.json({
+      id: request.id,
+      status: request.status,
+      status_label: notificationStatus(request.status).label,
+      responder_name: request.responder_name || "",
+      response_note: request.response_note || "",
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/notifications/:id/decision", async (req, res) => {
+  try {
+    const result = await callCncBridge("respond_to_mold_approval", {
+      request_id: req.params.id,
+      decision_token: req.body.decision_token || req.body.token || req.get("x-notification-token"),
+      decision: req.body.decision,
+      responder_name: req.body.responder_name || req.body.responder,
+      response_note: req.body.response_note || req.body.note,
+    });
+    return res.json({ ok: true, request: result });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
 app.get("/maintenance", requireOperator, async (req, res, next) => {
   try {
     const context = await dashboardContext(req);
@@ -1784,6 +1978,9 @@ app.use((error, req, res, _next) => {
 
 app.listen(port, () => {
   console.log(`CNC Time Entry app listening on http://localhost:${port}`);
+  console.log(
+    `CNC Time Entry Python bridge: ${process.env.CNC_TIME_PYTHON_EXECUTABLE || process.env.PYTHON_EXECUTABLE || "python"}`,
+  );
   runBackgroundSync("startup");
   setInterval(() => runBackgroundSync("scheduled"), syncIntervalMs).unref();
 });

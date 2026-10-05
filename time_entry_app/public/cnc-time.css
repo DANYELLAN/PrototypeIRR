@@ -665,6 +665,12 @@ button, input, select, textarea { font: inherit; }
   border-color: rgba(192, 138, 0, 0.2);
 }
 
+.status-badge.secondary {
+  color: var(--ready);
+  background: var(--ready-dim);
+  border-color: rgba(59, 94, 151, 0.18);
+}
+
 .cnc-chip.secondary,
 .status-tab.secondary {
   color: var(--ready);
@@ -891,6 +897,79 @@ button, input, select, textarea { font: inherit; }
   min-height: 30px;
   padding: 6px 10px;
   font-size: 11px;
+}
+
+.notification-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 12px;
+  overflow-x: auto;
+}
+
+.notification-tabs a {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--surface);
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.notification-tabs a.active {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: #fff;
+}
+
+.notification-form {
+  max-width: 920px;
+}
+
+.notification-watch {
+  min-height: 118px;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--warn);
+  border-radius: 2px;
+  background: var(--surface);
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+
+.notification-watch-label {
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.notification-watch strong {
+  font-family: var(--font-data);
+  font-size: 15px;
+}
+
+.notification-watch small {
+  min-height: 16px;
+  color: var(--muted);
+}
+
+.notification-table strong {
+  font-family: var(--font-ui);
+}
+
+.notification-table small {
+  color: var(--muted);
 }
 
 .delete-entry-form {
