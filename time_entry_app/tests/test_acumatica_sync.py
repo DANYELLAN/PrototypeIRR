@@ -6,12 +6,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from time_entry_app import local_store
-from time_entry_app.acumatica_client import entity_value, wrapped
+from time_entry_app.acumatica_client import entity_value, response_errors, wrapped
 from time_entry_app.acumatica_sync import (
     _detail_payload,
     _entity_errors,
     normalize_detail_type,
     normalize_machine,
+    normalize_shift,
     sync_approved_entries,
 )
 
@@ -81,10 +82,10 @@ class FakeAcumaticaClient:
         return self.put_batch(payload)
 
 
-def approval_payload(machine, employee_id, quantity=1):
+def approval_payload(machine, employee_id, quantity=1, detail_type="Machining", reason_code=""):
     transaction = {
-        "tran_description": "Machining",
-        "detail_type": "Machining",
+        "tran_description": detail_type,
+        "detail_type": detail_type,
         "employee_id": employee_id,
         "machine_no": machine,
         "labor_type": "Direct",
@@ -101,7 +102,7 @@ def approval_payload(machine, employee_id, quantity=1):
         "warehouse": "EN-FG SSOT",
         "location": "CUST REC",
         "qty_scrapped": 0,
-        "reason_code": "",
+        "reason_code": reason_code,
     }
     return {
         "fields": {"LaborDate": "2026-09-29", "MachineNo": machine},
@@ -179,6 +180,55 @@ class AcumaticaSyncTests(unittest.TestCase):
         self.assertEqual(retry["sent"], 0)
         self.assertEqual(len(batch["Details"]), 2)
 
+    def test_targeted_retry_only_sends_selected_approval(self):
+        selected_id = self.approve("1", "1005")
+        untouched_id = self.approve("2", "845")
+        sync_env = {"ACUMATICA_ENABLED": "true", "ACUMATICA_CUTOVER_AT": "2026-01-01T00:00:00+00:00"}
+
+        with patch.dict(os.environ, sync_env):
+            result = sync_approved_entries(
+                trigger_name="manual_retry",
+                approval_id=selected_id,
+                client_factory=FakeAcumaticaClient,
+            )
+
+        self.assertEqual(result["sent"], 1)
+        self.assertEqual(local_store.get_acumatica_sync_item(selected_id)["status"], "sent")
+        self.assertIsNone(local_store.get_acumatica_sync_item(untouched_id))
+        batch = next(iter(FakeAcumaticaClient.batches.values()))
+        self.assertEqual(len(batch["Details"]), 1)
+
+    def test_downtime_sync_creates_two_idempotent_acumatica_lines(self):
+        payload = approval_payload("1", "1005", quantity=27, detail_type="DT", reason_code="M1")
+        approval_id = local_store.queue_approval(
+            "misc_time",
+            payload,
+            machine_no="1",
+            emp_id="1005",
+            employee_name="Employee 1005",
+        )
+        local_store.approve_approval_record(
+            approval_id,
+            reviewer={"emp_id": "100", "full_name": "Manager"},
+        )
+        sync_env = {"ACUMATICA_ENABLED": "true", "ACUMATICA_CUTOVER_AT": "2026-01-01T00:00:00+00:00"}
+
+        with patch.dict(os.environ, sync_env):
+            first = sync_approved_entries(client_factory=FakeAcumaticaClient)
+
+        batch = next(iter(FakeAcumaticaClient.batches.values()))
+        self.assertEqual(first["sent"], 1)
+        self.assertEqual(len(batch["Details"]), 2)
+        self.assertEqual([entity_value(row, "Quantity") for row in batch["Details"]], [1.0, -1.0])
+        self.assertTrue(all("ReasonCode" not in row for row in batch["Details"]))
+        self.assertEqual([entity_value(row, "TranDescription") for row in batch["Details"]], ["DT", "DT"])
+
+        with patch.dict(os.environ, sync_env):
+            retry = sync_approved_entries(client_factory=FakeAcumaticaClient)
+
+        self.assertEqual(retry["sent"], 0)
+        self.assertEqual(len(batch["Details"]), 2)
+
     def test_released_batch_correction_is_not_written(self):
         approval_id = self.approve("3", "778")
         sync_env = {"ACUMATICA_ENABLED": "true", "ACUMATICA_CUTOVER_AT": "2026-01-01T00:00:00+00:00"}
@@ -215,6 +265,11 @@ class AcumaticaSyncTests(unittest.TestCase):
         self.assertEqual(normalize_detail_type("Set-Up"), "SET-UP")
         self.assertEqual(normalize_detail_type("DT"), "DOWN TIME")
 
+    def test_normalizes_shift_labels_to_acumatica_ids(self):
+        self.assertEqual(normalize_shift("Day Shift"), "40")
+        self.assertEqual(normalize_shift("Night Shift"), "41")
+        self.assertEqual(normalize_shift("40"), "40")
+
     def test_blank_inventory_is_left_for_acumatica_to_default(self):
         transaction = approval_payload("1", "1005")["acumatica_labor_transaction"]
         transaction["inventory_id"] = ""
@@ -238,6 +293,7 @@ class AcumaticaSyncTests(unittest.TestCase):
         errors = _entity_errors(entity)
 
         self.assertEqual(errors, ["Details[0].OperationNbr: Invalid operation."])
+        self.assertEqual(response_errors(entity), errors)
 
     def test_missing_production_order_fails_before_creating_batch(self):
         payload = approval_payload("1", "1005")

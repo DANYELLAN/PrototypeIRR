@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import secrets
 import sys
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -21,6 +23,8 @@ import requests
 
 from local_store import (
     approve_approval_record,
+    create_notification_request,
+    decide_notification_request,
     discard_pending_record,
     ensure_db,
     finish_break_event,
@@ -29,7 +33,9 @@ from local_store import (
     get_approval_record,
     get_active_break_event,
     get_machine_options,
+    get_notification_request,
     list_approval_records,
+    list_notification_requests,
     list_pending_records,
     mark_approval_reviewed,
     mark_record_synced,
@@ -41,6 +47,7 @@ from local_store import (
     save_session,
     start_break_event,
     update_approval_with_revision,
+    update_notification_delivery,
     upsert_machine_options,
 )
 from time_entry_app.acumatica_sync import get_approval_batch_status, sync_approved_entries
@@ -154,6 +161,7 @@ DOWNTIME_REASONS = [
     {"code": "WOP", "category": "WAITING ON PIPE", "label": "DT- WOP (WAITING ON PIPE)"},
     {"code": "TT", "category": "TURN AROUND TABLE", "label": "DT- TT (TURN AROUND TABLE)"},
 ]
+MATERIAL_CHANGE_TYPES = ["New", "Re-Bore", "O.D.", "Re-Works", "Testing"]
 
 ACUMATICA_DEFAULTS = {
     "branch": "ENNIS",
@@ -204,6 +212,37 @@ APPROVER_ADP_NUMBERS = {
     for item in os.getenv("CNC_TIME_APPROVER_ADP_NUMBERS", "").replace(";", ",").split(",")
     if item.strip()
 }
+FULL_ACCESS_DEPARTMENT_KEYWORDS = tuple(
+    item.strip().lower()
+    for item in os.getenv(
+        "CNC_TIME_FULL_ACCESS_DEPARTMENT_KEYWORDS",
+        "IT,information technology,information systems",
+    ).split(",")
+    if item.strip()
+)
+FULL_ACCESS_ADP_NUMBERS = {
+    (item.strip()[:-2] if item.strip().endswith(".0") else item.strip()).lstrip("0") or item.strip()
+    for item in os.getenv("CNC_TIME_FULL_ACCESS_ADP_NUMBERS", "").replace(";", ",").split(",")
+    if item.strip()
+}
+TEST_WORK_ORDERS_ENABLED = os.getenv("ENABLE_TEST_WORK_ORDERS", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+TEST_WORK_ORDERS = [
+    {
+        "production_number": "EWO26-00009",
+        "inventory_id": "EN00088",
+        "description": "TIME ENTRY TEST",
+        "operation_id": "0005",
+        "operation_description": "TIME ENTRY TEST",
+        "status": "In Process",
+        "order_type": "EN",
+        "labor_input": "",
+    }
+]
 
 WRITE_RECORD_TARGETS = {
     "startstop": {"list_key": "startstop", "mode": "create"},
@@ -679,11 +718,30 @@ def _is_active_ennis_employee(employee):
     return employee["status"].lower() == "active" and employee["branch"].lower() == "ennis"
 
 
-def _employee_roles(employee):
-    roles = []
+def _employee_matches_full_access(employee):
     normalized_emp_id = _normalize_identifier(employee.get("emp_id"))
-    if employee.get("machinist"):
-        roles.append("operator")
+    if normalized_emp_id in FULL_ACCESS_ADP_NUMBERS:
+        return True
+
+    values = [
+        str(employee.get(key) or "").lower()
+        for key in ("department", "job_title", "role_text")
+    ]
+    for keyword in FULL_ACCESS_DEPARTMENT_KEYWORDS:
+        if len(keyword) <= 3:
+            pattern = rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])"
+            if any(re.search(pattern, value) for value in values):
+                return True
+        elif any(keyword in value for value in values):
+            return True
+    return False
+
+
+def _employee_roles(employee):
+    roles = ["operator"]
+    normalized_emp_id = _normalize_identifier(employee.get("emp_id"))
+    if _employee_matches_full_access(employee):
+        return ["operator", "exporter", "approver"]
     searchable = " ".join(
         str(employee.get(key) or "").lower()
         for key in ("department", "job_title", "role_text", "full_name")
@@ -692,22 +750,21 @@ def _employee_roles(employee):
         roles.append("exporter")
     if normalized_emp_id in APPROVER_ADP_NUMBERS or any(keyword in searchable for keyword in APPROVER_DEPARTMENT_KEYWORDS):
         roles.append("approver")
-        if "operator" not in roles:
-            roles.insert(0, "operator")
     return roles
 
 
 def lookup_employee_by_adp(adp_number, employee_items=None, required_role=None):
     items = employee_items if employee_items is not None else _read_list("employees")
     normalized_adp_number = _normalize_identifier(adp_number)
+    if not normalized_adp_number:
+        return None
     for item in items:
         candidate = _normalize_employee(item)
-        if _normalize_identifier(candidate["emp_id"]) != normalized_adp_number or not _is_active_ennis_employee(candidate):
+        candidate_adp_number = _normalize_identifier(candidate["emp_id"])
+        if not candidate_adp_number or candidate_adp_number != normalized_adp_number or not _is_active_ennis_employee(candidate):
             continue
         candidate["roles"] = _employee_roles(candidate)
         if required_role and required_role not in candidate["roles"]:
-            continue
-        if not required_role and not candidate["roles"]:
             continue
         return candidate
     return None
@@ -829,7 +886,7 @@ def _get_operation(production_number, operation_id, error_message):
     operation = next(
         (
             item
-            for item in (_normalize_work_order(entry) for entry in _read_list("work_orders", fetch_all=True))
+            for item in _work_orders()
             if item["production_number"] == production_number and item["operation_id"] == operation_id
         ),
         None,
@@ -871,7 +928,7 @@ def _attach_acumatica_payload(payload, employee, fields, reason_code=""):
         return payload
 
     detail_code = str(fields.get("DetailsType") or "").strip()
-    if detail_code == "DT" and reason_code:
+    if detail_code == "DT":
         transactions = _acumatica_downtime_transactions(fields, reason_code)
         payload["acumatica_labor_transaction"] = transactions[0]
         payload["acumatica_labor_transactions"] = transactions
@@ -918,6 +975,7 @@ def _acumatica_labor_transaction(fields, reason_code="", labor_rate=None):
 
 def _acumatica_downtime_transactions(fields, reason_code):
     positive = _acumatica_labor_transaction(fields, reason_code=reason_code)
+    positive["quantity"] = 1
     negative = dict(positive)
     negative["labor_time"] = "-00:01"
     negative["labor_minutes"] = -1
@@ -942,6 +1000,20 @@ def _normalize_work_order(item):
         "order_type": str(_value(fields, "OrderType", "Order_x0020_Type") or "").strip(),
         "labor_input": str(_value(fields, "LaborInput", "Labor_x0020_Input") or "").strip(),
     }
+
+
+def _work_orders():
+    work_orders = [_normalize_work_order(entry) for entry in _read_list("work_orders", fetch_all=True)]
+    if not TEST_WORK_ORDERS_ENABLED:
+        return work_orders
+
+    existing = {(item["production_number"], item["operation_id"]) for item in work_orders}
+    work_orders.extend(
+        dict(item)
+        for item in TEST_WORK_ORDERS
+        if (item["production_number"], item["operation_id"]) not in existing
+    )
+    return work_orders
 
 
 def _normalize_startstop(item):
@@ -1325,7 +1397,7 @@ def get_sign_in_context():
 def sign_in(adp_number, user_email, shift_id, machine_no=None):
     employee = lookup_employee_by_adp(adp_number)
     if not employee:
-        raise ValueError("No active Ennis employee with Time Entry access was found for that ADP number.")
+        raise ValueError("No active Ennis employee was found for that ADP number.")
 
     station = None
     email_key = str(user_email or "").strip().lower()
@@ -1391,7 +1463,7 @@ def get_dashboard_context(emp_id, user_email):
     details = _detail_types()
     work_orders = [
         item
-        for item in (_normalize_work_order(entry) for entry in _read_list("work_orders", fetch_all=True))
+        for item in _work_orders()
         if item["order_type"] in {"EN", "RD"} and item["status"] in {"In Process", "Released", "Planned"}
     ]
     startstop_entries = [
@@ -1449,7 +1521,7 @@ def get_dashboard_context(emp_id, user_email):
         "details_step_one": [item for item in details if item["option_step"] == 1],
         "details_step_two": [item for item in details if item["option_step"] == 2],
         "downtime_reasons": DOWNTIME_REASONS,
-        "work_orders": sorted(grouped_workorders.keys()),
+        "work_orders": sorted(grouped_workorders.keys(), reverse=True),
         "operations": work_orders,
         "tech_categories": tech_categories,
         "maintenance_locations": maintenance_locations,
@@ -1501,7 +1573,7 @@ def get_admin_dashboard_context():
     details = _detail_types()
     work_orders = [
         item
-        for item in (_normalize_work_order(entry) for entry in _read_list("work_orders", fetch_all=True))
+        for item in _work_orders()
         if item["order_type"] in {"EN", "RD"} and item["status"] in {"In Process", "Released", "Planned"}
     ]
     grouped_workorders = {}
@@ -1519,7 +1591,7 @@ def get_admin_dashboard_context():
         "pending_count": len(pending),
         "details_step_two": [item for item in details if item["option_step"] == 2],
         "downtime_reasons": DOWNTIME_REASONS,
-        "work_orders": sorted(grouped_workorders.keys()),
+        "work_orders": sorted(grouped_workorders.keys(), reverse=True),
         "operations": work_orders,
         "shift_options": SHIFT_OPTIONS,
         "machine_options": get_machine_options(),
@@ -1670,6 +1742,21 @@ def reject_time_entry(approval_id, reviewer=None, note=None):
     if not mark_approval_reviewed(record["id"], "rejected", reviewer=reviewer, note=note):
         raise ValueError("The selected approval record was already reviewed.")
     return {"rejected": True}
+
+
+def retry_acumatica_entry(approval_id, actor=None):
+    record_id = int(_as_number(approval_id, 0))
+    record = get_approval_record(record_id)
+    if not record or record.get("approval_status") != "approved":
+        raise ValueError("Only an approved time entry can be retried.")
+    sync_item = get_acumatica_sync_item(record_id) or {}
+    if sync_item.get("status") != "failed":
+        raise ValueError("Only a failed Acumatica entry can be retried.")
+    return sync_approved_entries(
+        trigger_name="manual_retry",
+        actor=actor or {},
+        approval_id=record_id,
+    )
 
 
 def start_time_entry(employee, shift_id, machine_no, production_number, operation_id, detail_type):
@@ -2354,6 +2441,172 @@ def submit_maintenance_request(employee, requester_id, requester_name, title, de
         return {"submitted": True}
     except Exception:
         return {"submitted": False, "queued": True, "offline_only": True}
+
+
+def _public_notification_record(record):
+    public_record = dict(record or {})
+    public_record.pop("callback_token", None)
+    return public_record
+
+
+def _notification_work_orders():
+    return sorted({
+        item["production_number"]
+        for item in _work_orders()
+        if item["production_number"]
+        and item["order_type"] in {"EN", "RD"}
+        and item["status"] in {"In Process", "Released", "Planned"}
+    }, reverse=True)
+
+
+def get_notification_context(emp_id):
+    ensure_db()
+    return {
+        "work_orders": _notification_work_orders(),
+        "material_change_types": MATERIAL_CHANGE_TYPES,
+        "requests": [
+            _public_notification_record(record)
+            for record in list_notification_requests(str(emp_id or "").strip(), limit=30)
+        ],
+    }
+
+
+def _notification_webhook_url(notification_type):
+    env_names = {
+        "mold_approval": "CNC_TIME_QUALITY_APPROVAL_WEBHOOK_URL",
+        "change_material": "CNC_TIME_CHANGE_MATERIAL_WEBHOOK_URL",
+        "assistance_asap": "CNC_TIME_ASSISTANCE_WEBHOOK_URL",
+    }
+    return os.getenv(env_names[notification_type], "").strip()
+
+
+def submit_notification_request(
+    employee,
+    machine_no,
+    notification_type,
+    work_order=None,
+    material_change_type=None,
+    message=None,
+):
+    notification_type = str(notification_type or "").strip().lower()
+    if notification_type not in {"mold_approval", "change_material", "assistance_asap"}:
+        raise ValueError("Select a valid notification type.")
+
+    work_order = str(work_order or "").strip()
+    material_change_type = str(material_change_type or "").strip()
+    message = str(message or "").strip()
+    if notification_type in {"mold_approval", "change_material"}:
+        if not work_order:
+            raise ValueError("Select a work order.")
+        if work_order not in _notification_work_orders():
+            raise ValueError("The selected work order is not currently available.")
+    if notification_type == "change_material" and material_change_type not in MATERIAL_CHANGE_TYPES:
+        raise ValueError("Select a valid material change type.")
+    if notification_type == "assistance_asap" and not message:
+        raise ValueError("Describe the assistance needed.")
+
+    requester_name = str((employee or {}).get("full_name") or "").strip()
+    requester_emp_id = str((employee or {}).get("emp_id") or "").strip()
+    machine_no = str(machine_no or "").strip()
+    callback_token = secrets.token_urlsafe(32) if notification_type == "mold_approval" else None
+    initial_status = {
+        "mold_approval": "pending",
+        "change_material": "notified",
+        "assistance_asap": "assistance_requested",
+    }[notification_type]
+    details = {
+        "material_change_type": material_change_type,
+        "message": message,
+    }
+    record = create_notification_request(
+        notification_type,
+        requester_emp_id,
+        requester_name,
+        machine_no,
+        work_order,
+        details,
+        callback_token=callback_token,
+        status=initial_status,
+    )
+
+    if notification_type == "mold_approval":
+        notification_message = (
+            f"{requester_name} at {machine_no or 'an unassigned station'} is requesting mold approval "
+            f"for Work Order {work_order}."
+        )
+    elif notification_type == "change_material":
+        notification_message = (
+            f"Machinist {requester_name} at {machine_no or 'an unassigned station'} is notifying you that "
+            f"a {material_change_type} material change following Work Order {work_order} is needed."
+        )
+    else:
+        notification_message = (
+            f"{requester_name} at {machine_no or 'an unassigned station'} needs assistance ASAP: {message}"
+        )
+
+    callback_base_url = os.getenv("CNC_TIME_NOTIFICATION_CALLBACK_BASE_URL", "").strip().rstrip("/")
+    payload = {
+        "request_id": record["id"],
+        "notification_type": notification_type,
+        "requester_name": requester_name,
+        "requester_adp_number": requester_emp_id,
+        "machine_no": machine_no,
+        "work_order": work_order,
+        "material_change_type": material_change_type,
+        "message": notification_message,
+        "additional_message": message,
+        "requested_at": record["created_at"],
+    }
+    if notification_type == "mold_approval" and callback_base_url:
+        payload.update({
+            "decision_url": f"{callback_base_url}/api/notifications/{record['id']}/decision",
+            "decision_token": callback_token,
+            "decision_options": ["approved", "rejected"],
+        })
+
+    webhook_url = _notification_webhook_url(notification_type)
+    if not webhook_url:
+        _queue_notification(notification_type, payload)
+        return {**_public_notification_record(record), "queued": True, "delivered": False}
+
+    try:
+        response = requests.post(webhook_url, json=payload, timeout=20)
+        if response.status_code not in {200, 201, 202}:
+            raise ValueError(f"Notification webhook returned HTTP {response.status_code}.")
+        update_notification_delivery(record["id"], "delivered")
+        return {**_public_notification_record(get_notification_request(record["id"])), "queued": False, "delivered": True}
+    except Exception as exc:
+        update_notification_delivery(record["id"], "failed", str(exc))
+        raise ValueError(f"The notification was saved but could not be delivered: {exc}") from exc
+
+
+def respond_to_mold_approval(request_id, decision_token, decision, responder_name=None, response_note=None):
+    record = get_notification_request(int(request_id))
+    if not record or record.get("notification_type") != "mold_approval":
+        raise ValueError("Mold approval request not found.")
+    stored_token = str(record.get("callback_token") or "")
+    supplied_token = str(decision_token or "")
+    if not stored_token or not supplied_token or not secrets.compare_digest(stored_token, supplied_token):
+        raise ValueError("Invalid mold approval response token.")
+
+    normalized_decision = str(decision or "").strip().lower().replace("-", "_").replace(" ", "_")
+    decision_statuses = {
+        "approve": "approved_to_run",
+        "approved": "approved_to_run",
+        "approved_to_run": "approved_to_run",
+        "reject": "do_not_run",
+        "rejected": "do_not_run",
+        "not_approved": "do_not_run",
+        "do_not_run": "do_not_run",
+    }
+    status = decision_statuses.get(normalized_decision)
+    if not status:
+        raise ValueError("Decision must be approved or rejected.")
+    if record.get("status") != "pending":
+        return {**_public_notification_record(record), "already_decided": True}
+    if not decide_notification_request(request_id, status, responder_name, response_note):
+        raise ValueError("The mold approval request could not be updated.")
+    return _public_notification_record(get_notification_request(request_id))
 
 
 def send_it_request(user_email, user_name, machine_no, category, issue):

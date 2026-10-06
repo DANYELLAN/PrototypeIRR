@@ -120,15 +120,15 @@ window.addEventListener("load", () => {
           if (response.employee) {
             setMatchState(`Employee: ${response.employee.full_name} (${response.employee.emp_id})`, "success");
           } else {
-            setMatchState("No active Ennis employee with app access found for that ADP number.", "warning");
+            setMatchState("No active Ennis employee found for that ADP number.", "warning");
           }
         } catch {
-          setMatchState("No active Ennis employee with app access found for that ADP number.", "warning");
+          setMatchState("No active Ennis employee found for that ADP number.", "warning");
         }
       };
       xhr.onerror = () => {
         if (xhr !== activeLookup) return;
-        setMatchState("No active Ennis employee with app access found for that ADP number.", "warning");
+        setMatchState("No active Ennis employee found for that ADP number.", "warning");
       };
       xhr.abort = xhr.abort || (() => {});
       xhr.send();
@@ -239,5 +239,39 @@ window.addEventListener("load", () => {
     };
 
     window.setInterval(refreshLiveMachine, pollMs);
+  }
+
+  const notificationWatch = document.querySelector("[data-notification-watch]");
+  if (notificationWatch && notificationWatch.dataset.notificationState === "pending") {
+    const requestId = notificationWatch.dataset.notificationWatch;
+    const statusTargets = document.querySelectorAll(`[data-notification-status="${requestId}"]`);
+    const responseTarget = notificationWatch.querySelector("[data-notification-response]");
+    const statusClasses = {
+      approved_to_run: "",
+      do_not_run: "stopped",
+      pending: "inactive",
+    };
+    const refreshNotification = async () => {
+      try {
+        const response = await fetch(`/notifications/status.json?id=${encodeURIComponent(requestId)}`, {
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const payload = await response.json();
+        statusTargets.forEach((target) => {
+          target.textContent = payload.status_label;
+          target.className = `status-badge ${statusClasses[payload.status] || "inactive"}`;
+        });
+        if (responseTarget && payload.responder_name) {
+          responseTarget.textContent = `Response by ${payload.responder_name}${payload.response_note ? `: ${payload.response_note}` : ""}`;
+        }
+        notificationWatch.dataset.notificationState = payload.status;
+        if (payload.status !== "pending") window.clearInterval(notificationWatch.pollTimer);
+      } catch {
+        // Keep the current state visible and try again on the next interval.
+      }
+    };
+    notificationWatch.pollTimer = window.setInterval(refreshNotification, 10000);
   }
 });

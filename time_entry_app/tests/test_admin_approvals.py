@@ -56,6 +56,49 @@ class AdminApprovalStoreTests(unittest.TestCase):
 
 
 class AdminApprovalBackendTests(unittest.TestCase):
+    def test_retry_acumatica_entry_targets_only_failed_approval(self):
+        with (
+            patch.object(
+                backend,
+                "get_approval_record",
+                return_value={"id": 45, "approval_status": "approved"},
+            ),
+            patch.object(
+                backend,
+                "get_acumatica_sync_item",
+                return_value={"status": "failed"},
+            ),
+            patch.object(
+                backend,
+                "sync_approved_entries",
+                return_value={"status": "completed", "sent": 1, "failed": 0},
+            ) as mock_sync,
+        ):
+            result = backend.retry_acumatica_entry(45, actor={"emp_id": "100"})
+
+        self.assertEqual(result["sent"], 1)
+        mock_sync.assert_called_once_with(
+            trigger_name="manual_retry",
+            actor={"emp_id": "100"},
+            approval_id=45,
+        )
+
+    def test_retry_acumatica_entry_rejects_non_failed_approval(self):
+        with (
+            patch.object(
+                backend,
+                "get_approval_record",
+                return_value={"id": 45, "approval_status": "approved"},
+            ),
+            patch.object(
+                backend,
+                "get_acumatica_sync_item",
+                return_value={"status": "sent"},
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "Only a failed"):
+                backend.retry_acumatica_entry(45)
+
     def test_approval_rebuilds_acumatica_payload_from_reviewed_fields(self):
         captured = {}
         record = {

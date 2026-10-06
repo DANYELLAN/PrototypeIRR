@@ -8,6 +8,28 @@ class DowntimeReasonTests(unittest.TestCase):
     def test_downtime_reason_code_accepts_display_label(self):
         self.assertEqual(backend._downtime_reason_code("DT- OPS (OPERATIONS)"), "OPS")
 
+    def test_every_downtime_payload_has_fixed_positive_and_negative_quantities(self):
+        fields = {
+            "DetailsType": "DT",
+            "EmployeeID": "001005",
+            "MachineNo": "1",
+            "ProductionNo": "EWO26-00094",
+            "OperationID": "0010",
+            "Quantity": 27,
+            "TotalMinutes": 60,
+        }
+        payload = {}
+
+        backend._attach_acumatica_payload(payload, {"machinist": True}, fields)
+
+        transactions = payload["acumatica_labor_transactions"]
+        self.assertEqual(len(transactions), 2)
+        self.assertEqual([row["quantity"] for row in transactions], [1, -1])
+        self.assertEqual(transactions[0]["labor_minutes"], 60)
+        self.assertEqual(transactions[1]["labor_minutes"], -1)
+        self.assertEqual(transactions[0]["reason_code"], "")
+        self.assertEqual(transactions[1]["reason_code"], "")
+
     @patch.object(backend, "queue_approval", return_value=123)
     @patch.object(
         backend,

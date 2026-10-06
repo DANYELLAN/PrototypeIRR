@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node src/cncTimeServer.js",
-    "dev": "node --watch src/cncTimeServer.js",
+    "start": "node --env-file=../.env src/cncTimeServer.js",
+    "dev": "node --env-file=../.env --watch src/cncTimeServer.js",
     "sync:acumatica": "python scripts/sync_acumatica.py"
   },
   "dependencies": {

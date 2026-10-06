@@ -178,10 +178,151 @@ def ensure_db():
         "CREATE INDEX IF NOT EXISTS idx_acumatica_batches_group ON acumatica_batches (labor_date, area, id DESC)"
     )
     conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notification_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            notification_type TEXT NOT NULL,
+            requester_emp_id TEXT NOT NULL,
+            requester_name TEXT NOT NULL,
+            machine_no TEXT,
+            work_order TEXT,
+            request_details TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            delivery_status TEXT NOT NULL DEFAULT 'queued',
+            callback_token TEXT UNIQUE,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            responded_at TEXT,
+            responder_name TEXT,
+            response_note TEXT,
+            last_error TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_notification_requests_employee ON notification_requests (requester_emp_id, id DESC)"
+    )
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_acumatica_sync_status ON acumatica_sync_items (status, updated_at)"
     )
     conn.commit()
     conn.close()
+
+
+def _notification_record(row):
+    if not row:
+        return None
+    record = dict(row)
+    try:
+        record["details"] = json.loads(record.pop("request_details") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        record["details"] = {}
+    return record
+
+
+def create_notification_request(
+    notification_type,
+    requester_emp_id,
+    requester_name,
+    machine_no,
+    work_order,
+    details,
+    callback_token=None,
+    status="pending",
+):
+    ensure_db()
+    now = _utc_now_iso()
+    conn = _connect()
+    cursor = conn.execute(
+        """
+        INSERT INTO notification_requests (
+            notification_type, requester_emp_id, requester_name, machine_no, work_order,
+            request_details, status, delivery_status, callback_token, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)
+        """,
+        (
+            str(notification_type or "").strip(),
+            str(requester_emp_id or "").strip(),
+            str(requester_name or "").strip(),
+            str(machine_no or "").strip(),
+            str(work_order or "").strip(),
+            json.dumps(details or {}, default=str),
+            str(status or "pending").strip(),
+            callback_token,
+            now,
+            now,
+        ),
+    )
+    request_id = cursor.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM notification_requests WHERE id = ?", (request_id,)).fetchone()
+    conn.close()
+    return _notification_record(row)
+
+
+def get_notification_request(request_id):
+    ensure_db()
+    conn = _connect()
+    row = conn.execute("SELECT * FROM notification_requests WHERE id = ?", (request_id,)).fetchone()
+    conn.close()
+    return _notification_record(row)
+
+
+def list_notification_requests(requester_emp_id=None, limit=50):
+    ensure_db()
+    conn = _connect()
+    if requester_emp_id is None:
+        rows = conn.execute(
+            "SELECT * FROM notification_requests ORDER BY id DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM notification_requests WHERE requester_emp_id = ? ORDER BY id DESC LIMIT ?",
+            (str(requester_emp_id or "").strip(), int(limit)),
+        ).fetchall()
+    conn.close()
+    return [_notification_record(row) for row in rows]
+
+
+def update_notification_delivery(request_id, delivery_status, error=None):
+    ensure_db()
+    conn = _connect()
+    conn.execute(
+        """
+        UPDATE notification_requests
+        SET delivery_status = ?, last_error = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (str(delivery_status or "").strip(), error, _utc_now_iso(), request_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def decide_notification_request(request_id, status, responder_name=None, response_note=None):
+    ensure_db()
+    now = _utc_now_iso()
+    conn = _connect()
+    cursor = conn.execute(
+        """
+        UPDATE notification_requests
+        SET status = ?, responded_at = ?, responder_name = ?, response_note = ?, updated_at = ?
+        WHERE id = ? AND notification_type = 'mold_approval' AND status = 'pending'
+        """,
+        (
+            str(status or "").strip(),
+            now,
+            str(responder_name or "").strip(),
+            str(response_note or "").strip(),
+            now,
+            request_id,
+        ),
+    )
+    changed = cursor.rowcount == 1
+    conn.commit()
+    conn.close()
+    return changed
     _seed_machine_config()
 
 

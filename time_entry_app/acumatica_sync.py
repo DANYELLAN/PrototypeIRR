@@ -68,6 +68,21 @@ def normalize_detail_type(value):
     return aliases.get(text, str(value or "").strip())
 
 
+def normalize_shift(value):
+    text = str(value or "").strip()
+    aliases = {
+        "40": "40",
+        "40.0": "40",
+        "DAY": "40",
+        "DAY SHIFT": "40",
+        "41": "41",
+        "41.0": "41",
+        "NIGHT": "41",
+        "NIGHT SHIFT": "41",
+    }
+    return aliases.get(text.upper(), text)
+
+
 def batch_description(area, labor_date, supplemental=False):
     formatted = datetime.fromisoformat(labor_date).strftime("%m/%d/%Y")
     suffix = " SUPPLEMENTAL" if supplemental else ""
@@ -84,10 +99,24 @@ def _payload(record):
 def _transactions(record):
     payload = _payload(record)
     transactions = payload.get("acumatica_labor_transactions")
-    if transactions:
-        return list(transactions)
-    transaction = payload.get("acumatica_labor_transaction")
-    return [transaction] if transaction else []
+    if not transactions:
+        transaction = payload.get("acumatica_labor_transaction")
+        transactions = [transaction] if transaction else []
+    transactions = [dict(transaction) for transaction in transactions if transaction]
+    if len(transactions) == 1 and normalize_detail_type(transactions[0].get("detail_type")) == "DOWN TIME":
+        positive = transactions[0]
+        positive["quantity"] = 1
+        negative = dict(positive)
+        negative["quantity"] = -1
+        negative["labor_time"] = "-00:01"
+        negative["labor_minutes"] = -1
+        negative["labor_hours"] = round(-1 / 60, 4)
+        negative["labor_amount"] = round(
+            negative["labor_hours"] * float(negative.get("labor_rate") or 0),
+            2,
+        )
+        transactions.append(negative)
+    return transactions
 
 
 def _marker(approval_id, revision_no, index):
@@ -115,7 +144,7 @@ def _detail_payload(transaction, marker, line_nbr=None):
     detail.update(
         {
             "LaborCode": wrapped("ENNIS"),
-            "Shift": wrapped(str(transaction.get("shift") or "")),
+            "Shift": wrapped(normalize_shift(transaction.get("shift"))),
             "LaborTime": wrapped(int(transaction.get("labor_minutes") or 0)),
             "Quantity": wrapped(float(transaction.get("quantity") or 0)),
             "Location": wrapped(str(transaction.get("location") or "CUST REC")),
@@ -123,9 +152,6 @@ def _detail_payload(transaction, marker, line_nbr=None):
             "TranDescription": wrapped(str(transaction.get("tran_description") or "")),
         }
     )
-    reason_code = str(transaction.get("reason_code") or "").strip()
-    if reason_code:
-        detail["ReasonCode"] = wrapped(reason_code)
     if line_nbr is not None:
         detail["LineNbr"] = wrapped(int(line_nbr))
     return detail
@@ -327,7 +353,7 @@ def _put_record(client, record, batch, remote_entity=None, description=None, is_
     return refreshed, True
 
 
-def sync_approved_entries(trigger_name="manual", actor=None, client_factory=AcumaticaClient):
+def sync_approved_entries(trigger_name="manual", actor=None, client_factory=AcumaticaClient, approval_id=None):
     run_id = begin_acumatica_sync_run(trigger_name, actor=actor)
     if run_id is None:
         return {"status": "already_running", "sent": 0, "skipped": 0, "failed": 0}
@@ -346,6 +372,8 @@ def sync_approved_entries(trigger_name="manual", actor=None, client_factory=Acum
 
     candidates = []
     for record in list_acumatica_candidates(reviewed_after=cutover_at):
+        if approval_id is not None and int(record["id"]) != int(approval_id):
+            continue
         try:
             group = _record_group(record)
         except (TypeError, ValueError) as exc:

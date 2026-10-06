@@ -90,6 +90,38 @@ class ListCacheTests(unittest.TestCase):
         self.assertIn("Drift", titles)
         self.assertIn("Stenciling", titles)
 
+    @patch.object(backend, "_read_list", return_value=[])
+    def test_enabled_test_work_order_is_available_to_time_entry(self, _mock_read_list):
+        with patch.object(backend, "TEST_WORK_ORDERS_ENABLED", True):
+            work_orders = backend._work_orders()
+
+        self.assertEqual(len(work_orders), 1)
+        self.assertEqual(work_orders[0]["production_number"], "EWO26-00009")
+        self.assertEqual(work_orders[0]["operation_id"], "0005")
+        self.assertEqual(work_orders[0]["inventory_id"], "EN00088")
+
+    @patch.object(
+        backend,
+        "_read_list",
+        return_value=[
+            {
+                "fields": {
+                    "ProductionNumber": "EWO26-00009",
+                    "InventoryID": "EN00088",
+                    "Description": "Existing",
+                    "OperationID": "0005",
+                    "Status": "In Process",
+                    "OrderType": "EN",
+                }
+            }
+        ],
+    )
+    def test_test_work_order_does_not_duplicate_synced_operation(self, _mock_read_list):
+        with patch.object(backend, "TEST_WORK_ORDERS_ENABLED", True):
+            work_orders = backend._work_orders()
+
+        self.assertEqual(len(work_orders), 1)
+
     @patch.object(sharepoint_client, "graph_get", return_value={"value": []})
     def test_sharepoint_list_names_with_slashes_are_url_encoded(self, mock_graph_get):
         sharepoint_client.get_list_items(

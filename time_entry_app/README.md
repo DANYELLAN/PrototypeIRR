@@ -18,41 +18,27 @@ This workspace is dedicated to the CNC time-entry experience and is intentionall
 
 ## Run the app
 
-1. Install Node.js 22 or newer, Python 3, and PostgreSQL. This computer has Node.js 24, Python 3.13, and a running PostgreSQL 18 service.
-2. Keep this folder inside the project: the Python backend also needs the root `config.py`, `postgres_sync.py`, `sharepoint_api.py`, and `sharepoint_client.py`. From this folder, install dependencies:
+1. Install Node.js if needed.
+2. From this folder, install dependencies:
 
 ```powershell
-python -m pip install -r requirements.txt
-npm.cmd ci
+npm install
 ```
 
-3. Configure the root `.env` file using `.env.example` as a reference. Both Node and Python load this file; environment variables already set in the terminal take precedence. PostgreSQL connection settings must point to the database containing the cached SharePoint lists.
-
-4. Start the standalone app:
+3. Start the standalone app:
 
 ```powershell
-npm.cmd start
+npm start
 ```
 
-Alternatively, double-click `start-time-entry.cmd` in the project root. It uses `npm.cmd`, which works with this computer's PowerShell execution policy. Keep its terminal open while using the app. For development, use `npm.cmd run dev`.
-
-5. Open:
+4. Open:
 
 ```text
 http://localhost:3100
 ```
 
-The local approval/session database is created automatically at `time_entry_app/data/cnc_time_local.db`. Back up this file to preserve local entries, approval history, and Acumatica send history. The PostgreSQL cache is separate and must also be preserved; copying source files alone does not copy its records.
-
-Set `CNC_TIME_SYNC_ENABLED=false` in the terminal or root `.env` to disable startup/hourly SharePoint synchronization. This still allows local use of cached reference data. LiveView charts require access to the configured LiveView server. Support delivery requires the configured webhooks, and external synchronization requires working Microsoft/Acumatica authentication.
-
-## Review and local verification (October 5, 2026)
-
-- Reinstalled the incomplete Node dependencies: Express was missing its `lib/express` module and prevented startup.
-- Added root `.env` loading to the Node server and replaced its hardcoded default session signing key with a random startup key.
-- Verified PostgreSQL connectivity and cached time-app reference lists, including 787 employees and 3,552 production-operation records; initialized the local SQLite schema.
-- All 25 existing Python time-app tests passed. Local HTTP startup and asset checks use disabled background synchronization so verification does not send business records to external systems.
-- Review findings still requiring application hardening: sign-in identifies people by ADP number without a password; entry edit/delete/pause/stop routes accept an entry ID without passing the signed-in employee to the backend for an ownership check; the service worker caches authenticated GET responses; Express sessions use memory and are lost on restart. These findings do not prevent local startup.
+The `start` and `dev` commands load the ignored root `.env` file. Set a unique
+`SESSION_SECRET` there before running the app on a shared computer.
 
 ## Linkage to the inspection app
 
@@ -63,7 +49,20 @@ This app is intentionally separate, but it still shares the same project environ
 - The app uses the same project environment and backend data sources as the inspection workflow.
 - Submitted production, manual, and misc labor records are held in a local approval queue first. Users with the `approver` role can review them at `/admin`; approval releases the stored payload into the existing downstream SharePoint/Acumatica queue, while rejection keeps it out of downstream systems.
 - Approval access is granted from employee department/title text using `CNC_TIME_APPROVER_DEPARTMENT_KEYWORDS`, or explicitly with `CNC_TIME_APPROVER_ADP_NUMBERS`.
+- Operator time-entry access is available to every active Ennis employee with an ADP number. Export and approval access remain controlled separately.
+- IT employees matching `CNC_TIME_FULL_ACCESS_DEPARTMENT_KEYWORDS` receive operator, export, and approval permissions. Specific employees can also be granted full access with `CNC_TIME_FULL_ACCESS_ADP_NUMBERS`.
 - If `CNC_TIME_IT_WEBHOOK_URL` or `CNC_TIME_SUPERVISOR_WEBHOOK_URL` are not set, support requests are queued locally in `data/cnc_time_outbox.jsonl`.
+
+## Employee notifications
+
+Every signed-in employee has access to `/notifications` for Mold Approval, Change Material, and Assistance Needed ASAP requests. Requests are stored in the local SQLite database before delivery, so delivery failures do not erase the request.
+
+- `CNC_TIME_QUALITY_APPROVAL_WEBHOOK_URL` receives mold approval requests. Its Power Automate flow should post the Quality response to the supplied `decision_url`, including the supplied `decision_token`, a `decision` value of `approved` or `rejected`, and the responder name.
+- `CNC_TIME_CHANGE_MATERIAL_WEBHOOK_URL` receives change-material notifications.
+- `CNC_TIME_ASSISTANCE_WEBHOOK_URL` receives urgent assistance requests.
+- `CNC_TIME_NOTIFICATION_CALLBACK_BASE_URL` must be an HTTPS address reachable by Power Automate. Leave it blank until the host has a secure externally reachable callback or an on-premises integration path.
+
+When a webhook is blank, the request remains visible in the app and its outbound payload is also appended to `data/cnc_time_outbox.jsonl` for later integration.
 
 ## Acumatica labor sync
 
@@ -72,7 +71,7 @@ Approved CNC entries are grouped by labor date and area (`L1`, `L2`, or `T&B`) a
 Run the same idempotent sync used by the approval-page button:
 
 ```powershell
-npm.cmd run sync:acumatica
+npm run sync:acumatica
 ```
 
 On the always-on Windows server, install the daily 6:00 AM local-time task from an elevated PowerShell prompt:
@@ -82,3 +81,32 @@ On the always-on Windows server, install the daily 6:00 AM local-time task from 
 ```
 
 Keep the server time zone set to Central Time. Task history and Acumatica send results are also retained in the local SQLite database.
+
+Install the web app as an automatic startup task from the same elevated prompt:
+
+```powershell
+.\scripts\install_cnc_time_app_task.ps1
+```
+
+To install both host tasks together, run:
+
+```powershell
+.\scripts\install_host_tasks.ps1
+```
+
+To restart the live app under its installed task, run from an elevated prompt:
+
+```powershell
+.\scripts\start_cnc_time_app_task.ps1
+```
+
+Both tasks run as the local `SYSTEM` account, do not require a user to remain
+signed in, and restart automatically after transient failures. The combined
+installer also allows inbound TCP port `3100` on Domain and Private networks.
+
+If Python packages were originally installed only for a user account, install
+them for the host service account from an elevated prompt:
+
+```powershell
+.\scripts\install_host_python_dependencies.ps1
+```
