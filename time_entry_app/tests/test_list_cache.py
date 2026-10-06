@@ -89,6 +89,7 @@ class ListCacheTests(unittest.TestCase):
         self.assertIn("Sandblast", titles)
         self.assertIn("Drift", titles)
         self.assertIn("Stenciling", titles)
+        self.assertIn("Rebore", titles)
 
     @patch.object(backend, "_read_list", return_value=[])
     def test_enabled_test_work_order_is_available_to_time_entry(self, _mock_read_list):

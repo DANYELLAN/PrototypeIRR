@@ -1,4 +1,6 @@
 import json
+import hashlib
+from collections import Counter
 import os
 import re
 import secrets
@@ -35,15 +37,21 @@ from local_store import (
     get_machine_options,
     get_notification_request,
     list_approval_records,
+    list_active_direct_downtime,
+    list_employee_approvals,
+    get_daily_time_confirmation,
+    save_daily_time_confirmation,
     list_notification_requests,
     list_pending_records,
     mark_approval_reviewed,
+    mark_notification_submitted,
     mark_record_synced,
     patch_approval_record_fields,
     patch_approval_record_payload,
     patch_pending_record_fields,
     queue_approval,
     queue_record,
+    resolve_assistance_request,
     save_session,
     start_break_event,
     update_approval_with_revision,
@@ -137,6 +145,7 @@ STATION_DETAIL_TYPES = [
     {"item_id": 902, "title": "Sandblast", "option_step": 2, "type_ii": "", "branch": "Ennis"},
     {"item_id": 903, "title": "Drift", "option_step": 2, "type_ii": "", "branch": "Ennis"},
     {"item_id": 904, "title": "Stenciling", "option_step": 2, "type_ii": "", "branch": "Ennis"},
+    {"item_id": 905, "title": "Rebore", "option_step": 2, "type_ii": "", "branch": "Ennis"},
 ]
 
 DOWNTIME_REASONS = [
@@ -204,7 +213,7 @@ EXPORTER_ADP_NUMBERS = {
 }
 APPROVER_DEPARTMENT_KEYWORDS = tuple(
     item.strip().lower()
-    for item in os.getenv("CNC_TIME_APPROVER_DEPARTMENT_KEYWORDS", "supervisor,manager,lead,production manager").split(",")
+    for item in os.getenv("CNC_TIME_APPROVER_DEPARTMENT_KEYWORDS", "supervisor,manager,lead,production manager,logistics").split(",")
     if item.strip()
 )
 APPROVER_ADP_NUMBERS = {
@@ -822,6 +831,11 @@ def _detail_types():
         if detail["title"].lower() not in existing_titles:
             details.append(dict(detail))
             existing_titles.add(detail["title"].lower())
+    recut = next((item for item in details if item["title"].strip().lower() == "recut"), None)
+    rebore = next((item for item in details if item["title"].strip().lower() == "rebore"), None)
+    if recut and rebore:
+        details.remove(rebore)
+        details.insert(details.index(recut) + 1, rebore)
     return details
 
 
@@ -974,7 +988,9 @@ def _acumatica_labor_transaction(fields, reason_code="", labor_rate=None):
 
 
 def _acumatica_downtime_transactions(fields, reason_code):
-    positive = _acumatica_labor_transaction(fields, reason_code=reason_code)
+    # The paired -1 minute transaction must not reduce the entered downtime.
+    positive_fields = dict(fields, TotalMinutes=int(_as_number(fields.get("TotalMinutes"), 0)) + 1)
+    positive = _acumatica_labor_transaction(positive_fields, reason_code=reason_code)
     positive["quantity"] = 1
     negative = dict(positive)
     negative["labor_time"] = "-00:01"
@@ -1106,6 +1122,8 @@ def _approval_context_entry(record):
         {
             "approval_id": record["id"],
             "record_type": record.get("record_type"),
+            "downtime_minutes": payload.get("active_downtime_minutes", 0),
+            "daily_time_exception_reason": (payload.get("daily_time_exception") or {}).get("reason", ""),
             "submitted_at": record.get("submitted_at"),
             "reviewed_at": record.get("reviewed_at"),
             "reviewed_by_emp_id": record.get("reviewed_by_emp_id"),
@@ -1236,6 +1254,7 @@ def _local_timeentry_entries(emp_id=None):
         item = _normalize_timeentry({"id": str(record["id"]), "fields": fields})
         item["id"] = record["id"]
         item["sp_id"] = f"local:{record['id']}"
+        item["downtime_minutes"] = payload.get("active_downtime_minutes", 0)
         entries_by_id[str(record["id"])] = item
 
     for record in list_approval_records(status="pending", limit=500):
@@ -1246,6 +1265,7 @@ def _local_timeentry_entries(emp_id=None):
         item = _normalize_timeentry({"id": str(record["id"]), "fields": fields})
         item["id"] = record["id"]
         item["sp_id"] = f"approval:{record['id']}"
+        item["downtime_minutes"] = payload.get("active_downtime_minutes", 0)
         item["status"] = "Pending Approval"
         entries_by_id[f"approval:{record['id']}"] = item
 
@@ -1529,6 +1549,99 @@ def get_dashboard_context(emp_id, user_email):
     }
 
 
+def _daily_entry_fingerprint(entry):
+    return tuple(str(entry.get(key) or "") for key in (
+        "labor_date", "shift", "production_number", "operation_id", "machine_no",
+        "details_type", "details_type_ii", "total_minutes", "quantity", "start", "end",
+    ))
+
+
+def get_daily_time_review(employee, labor_date=None, approval_id=None, entry_id=None):
+    emp_id = _normalize_identifier(employee.get("emp_id"))
+    if not emp_id or not employee.get("machinist"):
+        return {"required": False, "entries": []}
+    if approval_id or str(entry_id or "").startswith("approval:"):
+        record = get_approval_record(int(approval_id or _approval_record_key(entry_id)))
+        if not record or _normalize_identifier(record.get("emp_id")) != emp_id:
+            raise ValueError("The time entry does not belong to this operator.")
+        labor_date = (_approval_payload(record).get("fields") or {}).get("LaborDate")
+    elif entry_id:
+        entry = _get_timeentry_by_id(entry_id)
+        if _normalize_identifier(entry.get("emp_id")) != emp_id:
+            raise ValueError("The time entry does not belong to this operator.")
+        labor_date = entry.get("labor_date")
+    day = str(labor_date or datetime.now().date().isoformat())[:10]
+    try:
+        datetime.strptime(day, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError("Select a valid labor date.")
+    entries = []
+    downstream_copies = Counter()
+    for record in list_employee_approvals(emp_id):
+        if record.get("approval_status") not in {"pending", "approved"}:
+            continue
+        fields = _approval_payload(record).get("fields") or {}
+        if str(fields.get("LaborDate") or "")[:10] != day:
+            continue
+        entry = _normalize_timeentry({"id": f"approval:{record['id']}", "fields": fields})
+        entry.update({"labor_date": day, "approval_id": record["id"],
+                      "revision_no": record.get("revision_no") or 1,
+                      "status": "Pending Approval" if record["approval_status"] == "pending" else "Approved",
+                      "editable": record["approval_status"] == "pending"})
+        if record["approval_status"] == "approved":
+            downstream_copies[_daily_entry_fingerprint(entry)] += 1
+        entries.append(entry)
+    # Approval records are authoritative; do not count their downstream copies twice.
+    for item in _read_list("timeentry", fetch_all=True):
+        entry = _normalize_timeentry(item)
+        if _normalize_identifier(entry.get("emp_id")) != emp_id or str(entry.get("labor_date") or "")[:10] != day:
+            continue
+        if entry.get("status", "").lower() in {"rejected", "deleted"}:
+            continue
+        entry["labor_date"] = day
+        fingerprint = _daily_entry_fingerprint(entry)
+        if downstream_copies[fingerprint]:
+            downstream_copies[fingerprint] -= 1
+            continue
+        entry["editable"] = True
+        entries.append(entry)
+    entries.sort(key=lambda row: str(row.get("sp_id")))
+    total_minutes = sum(max(int(_as_number(row.get("total_minutes"), 0)), 0) for row in entries)
+    signature_rows = [
+        {"id": row["sp_id"], "revision": row.get("revision_no", 0), "fields": _daily_entry_fingerprint(row)}
+        for row in entries
+    ]
+    snapshot_hash = hashlib.sha256(json.dumps(signature_rows, sort_keys=True).encode()).hexdigest()
+    confirmation = get_daily_time_confirmation(emp_id, day, snapshot_hash)
+    return {"labor_date": day, "entries": entries, "total_minutes": total_minutes,
+            "total": _hhmm_from_minutes(total_minutes), "limit_minutes": 630,
+            "snapshot_hash": snapshot_hash, "confirmed": bool(confirmation),
+            "reason": (confirmation or {}).get("reason", ""),
+            "required": total_minutes > 630 and not confirmation}
+
+
+def confirm_daily_time_review(employee, labor_date, snapshot_hash, reason):
+    reason_text = str(reason or "").strip()
+    if not reason_text:
+        raise ValueError("A reason is required to confirm entries exceeding 10.5 hours.")
+    if len(reason_text) > 2000:
+        raise ValueError("The reason must be 2000 characters or fewer.")
+    review = get_daily_time_review(employee, labor_date)
+    if review.get("total_minutes", 0) <= 630:
+        raise ValueError("These entries no longer exceed 10.5 hours. Refresh the page.")
+    if review["snapshot_hash"] != snapshot_hash:
+        raise ValueError("Your time entries changed. Please review the updated snapshot.")
+    save_daily_time_confirmation(dict(employee, emp_id=_normalize_identifier(employee.get("emp_id"))), review, reason_text)
+    for row in review["entries"]:
+        if row.get("approval_id") and row.get("editable"):
+            record = get_approval_record(row["approval_id"])
+            payload = _approval_payload(record)
+            payload["daily_time_exception"] = {"reason": reason_text, "total_minutes": review["total_minutes"],
+                                               "labor_date": review["labor_date"], "snapshot_hash": snapshot_hash}
+            patch_approval_record_payload(row["approval_id"], payload)
+    return {"confirmed": True}
+
+
 def get_time_export_rows(start_date=None, end_date=None):
     start_text = str(start_date or "").strip()
     end_text = str(end_date or "").strip()
@@ -1607,6 +1720,12 @@ def approve_time_entry(approval_id, reviewer=None, note=None):
     fields = payload.get("fields") or {}
     if not fields:
         raise ValueError("The selected approval record has no time entry fields.")
+    employee = dict(payload.get("employee") or {})
+    employee.setdefault("emp_id", record.get("emp_id") or fields.get("EmpID") or fields.get("EmployeeID"))
+    if employee.get("machinist") and fields.get("LaborDate"):
+        review = get_daily_time_review(employee, fields["LaborDate"])
+        if review.get("required"):
+            raise ValueError("The operator must review their daily time exceeding 10.5 hours and provide a reason before approval.")
 
     # Pending corrections update the reviewed fields. Rebuild the integration
     # payload here so Acumatica receives the manager-approved values.
@@ -1625,6 +1744,34 @@ def approve_time_entry(approval_id, reviewer=None, note=None):
         return {"approved": True, "synced": True}
     except Exception:
         return {"approved": True, "queued": True, "offline_only": True}
+
+
+def approve_all_time_entries(approval_ids, reviewer=None):
+    # Use the displayed IDs so requests arriving after confirmation stay pending.
+    if not isinstance(approval_ids, list) or not approval_ids or len(approval_ids) > 500:
+        raise ValueError("Select between 1 and 500 pending approval records.")
+    ids = []
+    for value in approval_ids:
+        if isinstance(value, bool) or not str(value).isdigit() or int(value) <= 0:
+            raise ValueError("Invalid approval record ID.")
+        record_id = int(value)
+        if record_id not in ids:
+            ids.append(record_id)
+    summary = {"approved": 0, "queued": 0, "synced": 0, "failed": 0, "errors": []}
+    for record_id in ids:
+        try:
+            result = approve_time_entry(record_id, reviewer=reviewer)
+            summary["approved"] += 1
+            summary["queued"] += int(bool(result.get("queued")))
+            summary["synced"] += int(bool(result.get("synced")))
+        except Exception as exc:
+            summary["failed"] += 1
+            summary["errors"].append({"approval_id": record_id, "error": str(exc)})
+    return summary
+
+
+def retry_all_acumatica_entries(actor=None):
+    return sync_approved_entries(trigger_name="manual_retry_all", actor=actor or {}, failed_only=True)
 
 
 def update_approval_time_entry(approval_id, fields_update=None, editor=None, reason=None):
@@ -1828,6 +1975,31 @@ def _get_startstop_by_id(entry_id):
     raise ValueError("The requested active time entry could not be found.")
 
 
+def _matching_active_direct_entry(employee, production_number, operation_id):
+    entries = [_normalize_startstop(item) for item in _read_list("startstop", fetch_all=True)]
+    entries.extend(_local_startstop_entries(employee.get("emp_id")))
+    matches = [entry for entry in entries
+               if entry.get("status") in {"In Progress", "Paused"}
+               and _normalize_identifier(entry.get("emp_id")) == _normalize_identifier(employee.get("emp_id"))
+               and entry.get("production_number") == production_number
+               and entry.get("operation_id") == operation_id]
+    if len(matches) > 1:
+        raise ValueError("Multiple matching Direct Time entries are active. Stop the duplicate before entering downtime.")
+    return matches[0] if matches else None
+
+
+def _active_downtime_minutes(entry):
+    total = 0
+    for record in list_active_direct_downtime(entry["sp_id"]):
+        fields = _approval_payload(record).get("fields") or {}
+        if (str(fields.get("DetailsType") or "").upper() == "DT"
+                and _normalize_identifier(fields.get("EmpID")) == _normalize_identifier(entry.get("emp_id"))
+                and fields.get("ProductionNo") == entry.get("production_number")
+                and fields.get("OperationID") == entry.get("operation_id")):
+            total += max(int(_as_number(fields.get("TotalMinutes"), 0)), 0)
+    return total
+
+
 def _get_timeentry_by_id(entry_id):
     normalized = [_normalize_timeentry(item) for item in _read_list("timeentry", fetch_all=True)]
     normalized.extend(_local_timeentry_entries())
@@ -1858,7 +2030,7 @@ def _worked_minutes_from_entry(entry, break_minutes):
     if end_dt.tzinfo is None:
         end_dt = end_dt.replace(tzinfo=timezone.utc)
     elapsed = max(int((end_dt - start_dt).total_seconds() // 60), 0)
-    return max(elapsed - int(break_minutes), 0)
+    return max(elapsed - int(break_minutes) - int(entry.get("downtime_minutes") or 0), 0)
 
 
 def _recalculate_average(quantity, total_minutes):
@@ -2170,7 +2342,8 @@ def stop_time_entry(entry_id, quantity=None):
         if _break_counts_against_production(active_break):
             break_minutes += current_break_minutes
         finish_break_event(entry["sp_id"], ended_at=end_dt.isoformat(), duration_minutes=current_break_minutes)
-    worked_minutes = max(int((end_dt - start_dt).total_seconds() // 60) - int(break_minutes), 0)
+    downtime_minutes = _active_downtime_minutes(entry)
+    worked_minutes = max(int((end_dt - start_dt).total_seconds() // 60) - int(break_minutes) - downtime_minutes, 0)
     qty = _as_number(quantity, 1)
     average = round(qty / (worked_minutes / 60), 2) if worked_minutes > 0 else 0
 
@@ -2230,7 +2403,10 @@ def stop_time_entry(entry_id, quantity=None):
         "StartStopID": int(_as_number(entry["id"], 0)),
     }
     employee_for_acumatica = lookup_employee_by_adp(entry.get("emp_id")) or {}
-    approval_payload = {"entry_id": entry_id, "fields": final_fields, "employee": employee_for_acumatica}
+    approval_payload = {
+        "entry_id": entry_id, "fields": final_fields, "employee": employee_for_acumatica,
+        "active_downtime_minutes": downtime_minutes,
+    }
     _attach_acumatica_payload(approval_payload, employee_for_acumatica, final_fields)
     ensure_db()
     approval_id = queue_approval(
@@ -2292,6 +2468,9 @@ def submit_misc_time(
         "Year": datetime.now().year,
     }
     approval_payload = {"employee": employee, "fields": fields}
+    active_entry = _matching_active_direct_entry(employee, production_number, operation_id)
+    if active_entry:
+        approval_payload["active_direct_entry_id"] = str(active_entry["sp_id"])
     _attach_acumatica_payload(approval_payload, employee, fields, downtime_reason)
     ensure_db()
     approval_id = queue_approval(
@@ -2459,14 +2638,115 @@ def _notification_work_orders():
     }, reverse=True)
 
 
-def get_notification_context(emp_id):
+def _notification_sharepoint_target(notification_type):
+    if os.getenv("CNC_TIME_NOTIFICATION_TRANSPORT", "webhook").strip().lower() != "sharepoint":
+        return None
+    list_ids = {
+        "mold_approval": "c7c723b1-123d-4a1b-b8a4-6e1b8b2a865e",
+        "change_material": "7a805b80-4edd-4409-bf0c-0d3b26938999",
+        "assistance_asap": os.getenv("CNC_TIME_ASSISTANCE_SHAREPOINT_LIST_ID", "").strip(),
+    }
+    list_id = list_ids.get(notification_type)
+    return (EMPLOYEE_SITE, list_id) if list_id else None
+
+
+def _submit_sharepoint_notification(record):
+    site_url, list_id = _notification_sharepoint_target(record["notification_type"])
+    fields = {"Title": f"Time Entry Request {record['id']}"}
+    if record["notification_type"] == "mold_approval":
+        fields.update({
+            "MachinistName": record["requester_name"],
+            "MachineNumber": record["machine_no"],
+            "WONumber": record["work_order"],
+        })
+    elif record["notification_type"] == "change_material":
+        fields.update({
+            "Machinist": record["requester_name"],
+            "MachineNumber": record["machine_no"],
+            "WO": record["work_order"],
+            "MaterialType": record["details"]["material_change_type"],
+        })
+    else:
+        fields.update({
+            "RequesterName": record["requester_name"],
+            "MachineNumber": record["machine_no"],
+            "WONumber": record["work_order"],
+            "AssistanceNeeded": record["details"]["message"],
+            "RequestStatus": "Open",
+        })
+    headers = build_headers(_get_time_entry_access_token())
+    site_id = _site_id(site_url, headers)
+    item = _request("POST", f"/sites/{site_id}/lists/{list_id}/items", headers, {"fields": fields})
+    if not item.get("id"):
+        raise ValueError("SharePoint did not return a notification item ID.")
+    mark_notification_submitted(record["id"], site_url, list_id, item["id"])
+    return {**_public_notification_record(get_notification_request(record["id"])),
+            "queued": False, "delivered": False, "submitted": True}
+
+
+def _refresh_sharepoint_mold_decision(record):
+    if (record.get("notification_type") != "mold_approval" or record.get("status") != "pending"
+            or not record.get("sharepoint_item_id")):
+        return record
+    try:
+        headers = build_headers(_get_time_entry_access_token())
+        site_id = _site_id(record["sharepoint_site_url"], headers)
+        item = _request(
+            "GET",
+            f"/sites/{site_id}/lists/{record['sharepoint_list_id']}/items/{record['sharepoint_item_id']}?$expand=fields",
+            headers,
+        )
+        fields = item.get("fields") or {}
+        status = {"Approved": "approved_to_run", "Not Approved": "do_not_run"}.get(fields.get("ApprovalStatus"))
+        if status:
+            decide_notification_request(record["id"], status, fields.get("QCResponder"))
+            return get_notification_request(record["id"])
+    except Exception:
+        # A temporary read failure must never authorize production or erase a request.
+        return {**record, "refresh_error": "Unable to refresh the Quality response. Retrying."}
+    return record
+
+
+def _refresh_sharepoint_assistance(record):
+    if (record.get("notification_type") != "assistance_asap"
+            or record.get("status") != "assistance_requested" or not record.get("sharepoint_item_id")):
+        return record
+    try:
+        headers = build_headers(_get_time_entry_access_token())
+        site_id = _site_id(record["sharepoint_site_url"], headers)
+        item = _request(
+            "GET",
+            f"/sites/{site_id}/lists/{record['sharepoint_list_id']}/items/{record['sharepoint_item_id']}?$expand=fields",
+            headers,
+        )
+        fields = item.get("fields") or {}
+        if fields.get("RequestStatus") == "Resolved":
+            resolve_assistance_request(record["id"], fields.get("ResolvedBy"),
+                                       fields.get("ResolutionNote"), fields.get("ResolvedAt"))
+            return get_notification_request(record["id"])
+    except Exception:
+        return {**record, "refresh_error": "Unable to refresh the assistance response. Retrying."}
+    return record
+
+
+def get_notification_context(emp_id, request_id=None):
     ensure_db()
+    records = list_notification_requests(str(emp_id or "").strip(), limit=30)
+    watched = next((record for record in records if str(record["id"]) == str(request_id)), None)
+    if request_id is None:
+        watched = next((record for record in records if record["status"] in {"pending", "assistance_requested"}
+                        and record.get("sharepoint_item_id")), None)
+    if watched:
+        refreshed = (_refresh_sharepoint_assistance(watched)
+                     if watched["notification_type"] == "assistance_asap"
+                     else _refresh_sharepoint_mold_decision(watched))
+        records = [refreshed if record["id"] == watched["id"] else record for record in records]
     return {
         "work_orders": _notification_work_orders(),
         "material_change_types": MATERIAL_CHANGE_TYPES,
         "requests": [
             _public_notification_record(record)
-            for record in list_notification_requests(str(emp_id or "").strip(), limit=30)
+            for record in records
         ],
     }
 
@@ -2518,6 +2798,11 @@ def submit_notification_request(
         "material_change_type": material_change_type,
         "message": message,
     }
+    if notification_type == "assistance_asap":
+        with (APP_ROOT / "config" / "assistance.json").open(encoding="utf-8") as routing_file:
+            routing = json.load(routing_file)
+        details.update({"recipient_emails": routing["recipient_emails"], "chat_topic": routing["chat_topic"],
+                        "chat_id": routing["chat_id"]})
     record = create_notification_request(
         notification_type,
         requester_emp_id,
@@ -2528,6 +2813,13 @@ def submit_notification_request(
         callback_token=callback_token,
         status=initial_status,
     )
+
+    if _notification_sharepoint_target(notification_type):
+        try:
+            return _submit_sharepoint_notification(record)
+        except Exception as exc:
+            update_notification_delivery(record["id"], "failed", str(exc))
+            raise ValueError(f"The notification was saved but could not be submitted to SharePoint: {exc}") from exc
 
     if notification_type == "mold_approval":
         notification_message = (
@@ -2557,6 +2849,9 @@ def submit_notification_request(
         "additional_message": message,
         "requested_at": record["created_at"],
     }
+    if notification_type == "assistance_asap":
+        payload.update({"recipient_emails": details["recipient_emails"], "chat_topic": details["chat_topic"],
+                        "chat_id": details["chat_id"]})
     if notification_type == "mold_approval" and callback_base_url:
         payload.update({
             "decision_url": f"{callback_base_url}/api/notifications/{record['id']}/decision",

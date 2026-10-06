@@ -4,6 +4,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+try {
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+} catch {
+    throw "Could not load scheduled task '$TaskName': $($_.Exception.Message). Run install_cnc_time_app_task.ps1 from an elevated PowerShell window before starting the app."
+}
 $appDirectory = Split-Path -Parent $PSScriptRoot
 $dataDirectory = Join-Path $appDirectory "data"
 $statusPath = Join-Path $dataDirectory "host_task_start_status.json"

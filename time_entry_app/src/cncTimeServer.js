@@ -5,6 +5,7 @@ import session from "express-session";
 import path from "path";
 import { fileURLToPath } from "url";
 import { callCncBridge } from "./cncTimeBridge.js";
+import { dailyTimeReviewMarkup } from "./dailyTimeReview.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -355,8 +356,9 @@ function notificationStatus(value) {
     pending: { label: "Waiting for Quality", className: "inactive" },
     approved_to_run: { label: "Approved to Run", className: "" },
     do_not_run: { label: "Do Not Run", className: "stopped" },
-    notified: { label: "Notification Sent", className: "secondary" },
+    notified: { label: "Material Change Requested", className: "secondary" },
     assistance_requested: { label: "Assistance Requested", className: "warning" },
+    resolved: { label: "Resolved", className: "" },
   }[value] || { label: value || "Pending", className: "inactive" };
 }
 
@@ -371,7 +373,7 @@ function notificationRequestTable(requests) {
     .map((request) => {
       const details = request.details || {};
       const detailText = details.material_change_type || details.message || "";
-      const delivery = request.delivery_status === "failed" ? "Delivery failed" : request.delivery_status === "delivered" ? "Delivered" : "Queued";
+      const delivery = request.delivery_status === "failed" ? "Delivery failed" : request.delivery_status === "submitted" ? "Submitted to flow" : request.delivery_status === "delivered" ? "Delivered" : "Queued";
       return `<tr>
         <td>${escapeHtml(new Date(request.created_at).toLocaleString())}</td>
         <td><strong>${escapeHtml(notificationTypeLabel(request.notification_type))}</strong>${detailText ? `<br><small>${escapeHtml(detailText)}</small>` : ""}</td>
@@ -434,7 +436,7 @@ function timeTable(rows, editable = false, editContext = {}) {
             <td>${escapeHtml(row.total || "")}</td>
             <td>${escapeHtml(row.quantity || "")}</td>
             ${
-              editable
+              editable && row.editable !== false
                 ? `<td>
                     <details class="correction-details">
                       <summary>Edit</summary>
@@ -462,7 +464,7 @@ function timeTable(rows, editable = false, editContext = {}) {
                       <button class="cnc-button danger small" type="submit">Delete</button>
                     </form>
                   </td>`
-                : ""
+                : editable ? "<td>Admin review required</td>" : ""
             }
           </tr>`,
         )
@@ -750,13 +752,15 @@ function approvalTimeSummary(row) {
   const span = [row.start, row.end].filter(Boolean).join(" - ");
   return `<strong>${escapeHtml(row.total || "")}</strong>
     <small>${escapeHtml(span || row.labor_date || "")}</small>
-    ${Number(row.break_minutes || 0) ? `<small>${escapeHtml(row.break_minutes)} min break</small>` : ""}`;
+    ${Number(row.break_minutes || 0) ? `<small>${escapeHtml(row.break_minutes)} min break</small>` : ""}
+    ${Number(row.downtime_minutes || 0) ? `<small>${escapeHtml(row.downtime_minutes)} min downtime deducted</small>` : ""}`;
 }
 
 function approvalDetailSummary(row) {
   const detail = [row.details_type, row.details_type_ii].filter(Boolean).join(" / ");
   return `<strong>${escapeHtml(detail || "Time Entry")}</strong>
     <small>${escapeHtml(row.tran_description || "")}</small>
+    ${row.daily_time_exception_reason ? `<small><strong>Daily hours reason:</strong> ${escapeHtml(row.daily_time_exception_reason)}</small>` : ""}
     <div class="approval-destinations">
       <span>SharePoint</span>
       ${row.has_acumatica_payload ? "<span>Acumatica</span>" : ""}
@@ -952,6 +956,9 @@ app.post("/login", async (req, res) => {
       machine_no: req.body.machine_no,
       shift_id: req.body.shift_id,
     });
+    req.session.dailyReviewDate = null;
+    req.session.dailyReviewEditing = false;
+    req.session.dailyReviewError = null;
     req.session.notice = { kind: "success", message: "Signed in successfully." };
     res.redirect(defaultLandingPath(req.session.cncUser));
   } catch (error) {
@@ -1098,13 +1105,22 @@ app.get("/admin", requireApprover, async (req, res, next) => {
         <section class="cnc-card">
           <div class="cnc-section-header">
             <h3>Acumatica Labor Sync</h3>
+            <form method="post" action="/admin/retry-all-acumatica" onsubmit="return confirm('Retry all failed Acumatica entries?');">
+              <button class="cnc-button" type="submit" ${Number(acumaticaSync.counts?.failed || 0) ? "" : "disabled"}>Retry All</button>
+            </form>
             <form method="post" action="/admin/send-acumatica" onsubmit="return confirm('Send all approved, unsent labor entries to Acumatica?');">
               <button class="cnc-button" type="submit">Send to Acumatica</button>
             </form>
           </div>
         </section>
         <section class="cnc-card">
-          <div class="cnc-section-header"><h3>Awaiting Approval</h3></div>
+          <div class="cnc-section-header">
+            <h3>Awaiting Approval</h3>
+            <form method="post" action="/admin/approve-all" onsubmit="return confirm('Approve all ${pending.length} displayed pending entries?');">
+              ${pending.map((row) => `<input type="hidden" name="approval_ids" value="${escapeHtml(row.approval_id)}" />`).join("")}
+              <button class="cnc-button" type="submit" ${pending.length ? "" : "disabled"}>Approve All</button>
+            </form>
+          </div>
           ${approvalTable(pending, approvalEditContext)}
         </section>
         <section class="cnc-card">
@@ -1207,6 +1223,42 @@ app.post("/admin/retry-acumatica", requireApprover, async (req, res) => {
   res.redirect("/admin");
 });
 
+app.post("/admin/approve-all", requireApprover, async (req, res) => {
+  try {
+    const ids = req.body.approval_ids;
+    const result = await callCncBridge("approve_all_time_entries", {
+      approval_ids: Array.isArray(ids) ? ids : ids ? [ids] : [],
+      reviewer: req.session.cncUser.employee,
+    });
+    req.session.notice = {
+      kind: result.failed ? "warning" : "success",
+      message: `Bulk approval complete: ${result.approved} approved, ${result.queued} queued for downstream sync, ${result.failed} not approved.${result.errors?.length ? ` ${result.errors.map((item) => `Entry ${item.approval_id}: ${item.error}`).join(" ")}` : ""}`,
+    };
+  } catch (error) {
+    req.session.notice = { kind: "warning", message: error.message };
+  }
+  res.redirect("/admin");
+});
+
+app.post("/admin/retry-all-acumatica", requireApprover, async (req, res) => {
+  try {
+    const result = await callCncBridge("retry_all_acumatica_entries", { actor: req.session.cncUser.employee });
+    if (result.status === "already_running") {
+      req.session.notice = { kind: "info", message: "An Acumatica sync is already running." };
+    } else if (result.status === "disabled" || result.status === "configuration_error") {
+      req.session.notice = { kind: "warning", message: result.error || "Acumatica sync is disabled." };
+    } else {
+      req.session.notice = {
+        kind: result.failed ? "warning" : "success",
+        message: `Retry All complete: ${result.sent || 0} sent, ${result.skipped || 0} skipped, ${result.failed || 0} failed.`,
+      };
+    }
+  } catch (error) {
+    req.session.notice = { kind: "warning", message: error.message };
+  }
+  res.redirect("/admin");
+});
+
 app.post("/admin/approve", requireApprover, async (req, res) => {
   try {
     const result = await callCncBridge("approve_time_entry", {
@@ -1301,6 +1353,10 @@ app.get("/time", requireOperator, async (req, res, next) => {
   try {
     const context = await dashboardContext(req);
     const sessionData = req.session.cncUser;
+    const dailyReview = await callCncBridge("get_daily_time_review", {
+      employee: sessionData.employee,
+      labor_date: req.session.dailyReviewDate,
+    });
     const workOrderOptions = context.work_orders
       .map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)
       .join("");
@@ -1325,7 +1381,8 @@ app.get("/time", requireOperator, async (req, res, next) => {
         sessionData,
         notice: req.session.notice,
         active: "time",
-        body: `<section class="cnc-hero compact">
+        body: `${dailyTimeReviewMarkup(dailyReview, { editing: req.session.dailyReviewEditing, error: req.session.dailyReviewError })}
+        <section class="cnc-hero compact">
           <div>
             <p class="eyebrow">Time Entry</p>
             <h2>Start jobs, stop jobs, add downtime, and key in manual production time.</h2>
@@ -1457,9 +1514,9 @@ app.get("/time", requireOperator, async (req, res, next) => {
             </form>
           </article>
         </section>
-        <section class="cnc-card">
-          <div class="cnc-section-header"><h3>Recent Entries</h3></div>
-          ${timeTable(context.recent_entries, true, {
+        <section class="cnc-card" id="recent-entries">
+          <div class="cnc-section-header"><h3>${req.session.dailyReviewEditing ? "Entries for Review" : "Recent Entries"}</h3></div>
+          ${timeTable(req.session.dailyReviewEditing ? dailyReview.entries : context.recent_entries, true, {
             workOrders: context.work_orders,
             operations: context.operations,
             details: context.details_step_two,
@@ -1472,6 +1529,48 @@ app.get("/time", requireOperator, async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+async function setDailyReviewTarget(req, result = {}) {
+  if (!req.session.cncUser.employee.machinist) return;
+  const review = await callCncBridge("get_daily_time_review", {
+    employee: req.session.cncUser.employee,
+    approval_id: result.approval_id,
+    entry_id: result.approval_id ? undefined : req.body.entry_id,
+  });
+  req.session.dailyReviewDate = review.labor_date;
+  req.session.dailyReviewEditing = false;
+  req.session.dailyReviewError = null;
+}
+
+app.post("/time/review/edit", requireOperator, (req, res) => {
+  req.session.dailyReviewEditing = true;
+  req.session.dailyReviewError = null;
+  res.redirect("/time#recent-entries");
+});
+
+app.post("/time/review/show", requireOperator, (req, res) => {
+  req.session.dailyReviewEditing = false;
+  res.redirect("/time");
+});
+
+app.post("/time/review/confirm", requireOperator, async (req, res) => {
+  try {
+    await callCncBridge("confirm_daily_time_review", {
+      employee: req.session.cncUser.employee,
+      labor_date: req.body.labor_date,
+      snapshot_hash: req.body.snapshot_hash,
+      reason: req.body.reason,
+    });
+    req.session.dailyReviewDate = req.body.labor_date;
+    req.session.dailyReviewEditing = false;
+    req.session.dailyReviewError = null;
+    req.session.notice = { kind: "success", message: "Time entries confirmed. Your reason was saved for admin review." };
+  } catch (error) {
+    req.session.dailyReviewEditing = false;
+    req.session.dailyReviewError = error.message;
+  }
+  res.redirect("/time");
 });
 
 app.post("/time/start", requireOperator, async (req, res) => {
@@ -1518,10 +1617,11 @@ app.post("/time/resume", requireOperator, async (req, res) => {
 
 app.post("/time/stop", requireOperator, async (req, res) => {
   try {
-    await callCncBridge("stop_time_entry", {
+    const result = await callCncBridge("stop_time_entry", {
       entry_id: req.body.entry_id,
       quantity: req.body.quantity,
     });
+    await setDailyReviewTarget(req, result);
     req.session.notice = { kind: "success", message: "Active time entry sent for supervisor approval." };
   } catch (error) {
     req.session.notice = { kind: "warning", message: error.message };
@@ -1560,6 +1660,7 @@ app.post("/time/correct", requireOperator, async (req, res) => {
       total_minutes_remainder: req.body.total_minutes_remainder,
       comments: req.body.comments,
     });
+    await setDailyReviewTarget(req);
     req.session.notice = { kind: "success", message: "Time entry correction saved." };
   } catch (error) {
     req.session.notice = { kind: "warning", message: error.message };
@@ -1569,6 +1670,7 @@ app.post("/time/correct", requireOperator, async (req, res) => {
 
 app.post("/time/delete", requireOperator, async (req, res) => {
   try {
+    await setDailyReviewTarget(req);
     await callCncBridge("delete_time_entry", {
       entry_id: req.body.entry_id,
       entry_list: req.body.entry_list,
@@ -1582,7 +1684,7 @@ app.post("/time/delete", requireOperator, async (req, res) => {
 
 app.post("/time/misc", requireOperator, async (req, res) => {
   try {
-    await callCncBridge("submit_misc_time", {
+    const result = await callCncBridge("submit_misc_time", {
       employee: req.session.cncUser.employee,
       shift_id: req.session.cncUser.shift_id,
       machine_no: req.session.cncUser.machine_no,
@@ -1593,6 +1695,7 @@ app.post("/time/misc", requireOperator, async (req, res) => {
       minutes: req.body.minutes,
       comments: req.body.comments,
     });
+    await setDailyReviewTarget(req, result);
     req.session.notice = { kind: "success", message: "Misc time sent for supervisor approval." };
   } catch (error) {
     req.session.notice = { kind: "warning", message: error.message };
@@ -1602,7 +1705,7 @@ app.post("/time/misc", requireOperator, async (req, res) => {
 
 app.post("/time/manual", requireOperator, async (req, res) => {
   try {
-    await callCncBridge("submit_manual_time", {
+    const result = await callCncBridge("submit_manual_time", {
       employee: req.session.cncUser.employee,
       shift_id: req.session.cncUser.shift_id,
       machine_no: req.session.cncUser.machine_no,
@@ -1614,6 +1717,7 @@ app.post("/time/manual", requireOperator, async (req, res) => {
       minutes: req.body.minutes,
       comments: req.body.comments,
     });
+    await setDailyReviewTarget(req, result);
     req.session.notice = { kind: "success", message: "Manual time sent for supervisor approval." };
   } catch (error) {
     req.session.notice = { kind: "warning", message: error.message };
@@ -1691,6 +1795,7 @@ app.get("/notifications", requireOperator, async (req, res, next) => {
   try {
     const context = await callCncBridge("get_notification_context", {
       emp_id: req.session.cncUser.employee.emp_id,
+      request_id: req.query.watch,
     });
     const selectedType = ["mold_approval", "change_material", "assistance_asap"].includes(req.query.type)
       ? req.query.type
@@ -1732,7 +1837,7 @@ app.get("/notifications", requireOperator, async (req, res, next) => {
           <span class="notification-watch-label">${escapeHtml(notificationTypeLabel(watchedRequest.notification_type))}</span>
           ${notificationStatusBadge(watchedRequest.status, watchedRequest.id)}
           <strong>${escapeHtml(watchedRequest.work_order || watchedRequest.details?.message || "")}</strong>
-          <small data-notification-response>${escapeHtml(watchedRequest.responder_name ? `Response by ${watchedRequest.responder_name}` : "")}</small>
+          <small data-notification-response>${escapeHtml(watchedRequest.refresh_error || (watchedRequest.responder_name ? `${watchedRequest.status === "resolved" ? "Resolved" : "Response"} by ${watchedRequest.responder_name}${watchedRequest.response_note ? `: ${watchedRequest.response_note}` : ""}${watchedRequest.responded_at ? ` (${new Date(watchedRequest.responded_at).toLocaleString()})` : ""}` : ""))}</small>
         </section>`
       : "";
 
@@ -1772,8 +1877,8 @@ app.post("/notifications", requireOperator, async (req, res) => {
     });
     const label = notificationTypeLabel(notificationType);
     req.session.notice = {
-      kind: result.delivered ? "success" : "info",
-      message: result.delivered ? `${label} sent to Teams.` : `${label} saved and queued for Teams configuration.`,
+      kind: result.delivered || result.submitted ? "success" : "info",
+      message: result.submitted ? `${label} submitted to the Teams notification flow.` : result.delivered ? `${label} sent to Teams.` : `${label} saved and queued for Teams configuration.`,
     };
     return res.redirect(`/notifications?type=${encodeURIComponent(notificationType)}&watch=${encodeURIComponent(result.id)}`);
   } catch (error) {
@@ -1786,6 +1891,7 @@ app.get("/notifications/status.json", requireOperator, async (req, res) => {
   try {
     const context = await callCncBridge("get_notification_context", {
       emp_id: req.session.cncUser.employee.emp_id,
+      request_id: String(req.query.id || ""),
     });
     const request = (context.requests || []).find((item) => String(item.id) === String(req.query.id || ""));
     if (!request) return res.status(404).json({ error: "Notification not found." });
@@ -1795,6 +1901,8 @@ app.get("/notifications/status.json", requireOperator, async (req, res) => {
       status_label: notificationStatus(request.status).label,
       responder_name: request.responder_name || "",
       response_note: request.response_note || "",
+      responded_at: request.responded_at || "",
+      refresh_error: request.refresh_error || "",
     });
   } catch (error) {
     return res.status(500).json({ error: error.message });

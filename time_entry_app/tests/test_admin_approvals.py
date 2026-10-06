@@ -56,6 +56,33 @@ class AdminApprovalStoreTests(unittest.TestCase):
 
 
 class AdminApprovalBackendTests(unittest.TestCase):
+    def test_bulk_approval_deduplicates_and_continues_after_failure(self):
+        reviewer = {"emp_id": "100"}
+        with patch.object(backend, "approve_time_entry", side_effect=[
+            {"approved": True, "queued": True}, ValueError("Already reviewed"),
+            {"approved": True, "synced": True},
+        ]) as approve:
+            result = backend.approve_all_time_entries(["1", "1", "2", "3"], reviewer=reviewer)
+        self.assertEqual(result["approved"], 2)
+        self.assertEqual(result["queued"], 1)
+        self.assertEqual(result["synced"], 1)
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["errors"][0]["approval_id"], 2)
+        self.assertEqual([call.args[0] for call in approve.call_args_list], [1, 2, 3])
+        self.assertTrue(all(call.kwargs["reviewer"] == reviewer for call in approve.call_args_list))
+
+    def test_bulk_approval_validates_all_ids_before_approving(self):
+        with patch.object(backend, "approve_time_entry") as approve:
+            for ids in (None, "12", [], [1, "invalid"], [0], [True], [1.5], [1] * 501):
+                with self.subTest(ids=ids), self.assertRaises(ValueError):
+                    backend.approve_all_time_entries(ids)
+            approve.assert_not_called()
+
+    def test_retry_all_uses_one_failed_only_sync(self):
+        with patch.object(backend, "sync_approved_entries", return_value={"sent": 2}) as sync:
+            self.assertEqual(backend.retry_all_acumatica_entries(actor={"emp_id": "100"}), {"sent": 2})
+        sync.assert_called_once_with(trigger_name="manual_retry_all", actor={"emp_id": "100"}, failed_only=True)
+
     def test_retry_acumatica_entry_targets_only_failed_approval(self):
         with (
             patch.object(

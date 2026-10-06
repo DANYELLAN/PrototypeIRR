@@ -10,10 +10,14 @@ for candidate in (str(PROJECT_ROOT), str(APP_ROOT)):
 
 from time_entry_app.bridge.cnc_time_backend import (  # noqa: E402
     approve_time_entry,
+    approve_all_time_entries,
+    retry_all_acumatica_entries,
     correct_time_entry,
     delete_time_entry,
     edit_active_time_entry,
     get_admin_dashboard_context,
+    get_daily_time_review,
+    confirm_daily_time_review,
     get_dashboard_context,
     get_employee_lookup,
     get_notification_context,
@@ -80,12 +84,18 @@ def main():
             )
         if action == "get_dashboard_context":
             return _result(get_dashboard_context(payload.get("emp_id"), payload.get("user_email")))
+        if action == "get_daily_time_review":
+            return _result(get_daily_time_review(payload.get("employee") or {}, payload.get("labor_date"),
+                                               payload.get("approval_id"), payload.get("entry_id")))
+        if action == "confirm_daily_time_review":
+            return _result(confirm_daily_time_review(payload.get("employee") or {}, payload.get("labor_date"),
+                                                   payload.get("snapshot_hash"), payload.get("reason")))
         if action == "get_admin_dashboard_context":
             return _result(get_admin_dashboard_context())
         if action == "get_time_export_rows":
             return _result(get_time_export_rows(payload.get("start_date"), payload.get("end_date")))
         if action == "get_notification_context":
-            return _result(get_notification_context(payload.get("emp_id")))
+            return _result(get_notification_context(payload.get("emp_id"), payload.get("request_id")))
         if action == "sync_reference_data_from_sharepoint":
             return _result(sync_reference_data_from_sharepoint())
         if action == "sync_pending_writes_to_sharepoint":
@@ -99,6 +109,10 @@ def main():
                     actor=payload.get("actor") or {},
                 )
             )
+        if action == "approve_all_time_entries":
+            return _result(approve_all_time_entries(payload.get("approval_ids"), reviewer=payload.get("reviewer") or {}))
+        if action == "retry_all_acumatica_entries":
+            return _result(retry_all_acumatica_entries(actor=payload.get("actor") or {}))
         if action == "retry_acumatica_entry":
             return _result(
                 retry_acumatica_entry(

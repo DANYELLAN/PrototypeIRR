@@ -106,6 +106,10 @@ def _transactions(record):
     if len(transactions) == 1 and normalize_detail_type(transactions[0].get("detail_type")) == "DOWN TIME":
         positive = transactions[0]
         positive["quantity"] = 1
+        positive["labor_minutes"] = int(positive.get("labor_minutes") or 0) + 1
+        positive["labor_hours"] = round(positive["labor_minutes"] / 60, 4)
+        positive["labor_time"] = f"{positive['labor_minutes'] // 60:02d}:{positive['labor_minutes'] % 60:02d}"
+        positive["labor_amount"] = round(positive["labor_minutes"] / 60 * float(positive.get("labor_rate") or 0), 2)
         negative = dict(positive)
         negative["quantity"] = -1
         negative["labor_time"] = "-00:01"
@@ -353,7 +357,7 @@ def _put_record(client, record, batch, remote_entity=None, description=None, is_
     return refreshed, True
 
 
-def sync_approved_entries(trigger_name="manual", actor=None, client_factory=AcumaticaClient, approval_id=None):
+def sync_approved_entries(trigger_name="manual", actor=None, client_factory=AcumaticaClient, approval_id=None, failed_only=False):
     run_id = begin_acumatica_sync_run(trigger_name, actor=actor)
     if run_id is None:
         return {"status": "already_running", "sent": 0, "skipped": 0, "failed": 0}
@@ -373,6 +377,8 @@ def sync_approved_entries(trigger_name="manual", actor=None, client_factory=Acum
     candidates = []
     for record in list_acumatica_candidates(reviewed_after=cutover_at):
         if approval_id is not None and int(record["id"]) != int(approval_id):
+            continue
+        if failed_only and (get_acumatica_sync_item(record["id"]) or {}).get("status") != "failed":
             continue
         try:
             group = _record_group(record)

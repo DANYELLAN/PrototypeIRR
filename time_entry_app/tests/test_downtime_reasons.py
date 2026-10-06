@@ -5,6 +5,11 @@ from time_entry_app.bridge import cnc_time_backend as backend
 
 
 class DowntimeReasonTests(unittest.TestCase):
+    def setUp(self):
+        active_patch = patch.object(backend, "_matching_active_direct_entry", return_value=None)
+        active_patch.start()
+        self.addCleanup(active_patch.stop)
+
     def test_downtime_reason_code_accepts_display_label(self):
         self.assertEqual(backend._downtime_reason_code("DT- OPS (OPERATIONS)"), "OPS")
 
@@ -25,7 +30,9 @@ class DowntimeReasonTests(unittest.TestCase):
         transactions = payload["acumatica_labor_transactions"]
         self.assertEqual(len(transactions), 2)
         self.assertEqual([row["quantity"] for row in transactions], [1, -1])
-        self.assertEqual(transactions[0]["labor_minutes"], 60)
+        self.assertEqual(transactions[0]["labor_minutes"], 61)
+        self.assertEqual(sum(row["labor_minutes"] for row in transactions), 60)
+        self.assertEqual(fields["TotalMinutes"], 60)
         self.assertEqual(transactions[1]["labor_minutes"], -1)
         self.assertEqual(transactions[0]["reason_code"], "")
         self.assertEqual(transactions[1]["reason_code"], "")
@@ -78,7 +85,8 @@ class DowntimeReasonTests(unittest.TestCase):
         acumatica_rows = approval_payload["acumatica_labor_transactions"]
         self.assertEqual(len(acumatica_rows), 2)
         self.assertEqual(acumatica_rows[0]["quantity"], 1)
-        self.assertEqual(acumatica_rows[0]["labor_time"], "01:00")
+        self.assertEqual(acumatica_rows[0]["labor_time"], "01:01")
+        self.assertEqual(fields["TotalMinutes"], 60)
         self.assertEqual(acumatica_rows[1]["quantity"], -1)
         self.assertEqual(acumatica_rows[1]["labor_time"], "-00:01")
         self.assertEqual(acumatica_rows[1]["labor_minutes"], -1)

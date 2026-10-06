@@ -88,7 +88,7 @@ class EmployeeLookupTests(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(result["full_name"], "Martha Y Medrano")
-        self.assertEqual(result["roles"], ["operator", "exporter"])
+        self.assertEqual(result["roles"], ["operator", "exporter", "approver"])
 
     def test_lookup_employee_by_adp_allows_manager_to_approve_and_operate(self):
         employees = [

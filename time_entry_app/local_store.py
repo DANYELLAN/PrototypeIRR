@@ -114,6 +114,17 @@ def ensure_db():
         """
     )
     _ensure_column(conn, "approval_queue", "revision_no", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(conn, "approval_queue", "active_direct_entry_id", "TEXT")
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS daily_time_reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        emp_id TEXT NOT NULL, employee_name TEXT, labor_date TEXT NOT NULL,
+        snapshot_hash TEXT NOT NULL, total_minutes INTEGER NOT NULL,
+        reason TEXT NOT NULL, snapshot TEXT NOT NULL, confirmed_at TEXT NOT NULL
+        )"""
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS daily_time_review_snapshot ON daily_time_reviews(emp_id, labor_date, snapshot_hash)")
+    conn.execute("CREATE INDEX IF NOT EXISTS approval_active_direct_entry ON approval_queue(active_direct_entry_id)")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS approval_revisions (
@@ -202,6 +213,9 @@ def ensure_db():
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_notification_requests_employee ON notification_requests (requester_emp_id, id DESC)"
     )
+    _ensure_column(conn, "notification_requests", "sharepoint_site_url", "TEXT")
+    _ensure_column(conn, "notification_requests", "sharepoint_list_id", "TEXT")
+    _ensure_column(conn, "notification_requests", "sharepoint_item_id", "TEXT")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_acumatica_sync_status ON acumatica_sync_items (status, updated_at)"
     )
@@ -298,6 +312,41 @@ def update_notification_delivery(request_id, delivery_status, error=None):
     )
     conn.commit()
     conn.close()
+
+
+def mark_notification_submitted(request_id, site_url, list_id, item_id):
+    ensure_db()
+    conn = _connect()
+    conn.execute(
+        """
+        UPDATE notification_requests
+        SET sharepoint_site_url = ?, sharepoint_list_id = ?, sharepoint_item_id = ?,
+            delivery_status = 'submitted', last_error = NULL, updated_at = ?
+        WHERE id = ?
+        """,
+        (site_url, list_id, str(item_id), _utc_now_iso(), request_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def resolve_assistance_request(request_id, responder_name, response_note=None, responded_at=None):
+    ensure_db()
+    now = _utc_now_iso()
+    conn = _connect()
+    cursor = conn.execute(
+        """
+        UPDATE notification_requests
+        SET status = 'resolved', responded_at = ?, responder_name = ?, response_note = ?, updated_at = ?
+        WHERE id = ? AND notification_type = 'assistance_asap' AND status = 'assistance_requested'
+        """,
+        (responded_at or now, str(responder_name or "").strip(),
+         str(response_note or "").strip(), now, request_id),
+    )
+    changed = cursor.rowcount == 1
+    conn.commit()
+    conn.close()
+    return changed
 
 
 def decide_notification_request(request_id, status, responder_name=None, response_note=None):
@@ -520,9 +569,9 @@ def queue_approval(record_type, payload, machine_no=None, emp_id=None, employee_
     cursor = conn.execute(
         """
         INSERT INTO approval_queue (
-            record_type, machine_no, emp_id, employee_name, payload, approval_status, submitted_at
+            record_type, machine_no, emp_id, employee_name, payload, approval_status, submitted_at, active_direct_entry_id
         )
-        VALUES (?, ?, ?, ?, ?, 'pending', ?)
+        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
         """,
         (
             record_type,
@@ -531,12 +580,64 @@ def queue_approval(record_type, payload, machine_no=None, emp_id=None, employee_
             employee_name or "",
             json.dumps(payload, default=str),
             _utc_now_iso(),
+            payload.get("active_direct_entry_id"),
         ),
     )
     record_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return record_id
+
+
+def list_employee_approvals(emp_id):
+    ensure_db()
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT * FROM approval_queue WHERE LTRIM(emp_id, '0') = LTRIM(?, '0') ORDER BY id",
+        (str(emp_id),),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_daily_time_confirmation(emp_id, labor_date, snapshot_hash):
+    ensure_db()
+    conn = _connect()
+    row = conn.execute(
+        """SELECT * FROM daily_time_reviews WHERE emp_id = ? AND labor_date = ?
+        AND snapshot_hash = ? ORDER BY id DESC LIMIT 1""",
+        (str(emp_id), labor_date, snapshot_hash),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def save_daily_time_confirmation(employee, review, reason):
+    ensure_db()
+    conn = _connect()
+    conn.execute(
+        """INSERT INTO daily_time_reviews
+        (emp_id, employee_name, labor_date, snapshot_hash, total_minutes, reason, snapshot, confirmed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (str(employee["emp_id"]).lstrip("0"), employee.get("full_name"), review["labor_date"],
+         review["snapshot_hash"], review["total_minutes"], reason,
+         json.dumps(review["entries"], default=str), _utc_now_iso()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_active_direct_downtime(entry_id):
+    ensure_db()
+    conn = _connect()
+    rows = conn.execute(
+        """SELECT * FROM approval_queue
+        WHERE active_direct_entry_id = ? AND record_type = 'misc_time'
+        AND approval_status IN ('pending', 'approved') ORDER BY id""",
+        (str(entry_id),),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 def list_approval_records(status="pending", limit=500):

@@ -1,0 +1,107 @@
+Ennis Assistance ASAP - Teams / Power Automate Setup
+
+The user supplied the assistance chat link. Its ID is recorded below.
+The SharePoint list ID and column internal names/types have been verified
+directly through Microsoft Graph using the inspection-app cached login.
+Time entry is configured to reuse that cache. Live flow configuration and
+item creation through the SYSTEM-hosted app still require verification.
+
+1. Use the existing assistance Teams group chat:
+   19:8fa29ff440e743f495bbd994832463ff@thread.v2
+
+   Intended chat name: Ennis Assistance ASAP
+   Intended membership (verify in Teams):
+   nhess@benoit-inc.com
+   mmarrs@benoit-inc.com
+   dsaia@benoit-inc.com
+   fmorales@benoit-inc.com
+   gsertima@benoit-inc.com
+   jalmanza@benoit-inc.com
+   jsilos@benoit-inc.com
+   skidd@benoit-inc.com
+   rgreen@benoit-inc.com
+
+Reuse this chat for every request. Do not add a Create a chat action to the
+request flow, because that would create a separate group chat for each run.
+The account used by the Teams flow connection must have access to this chat.
+In the flow's Group chat field, select Enter custom value and use the ID above.
+
+2. Use the existing Assistance Requests list in:
+   https://benoitinc.sharepoint.com/sites/QMS1061
+   List ID: 5212c19a-705e-4fb5-aefc-8a30c7da77b6
+   List URL: https://benoitinc.sharepoint.com/sites/QMS1061/Lists/Assistance%20Requests/AllItems.aspx
+
+Microsoft Graph confirms these internal names and types, including plain-text
+multiple-line columns and date/time for ResolvedAt:
+   RequesterName     Single line of text
+   MachineNumber     Single line of text
+   WONumber          Single line of text (optional)
+   AssistanceNeeded  Multiple lines of text, plain text
+   RequestStatus     Single line of text (Open / Resolved)
+   ResolvedBy        Single line of text (optional)
+   ResolutionNote    Multiple lines of text, plain text (optional)
+   ResolvedAt        Date and time (optional)
+
+Ensure Server 2's CNC_TIME_SHAREPOINT credentials have permission to create
+and read items in this list. The screenshot does not verify app access.
+
+3. Create a new flow, or save a COPY of MoldApprovalFlow as
+   Assistance ASAP Notification. Keep the existing mold flow intact.
+
+Trigger: SharePoint / When an item is created
+   Site: QMS1061
+   List: Assistance Requests
+   List (custom value if needed): 5212c19a-705e-4fb5-aefc-8a30c7da77b6
+   If the trigger exposes a polling interval, use one minute.
+   Leave trigger concurrency control off so a card waiting for a responder
+   does not prevent a separate assistance request from posting its own card.
+
+Action: Microsoft Teams / Post adaptive card and wait for a response
+   Post as: Flow bot
+   Post in: Group chat
+   Group chat (custom value): 19:8fa29ff440e743f495bbd994832463ff@thread.v2
+   Adaptive Card: paste assistance-card.json from this folder
+   Update message: This assistance request has been resolved.
+
+Rename the action Post_adaptive_card_and_wait_for_a_response if needed to
+match the expressions below, or substitute its actual action name.
+
+Action after a successful response: SharePoint / Update item
+   Site and list: same as the trigger
+   ID: triggerBody()?['ID']
+   Title: triggerBody()?['Title']
+   RequesterName: triggerBody()?['RequesterName']
+   MachineNumber: triggerBody()?['MachineNumber']
+   WONumber: triggerBody()?['WONumber']
+   AssistanceNeeded: triggerBody()?['AssistanceNeeded']
+   RequestStatus: Resolved
+   ResolvedBy: body('Post_adaptive_card_and_wait_for_a_response')?['responder']?['displayName']
+   ResolutionNote: body('Post_adaptive_card_and_wait_for_a_response')?['data']?['resolutionNote']
+   ResolvedAt: utcNow()
+
+Use the Expression tab for the expressions above. The adaptive card action
+waits for one response from any member. The first response completes that
+run. Configure failure alerts for the flow so a failed SharePoint update can
+be corrected even if the original Teams card has already been acknowledged.
+
+4. On Server 2, set these root .env values and restart the time-entry app:
+   CNC_TIME_NOTIFICATION_TRANSPORT=sharepoint
+   CNC_TIME_ASSISTANCE_SHAREPOINT_LIST_ID=5212c19a-705e-4fb5-aefc-8a30c7da77b6
+   CNC_TIME_SHAREPOINT_TOKEN_CACHE_FILE=.msal_token_cache.json
+
+No public callback URL is required. The app reads RequestStatus, ResolvedBy,
+ResolutionNote, and ResolvedAt from SharePoint while the operator watches
+the request. It displays Resolved with the responder and resolution time.
+
+5. Enable the flow and submit ONE clearly labeled test assistance request.
+   Verify one card appears in the shared chat, one responder can resolve it,
+   the SharePoint item changes to Resolved, and the app shows the responder.
+   Test text containing quotes and multiple lines, and two simultaneous open
+   requests. Validate the flow in its designer before enabling production use.
+
+If the assistance list ID is blank, the app retains the existing assistance
+webhook / local outbox route. Locally queued requests are not replayed
+automatically when this integration is enabled.
+
+Microsoft Teams connector reference:
+https://learn.microsoft.com/en-us/connectors/teams/

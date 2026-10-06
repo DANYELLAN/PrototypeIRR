@@ -38,6 +38,21 @@ window.addEventListener("appinstalled", () => {
 });
 
 window.addEventListener("load", () => {
+  const dailyReview = document.getElementById("daily-time-review");
+  if (dailyReview) {
+    dailyReview.showModal();
+    dailyReview.addEventListener("cancel", (event) => event.preventDefault());
+    document.getElementById("daily-review-correct").addEventListener("click", () => {
+      document.getElementById("daily-review-confirm").hidden = false;
+      document.getElementById("daily-review-reason").focus();
+    });
+    document.getElementById("daily-review-confirm").addEventListener("submit", (event) => {
+      const reason = document.getElementById("daily-review-reason");
+      reason.setCustomValidity(reason.value.trim() ? "" : "A reason is required.");
+      if (!reason.reportValidity()) event.preventDefault();
+    });
+    document.getElementById("daily-review-reason").addEventListener("input", (event) => event.target.setCustomValidity(""));
+  }
   if (hasInstalledLaunchFlag()) {
     installAcceptedThisSession = true;
     if (window.history.replaceState) {
@@ -242,7 +257,8 @@ window.addEventListener("load", () => {
   }
 
   const notificationWatch = document.querySelector("[data-notification-watch]");
-  if (notificationWatch && notificationWatch.dataset.notificationState === "pending") {
+  const openNotificationStates = new Set(["pending", "assistance_requested"]);
+  if (notificationWatch && openNotificationStates.has(notificationWatch.dataset.notificationState)) {
     const requestId = notificationWatch.dataset.notificationWatch;
     const statusTargets = document.querySelectorAll(`[data-notification-status="${requestId}"]`);
     const responseTarget = notificationWatch.querySelector("[data-notification-response]");
@@ -250,8 +266,13 @@ window.addEventListener("load", () => {
       approved_to_run: "",
       do_not_run: "stopped",
       pending: "inactive",
+      assistance_requested: "warning",
+      resolved: "",
     };
+    let notificationRefreshPending = false;
     const refreshNotification = async () => {
+      if (notificationRefreshPending) return;
+      notificationRefreshPending = true;
       try {
         const response = await fetch(`/notifications/status.json?id=${encodeURIComponent(requestId)}`, {
           headers: { Accept: "application/json" },
@@ -261,15 +282,19 @@ window.addEventListener("load", () => {
         const payload = await response.json();
         statusTargets.forEach((target) => {
           target.textContent = payload.status_label;
-          target.className = `status-badge ${statusClasses[payload.status] || "inactive"}`;
+          target.className = `status-badge ${statusClasses[payload.status] ?? "inactive"}`;
         });
-        if (responseTarget && payload.responder_name) {
-          responseTarget.textContent = `Response by ${payload.responder_name}${payload.response_note ? `: ${payload.response_note}` : ""}`;
+        if (responseTarget) {
+          responseTarget.textContent = payload.refresh_error || (payload.responder_name
+            ? `${payload.status === "resolved" ? "Resolved" : "Response"} by ${payload.responder_name}${payload.response_note ? `: ${payload.response_note}` : ""}${payload.responded_at ? ` (${new Date(payload.responded_at).toLocaleString()})` : ""}`
+            : "");
         }
         notificationWatch.dataset.notificationState = payload.status;
-        if (payload.status !== "pending") window.clearInterval(notificationWatch.pollTimer);
+        if (!openNotificationStates.has(payload.status)) window.clearInterval(notificationWatch.pollTimer);
       } catch {
         // Keep the current state visible and try again on the next interval.
+      } finally {
+        notificationRefreshPending = false;
       }
     };
     notificationWatch.pollTimer = window.setInterval(refreshNotification, 10000);

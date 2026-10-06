@@ -721,6 +721,33 @@ button, input, select, textarea { font: inherit; }
 
 .data-card h3,
 .cnc-card h3,
+.daily-time-review {
+  width: min(880px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  box-sizing: border-box;
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid #aab4ad;
+  border-radius: 8px;
+  background: #fff;
+  color: #202923;
+}
+
+.daily-time-review::backdrop { background: rgb(0 0 0 / 55%); }
+.daily-time-review h2 { margin: 0 0 12px; font-size: 22px; letter-spacing: 0; }
+.daily-review-entries { max-height: 40dvh; overflow: auto; margin: 16px 0; }
+.daily-review-actions, .daily-review-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.daily-review-actions form { margin: 0; }
+.daily-time-review form[hidden] { display: none; }
+.daily-time-review textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+.daily-time-review button { white-space: normal; }
+
+@media (max-width: 600px) {
+  .daily-time-review { padding: 16px; }
+  .daily-review-actions > form, .daily-review-actions > button { width: 100%; }
+  .daily-review-actions form button { width: 100%; }
+}
+
 .cnc-section-header h3,
 .panel-title-row h3 {
   margin: 0 0 8px;

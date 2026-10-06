@@ -1,5 +1,5 @@
 param(
-    [string]$PythonPath = "C:\Python314\python.exe"
+    [string]$PythonPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -8,6 +8,9 @@ $requirementsPath = Join-Path $projectDirectory "requirements.txt"
 $venvDirectory = Join-Path $projectDirectory ".venv"
 $venvPython = Join-Path $venvDirectory "Scripts\python.exe"
 
+if (-not $PythonPath) {
+    $PythonPath = (Get-Command python.exe -ErrorAction Stop).Source
+}
 if (-not (Test-Path -LiteralPath $PythonPath)) {
     throw "Python was not found at $PythonPath"
 }
@@ -19,6 +22,14 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
     & $PythonPath -m venv $venvDirectory
     if ($LASTEXITCODE -ne 0) {
         throw "Virtual environment creation failed with exit code $LASTEXITCODE."
+    }
+}
+
+$pipModule = Join-Path $venvDirectory "Lib\site-packages\pip\__main__.py"
+if (-not (Test-Path -LiteralPath $pipModule)) {
+    & $venvPython -m ensurepip --upgrade --default-pip
+    if ($LASTEXITCODE -ne 0) {
+        throw "Virtual environment pip setup failed with exit code $LASTEXITCODE."
     }
 }
 

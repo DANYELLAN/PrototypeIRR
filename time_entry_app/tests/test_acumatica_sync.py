@@ -180,6 +180,21 @@ class AcumaticaSyncTests(unittest.TestCase):
         self.assertEqual(retry["sent"], 0)
         self.assertEqual(len(batch["Details"]), 2)
 
+    def test_retry_all_only_sends_failed_entries_and_is_idempotent(self):
+        failed_id = self.approve("1", "1005")
+        unsent_id = self.approve("2", "845")
+        local_store.upsert_acumatica_sync_item(failed_id, 1, "failed", error="Temporary error")
+        sync_env = {"ACUMATICA_ENABLED": "true", "ACUMATICA_CUTOVER_AT": "2026-01-01T00:00:00+00:00"}
+        with patch.dict(os.environ, sync_env):
+            result = sync_approved_entries(failed_only=True, client_factory=FakeAcumaticaClient)
+            retry = sync_approved_entries(failed_only=True, client_factory=FakeAcumaticaClient)
+        self.assertEqual(result["sent"], 1)
+        self.assertEqual(retry["sent"], 0)
+        self.assertEqual(local_store.get_acumatica_sync_item(failed_id)["status"], "sent")
+        self.assertIsNone(local_store.get_acumatica_sync_item(unsent_id))
+        batch = next(iter(FakeAcumaticaClient.batches.values()))
+        self.assertEqual(len(batch["Details"]), 1)
+
     def test_targeted_retry_only_sends_selected_approval(self):
         selected_id = self.approve("1", "1005")
         untouched_id = self.approve("2", "845")
@@ -220,6 +235,7 @@ class AcumaticaSyncTests(unittest.TestCase):
         self.assertEqual(first["sent"], 1)
         self.assertEqual(len(batch["Details"]), 2)
         self.assertEqual([entity_value(row, "Quantity") for row in batch["Details"]], [1.0, -1.0])
+        self.assertEqual([entity_value(row, "LaborTime") for row in batch["Details"]], [16, -1])
         self.assertTrue(all("ReasonCode" not in row for row in batch["Details"]))
         self.assertEqual([entity_value(row, "TranDescription") for row in batch["Details"]], ["DT", "DT"])
 

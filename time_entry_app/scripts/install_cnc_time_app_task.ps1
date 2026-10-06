@@ -1,5 +1,6 @@
 param(
-    [string]$TaskName = "Benoit CNC Time Entry App"
+    [string]$TaskName = "Benoit CNC Time Entry App",
+    [string]$NodePath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,10 +10,17 @@ $powershellCommand = Get-Command powershell.exe -ErrorAction Stop
 if (-not (Test-Path -LiteralPath $launcher)) {
     throw "CNC Time Entry launcher was not found at $launcher"
 }
+if (-not $NodePath) {
+    $NodePath = (Get-Command node.exe -ErrorAction Stop).Source
+}
+if (-not (Test-Path -LiteralPath $NodePath -PathType Leaf)) {
+    throw "Node.js was not found at $NodePath"
+}
+$NodePath = (Resolve-Path -LiteralPath $NodePath).Path
 
 $action = New-ScheduledTaskAction `
     -Execute $powershellCommand.Source `
-    -Argument ('-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $launcher)
+    -Argument ('-NoProfile -ExecutionPolicy Bypass -File "{0}" -NodePath "{1}"' -f $launcher, $NodePath)
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $principal = New-ScheduledTaskPrincipal `
     -UserId "SYSTEM" `

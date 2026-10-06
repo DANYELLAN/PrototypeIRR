@@ -1,0 +1,44 @@
+{
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "type": "AdaptiveCard",
+  "version": "1.4",
+  "body": [
+    {
+      "type": "TextBlock",
+      "text": "Assistance Needed ASAP",
+      "weight": "Bolder",
+      "size": "Large",
+      "color": "Attention",
+      "wrap": true
+    },
+    {
+      "type": "FactSet",
+      "facts": [
+        { "title": "Request", "value": "@{triggerBody()?['Title']}" },
+        { "title": "Operator", "value": "@{triggerBody()?['RequesterName']}" },
+        { "title": "Station", "value": "@{triggerBody()?['MachineNumber']}" },
+        { "title": "Work order", "value": "@{triggerBody()?['WONumber']}" }
+      ]
+    },
+    {
+      "type": "TextBlock",
+      "text": "@{triggerBody()?['AssistanceNeeded']}",
+      "wrap": true
+    },
+    {
+      "type": "Input.Text",
+      "id": "resolutionNote",
+      "label": "Resolution note",
+      "placeholder": "Optional details",
+      "isMultiline": true,
+      "maxLength": 2000
+    }
+  ],
+  "actions": [
+    {
+      "type": "Action.Submit",
+      "title": "Mark resolved",
+      "data": { "requestStatus": "Resolved" }
+    }
+  ]
+}
