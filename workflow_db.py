@@ -441,6 +441,21 @@ def _normalize_identifier(value):
     return text
 
 
+def _normalize_builder_option_value(value):
+    """Collapse whitespace while preserving the first-seen display spelling."""
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _merge_builder_option_values(existing_values=None, new_values=None):
+    """Merge recipe option lists without case or whitespace duplicates."""
+    merged = {}
+    for value in [*(existing_values or []), *(new_values or [])]:
+        normalized = _normalize_builder_option_value(value)
+        if normalized:
+            merged.setdefault(normalized.casefold(), normalized)
+    return list(merged.values())
+
+
 def _normalize_employee_row(row):
     fields = row["fields_json"] or {}
     return {
@@ -1044,7 +1059,7 @@ def get_inspection_entry_options(branch=None):
 
 
 def _add_recipe_builder_option(options, value):
-    normalized = re.sub(r"\s+", " ", str(value or "").strip())
+    normalized = _normalize_builder_option_value(value)
     if normalized:
         options.setdefault(normalized.casefold(), normalized)
 

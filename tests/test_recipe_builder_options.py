@@ -5,6 +5,17 @@ import workflow_db
 
 
 class RecipeBuilderOptionTests(unittest.TestCase):
+    def test_helper_merges_spacing_and_case_variants_without_duplicates(self):
+        options = workflow_db._merge_builder_option_values(
+            [" Length to Mid Shoulder ", "Pin Nose Diameter"],
+            ["length   to   mid shoulder", "pin nose diameter", "Thread Height"],
+        )
+
+        self.assertEqual(
+            options,
+            ["Length to Mid Shoulder", "Pin Nose Diameter", "Thread Height"],
+        )
+
     @patch.object(workflow_db, "_fetch_all_dicts")
     def test_saved_local_elements_are_available_without_duplicates(self, fetch_all):
         fetch_all.side_effect = [

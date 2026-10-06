@@ -212,3 +212,7 @@ __marimo__/
 # Sensitive local data
 data/
 node_app/data/
+
+# Installed Node dependencies and local package download cache
+node_modules/
+.npm-cache/

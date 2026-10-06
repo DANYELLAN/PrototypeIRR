@@ -1,3 +1,5 @@
+import "./environment.js";
+import { randomBytes } from "node:crypto";
 import express from "express";
 import session from "express-session";
 import path from "path";
@@ -17,7 +19,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "cnc-time-dev",
+    secret: process.env.SESSION_SECRET || randomBytes(32).toString("hex"),
     resave: false,
     saveUninitialized: false,
   }),
@@ -1784,6 +1786,8 @@ app.use((error, req, res, _next) => {
 
 app.listen(port, () => {
   console.log(`CNC Time Entry app listening on http://localhost:${port}`);
-  runBackgroundSync("startup");
-  setInterval(() => runBackgroundSync("scheduled"), syncIntervalMs).unref();
+  if (!/^(false|0|no|off)$/i.test(process.env.CNC_TIME_SYNC_ENABLED || "true")) {
+    runBackgroundSync("startup");
+    setInterval(() => runBackgroundSync("scheduled"), syncIntervalMs).unref();
+  }
 });

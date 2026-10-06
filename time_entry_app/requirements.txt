@@ -1,0 +1,4 @@
+# Python dependencies used by the time-entry app and its shared backend modules.
+msal>=1.31,<2
+psycopg2-binary>=2.9,<3
+requests>=2.32,<3

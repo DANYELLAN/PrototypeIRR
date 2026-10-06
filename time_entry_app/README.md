@@ -18,24 +18,41 @@ This workspace is dedicated to the CNC time-entry experience and is intentionall
 
 ## Run the app
 
-1. Install Node.js if needed.
-2. From this folder, install dependencies:
+1. Install Node.js 22 or newer, Python 3, and PostgreSQL. This computer has Node.js 24, Python 3.13, and a running PostgreSQL 18 service.
+2. Keep this folder inside the project: the Python backend also needs the root `config.py`, `postgres_sync.py`, `sharepoint_api.py`, and `sharepoint_client.py`. From this folder, install dependencies:
 
 ```powershell
-npm install
+python -m pip install -r requirements.txt
+npm.cmd ci
 ```
 
-3. Start the standalone app:
+3. Configure the root `.env` file using `.env.example` as a reference. Both Node and Python load this file; environment variables already set in the terminal take precedence. PostgreSQL connection settings must point to the database containing the cached SharePoint lists.
+
+4. Start the standalone app:
 
 ```powershell
-npm run dev
+npm.cmd start
 ```
 
-4. Open:
+Alternatively, double-click `start-time-entry.cmd` in the project root. It uses `npm.cmd`, which works with this computer's PowerShell execution policy. Keep its terminal open while using the app. For development, use `npm.cmd run dev`.
+
+5. Open:
 
 ```text
 http://localhost:3100
 ```
+
+The local approval/session database is created automatically at `time_entry_app/data/cnc_time_local.db`. Back up this file to preserve local entries, approval history, and Acumatica send history. The PostgreSQL cache is separate and must also be preserved; copying source files alone does not copy its records.
+
+Set `CNC_TIME_SYNC_ENABLED=false` in the terminal or root `.env` to disable startup/hourly SharePoint synchronization. This still allows local use of cached reference data. LiveView charts require access to the configured LiveView server. Support delivery requires the configured webhooks, and external synchronization requires working Microsoft/Acumatica authentication.
+
+## Review and local verification (October 5, 2026)
+
+- Reinstalled the incomplete Node dependencies: Express was missing its `lib/express` module and prevented startup.
+- Added root `.env` loading to the Node server and replaced its hardcoded default session signing key with a random startup key.
+- Verified PostgreSQL connectivity and cached time-app reference lists, including 787 employees and 3,552 production-operation records; initialized the local SQLite schema.
+- All 25 existing Python time-app tests passed. Local HTTP startup and asset checks use disabled background synchronization so verification does not send business records to external systems.
+- Review findings still requiring application hardening: sign-in identifies people by ADP number without a password; entry edit/delete/pause/stop routes accept an entry ID without passing the signed-in employee to the backend for an ownership check; the service worker caches authenticated GET responses; Express sessions use memory and are lost on restart. These findings do not prevent local startup.
 
 ## Linkage to the inspection app
 
@@ -55,7 +72,7 @@ Approved CNC entries are grouped by labor date and area (`L1`, `L2`, or `T&B`) a
 Run the same idempotent sync used by the approval-page button:
 
 ```powershell
-npm run sync:acumatica
+npm.cmd run sync:acumatica
 ```
 
 On the always-on Windows server, install the daily 6:00 AM local-time task from an elevated PowerShell prompt:

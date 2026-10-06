@@ -16,6 +16,9 @@ from xml.etree import ElementTree
 _SHEET_NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 _REL_NS = {"r": "http://schemas.openxmlformats.org/package/2006/relationships"}
 _WORKBOOK_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+_MAX_XLSX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
+_MAX_XLSX_MEMBER_BYTES = 32 * 1024 * 1024
 
 
 def _cell_text(cell, shared_strings):
@@ -35,6 +38,12 @@ def _cell_text(cell, shared_strings):
 
 def _xlsx_rows(file_bytes):
     with zipfile.ZipFile(io.BytesIO(file_bytes)) as workbook:
+        members = workbook.infolist()
+        if any(member.file_size > _MAX_XLSX_MEMBER_BYTES for member in members):
+            raise ValueError("The Excel report contains an unexpectedly large internal file.")
+        if sum(member.file_size for member in members) > _MAX_XLSX_UNCOMPRESSED_BYTES:
+            raise ValueError("The Excel report expands beyond the supported size limit.")
+
         shared_strings = []
         if "xl/sharedStrings.xml" in workbook.namelist():
             root = ElementTree.fromstring(workbook.read("xl/sharedStrings.xml"))
@@ -104,6 +113,8 @@ def parse_irr_upload(filename, encoded_content):
         raise ValueError("The uploaded report could not be read.") from error
     if not content:
         raise ValueError("The uploaded report is empty.")
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise ValueError("Choose a report smaller than 8 MB.")
 
     suffix = Path(name).suffix.lower()
     if suffix == ".xlsx":
@@ -342,12 +353,7 @@ def _draft_from_sheets(filename, sheets):
         connector_type = "BOX" if re.search(r"\bBOX\b", filename, re.I) else "PIN" if re.search(r"\bPIN\b", filename, re.I) else ""
 
     drawing = _value_after_label(populated_rows, "drawing")
-    first_article = ""
-    for value in populated:
-        match = re.search(r"First\s+Article\s*#?\s*:\s*(.+)", value, re.I)
-        if match:
-            first_article = match.group(1).strip(" _")
-            break
+    first_article = _value_after_label(populated_rows, "first article")
 
     element_rows = _extract_element_rows(populated_rows)
     if not element_rows:
