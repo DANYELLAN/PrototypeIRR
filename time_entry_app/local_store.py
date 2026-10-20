@@ -282,21 +282,22 @@ def get_notification_request(request_id):
     return _notification_record(row)
 
 
-def list_notification_requests(requester_emp_id=None, limit=50):
+def list_notification_requests(requester_emp_id=None, limit=50, notification_type=None):
     ensure_db()
+    conditions, params = [], []
+    if requester_emp_id is not None:
+        conditions.append("requester_emp_id = ?")
+        params.append(str(requester_emp_id or "").strip())
+    if notification_type is not None:
+        conditions.append("notification_type = ?")
+        params.append(str(notification_type))
+    where = " WHERE " + " AND ".join(conditions) if conditions else ""
     conn = _connect()
-    if requester_emp_id is None:
-        rows = conn.execute(
-            "SELECT * FROM notification_requests ORDER BY id DESC LIMIT ?",
-            (int(limit),),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM notification_requests WHERE requester_emp_id = ? ORDER BY id DESC LIMIT ?",
-            (str(requester_emp_id or "").strip(), int(limit)),
-        ).fetchall()
-    conn.close()
-    return [_notification_record(row) for row in rows]
+    try:
+        rows = conn.execute("SELECT * FROM notification_requests" + where + " ORDER BY id DESC LIMIT ?", [*params, int(limit)]).fetchall()
+        return [_notification_record(row) for row in rows]
+    finally:
+        conn.close()
 
 
 def update_notification_delivery(request_id, delivery_status, error=None):

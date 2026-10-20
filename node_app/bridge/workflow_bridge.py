@@ -8,6 +8,13 @@ if str(ROOT) not in sys.path:
 
 from sharepoint_api import sync_inspection_recipes_to_postgres, sync_work_orders_to_postgres  # noqa: E402
 from irr_import import parse_irr_upload  # noqa: E402
+from node_app.bridge.mold_approval import mold_approval_context, mold_approval_status, request_mold_approval
+from time_entry_app.bridge.cnc_time_backend import respond_to_mold_approval
+from node_app.bridge.break_report import get_break_report
+from node_app.bridge.inspection_breaks import inspection_break_state, start_inspection_break, end_inspection_break
+from node_app.bridge.lunch_inspections import lunch_target, start_lunch, get_lunch, complete_lunch, lunch_history
+from node_app.bridge.pipe_report import get_live_pipe_report, save_live_inspection_draft, verify_pipe_inspection
+
 from workflow_db import (  # noqa: E402
     close_inspector_session,
     complete_inspection_attempt,
@@ -86,6 +93,33 @@ def main():
             return _result(sync_work_orders_to_postgres())
         if action == "determine_shift":
             return _result(determine_shift())
+        if action in {"mold_approval_context", "mold_approval_status", "request_mold_approval", "mold_approval_decision"}:
+            handler = {"mold_approval_context": mold_approval_context, "mold_approval_status": mold_approval_status, "request_mold_approval": request_mold_approval, "mold_approval_decision": respond_to_mold_approval}[action]
+            return _result(handler(**{key: value for key, value in payload.items() if key != "action"}))
+        if action == "get_break_report":
+            return _result(get_break_report(**payload))
+        if action == "inspection_break_state":
+            return _result(inspection_break_state(**payload))
+        if action == "start_inspection_break":
+            return _result(start_inspection_break(**payload))
+        if action == "end_inspection_break":
+            return _result(end_inspection_break(**payload))
+        if action == "lunch_target":
+            return _result(lunch_target(**payload))
+        if action == "start_lunch":
+            return _result(start_lunch(**payload))
+        if action == "get_lunch":
+            return _result(get_lunch(**payload))
+        if action == "complete_lunch":
+            return _result(complete_lunch(**payload))
+        if action == "lunch_history":
+            return _result(lunch_history(**payload))
+        if action == "get_live_pipe_report":
+            return _result(get_live_pipe_report(payload.get("page", 1), payload.get("station_id")))
+        if action == "save_live_inspection_draft":
+            return _result(save_live_inspection_draft(payload.get("attempt_id"), payload.get("session_id"), payload.get("inspector_adp"), payload.get("measurements"), payload.get("client_sequence"), payload.get("coverage_version"), payload.get("edited_sequence")))
+        if action == "verify_pipe_inspection":
+            return _result(verify_pipe_inspection(payload.get("attempt_id"), payload.get("expected_hash"), payload.get("verifier_adp")))
         if action == "get_locations":
             return _result(get_locations())
         if action == "get_employee_by_adp":
@@ -170,6 +204,7 @@ def main():
                     status=payload.get("status"),
                     inspection_scope=payload.get("inspection_scope"),
                     published_only=bool(payload.get("published_only")),
+                    operation_description=payload.get("operation_description"),
                 )
             )
         if action == "get_ncr_reports":

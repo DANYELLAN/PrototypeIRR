@@ -750,7 +750,7 @@ def _employee_roles(employee):
     roles = ["operator"]
     normalized_emp_id = _normalize_identifier(employee.get("emp_id"))
     if _employee_matches_full_access(employee):
-        return ["operator", "exporter", "approver"]
+        return ["operator", "exporter", "approver", "it"]
     searchable = " ".join(
         str(employee.get(key) or "").lower()
         for key in ("department", "job_title", "role_text", "full_name")

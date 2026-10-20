@@ -1,9 +1,11 @@
 import json
+import math
 import hashlib
 import hmac
 import os
 import re
 from datetime import datetime, time
+from fractions import Fraction
 
 from psycopg2.extras import RealDictCursor
 
@@ -194,6 +196,70 @@ CREATE TABLE IF NOT EXISTS inspection_measurements (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS inspection_live_drafts (
+    attempt_id BIGINT PRIMARY KEY REFERENCES inspection_attempts(id) ON DELETE CASCADE,
+    measurements JSONB NOT NULL,
+    client_sequence BIGINT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
+ALTER TABLE inspection_attempts ADD COLUMN IF NOT EXISTS inspector_adp TEXT;
+CREATE TABLE IF NOT EXISTS inspection_breaks (
+    id BIGSERIAL PRIMARY KEY,
+    session_id BIGINT NOT NULL REFERENCES inspector_sessions(id),
+    mode TEXT NOT NULL CHECK(mode IN ('with_relief','without_relief')),
+    relief_adp TEXT,
+    relief_name TEXT,
+    relief_item_id BIGINT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ended_at TIMESTAMPTZ,
+    CHECK ((mode = 'with_relief' AND relief_adp IS NOT NULL AND relief_name IS NOT NULL)
+        OR (mode = 'without_relief' AND relief_adp IS NULL AND relief_name IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS inspection_breaks_active_idx ON inspection_breaks(session_id) WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS inspection_breaks_session_idx ON inspection_breaks(session_id,id DESC);
+CREATE TABLE IF NOT EXISTS inspection_relief_attempts (
+    attempt_id BIGINT NOT NULL REFERENCES inspection_attempts(id) ON DELETE CASCADE,
+    break_id BIGINT NOT NULL REFERENCES inspection_breaks(id),
+    first_recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(attempt_id, break_id)
+);
+
+CREATE TABLE IF NOT EXISTS lunch_inspections (
+    id BIGSERIAL PRIMARY KEY,
+    source_attempt_id BIGINT NOT NULL,
+    station_id BIGINT NOT NULL,
+    reviewer_adp TEXT NOT NULL,
+    reviewer_name TEXT NOT NULL,
+    reviewer_title TEXT NOT NULL,
+    source_snapshot JSONB NOT NULL,
+    recipe_snapshot JSONB NOT NULL,
+    confirmed_pipe_number TEXT NOT NULL,
+    measurements JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status TEXT NOT NULL DEFAULT 'in_progress' CHECK(status IN ('in_progress','passed','failed')),
+    notes TEXT NOT NULL DEFAULT '',
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS lunch_inspections_history_idx ON lunch_inspections(completed_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS inspection_verifications (
+    id BIGSERIAL PRIMARY KEY,
+    attempt_id BIGINT NOT NULL REFERENCES inspection_attempts(id) ON DELETE CASCADE,
+    snapshot_hash TEXT NOT NULL,
+    verifier_adp TEXT NOT NULL,
+    verifier_name TEXT NOT NULL,
+    verifier_title TEXT NOT NULL,
+    verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (attempt_id, snapshot_hash)
+);
+
+CREATE INDEX IF NOT EXISTS inspection_report_station_idx ON inspection_attempts(session_id, status, started_at DESC);
+CREATE INDEX IF NOT EXISTS inspection_report_time_idx ON inspection_attempts(started_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS inspection_report_verification_idx ON inspection_verifications(attempt_id, verified_at DESC);
+
 CREATE TABLE IF NOT EXISTS ncr_reports (
     id BIGSERIAL PRIMARY KEY,
     attempt_id BIGINT NOT NULL REFERENCES inspection_attempts(id) ON DELETE CASCADE,
@@ -291,7 +357,7 @@ SHAREPOINT_RECIPE_FIELD_CANDIDATES = {
     ],
 }
 MANAGER_ROLE_KEYWORDS = {"manager", "supervisor"}
-ADMIN_DEPARTMENT_KEYWORDS = {"it", "information technology"}
+ADMIN_DEPARTMENT_KEYWORDS = {"it", "information technology", "information systems"}
 ADMIN_ROLE_KEYWORDS = {
     "it",
     "information technology",
@@ -466,6 +532,7 @@ def _normalize_employee_row(row):
         "branch": _candidate_value(fields, EMPLOYEE_BRANCH_FIELDS),
         "department": _candidate_value(fields, EMPLOYEE_DEPARTMENT_FIELDS),
         "role_title": _candidate_value(fields, EMPLOYEE_ROLE_FIELDS),
+        "adp_job_title_desc": str(fields.get("ADPJobTitleDesc") or "").strip(),
         "machinist": str(
             _candidate_value(fields, EMPLOYEE_MACHINIST_FIELDS) or ""
         ).strip().lower()
@@ -481,6 +548,8 @@ def _normalize_production_order_row(row):
         "order_type": _candidate_value(fields, PRODUCTION_ORDER_TYPE_FIELDS),
         "status": _candidate_value(fields, PRODUCTION_STATUS_FIELDS),
         "operation_description": _candidate_value(fields, PRODUCTION_OPERATION_DESCRIPTION_FIELDS),
+        "operation_id": str(fields.get("OperationID") or "").strip(),
+        "inspection_entry": _extract_inspection_entry_parts(_candidate_value(fields, PRODUCTION_OPERATION_DESCRIPTION_FIELDS)),
         "branch": _candidate_value(fields, PRODUCTION_BRANCH_FIELDS),
     }
 
@@ -791,6 +860,10 @@ def is_manager_or_supervisor(employee):
 
 def is_admin_user(employee):
     """Return True when the user should have admin-tool access."""
+    if employee and employee.get("employee_status") in {None, "", "Active"} and str(employee.get("adp_job_title_desc") or "").strip().lower() in {
+        "director of quality", "quality control specialist", "quality manager", "quality supervisor", "it", "it manager", "information technology", "information systems", "integration technologist",
+    }:
+        return True
     if is_manager_or_supervisor(employee):
         return True
 
@@ -900,6 +973,7 @@ def _get_test_work_orders(branch=None):
 
     test_order = dict(TEST_WORK_ORDER_TEMPLATE)
     test_order["branch"] = branch or ""
+    test_order["inspection_entry"] = _extract_inspection_entry_parts(test_order.get("operation_description"))
     return [test_order]
 
 
@@ -951,20 +1025,82 @@ def get_connection_types(production_number, branch=None):
 
 
 def _extract_inspection_entry_parts(operation_description):
-    """Best-effort parse of size, weight, and connection from a work-order description."""
-    text = str(operation_description or "").strip()
-    if not text:
-        return {"size": None, "weight": None, "connection": None}
+    """Read the specification from an operation description or Digital IRR report name."""
+    text = str(operation_description or "").strip().replace("−", "-").replace("–", "-")
+    size = re.search(r"Size:\s*([^,]+)", text, re.IGNORECASE)
+    weight = re.search(r"Weight:\s*([^,]+)", text, re.IGNORECASE)
+    connection = re.search(r"Connection:\s*(.+?)(?:\s+(?:Pin|Box)\b|\s+as\s+Per\b|$)", text, re.IGNORECASE)
+    connection_end = re.search(r"Connection:.*?\b(Pin|Box)\b", text, re.IGNORECASE)
+    end = connection_end or re.search(r"\bon\s+(Pin|Box)\s+End\b", text, re.IGNORECASE)
+    drawing = re.search(r"Print\s*#?\s*(.+)$", text, re.IGNORECASE)
+    parts = {"size": size.group(1).strip() if size else None,
+             "weight": weight.group(1).strip() if weight else None,
+             "connection": connection.group(1).strip() if connection else None,
+             "end_type": end.group(1).upper() if end else None,
+             "drawing": drawing.group(1).strip() if drawing else None}
+    if parts["size"] and parts["weight"] and parts["connection"]:
+        return parts
+    # Existing recipe report names use e.g. 2.875 7.90# BTS-6 (PIN) INSPECTION REPORT.
+    report = re.search(r'^\s*(\d+(?:\.\d+)?(?:\s+\d+/\d+)?|\d+/\d+)\s*["″]?\s+(\d+(?:\.\d+)?)\s*#?\s+(.+?)\s*\(?\b(PIN|BOX)\b\)?(?:\s+(?:INSPECTION|REPORT|RECIPE).*)?$', text, re.IGNORECASE)
+    if report:
+        parts.update(size=report.group(1), weight=report.group(2) + "#", connection=report.group(3).strip(), end_type=report.group(4).upper())
+    return parts
 
-    size_match = re.search(r"Size:\s*([^,]+)", text, re.IGNORECASE)
-    weight_match = re.search(r"Weight:\s*([^,]+)", text, re.IGNORECASE)
-    connection_match = re.search(r"Connection:\s*(.+?)(?:\s+(?:Pin|Box)\b|\s+as\s+Per\b|$)", text, re.IGNORECASE)
 
-    return {
-        "size": size_match.group(1).strip() if size_match else None,
-        "weight": weight_match.group(1).strip() if weight_match else None,
-        "connection": connection_match.group(1).strip() if connection_match else None,
-    }
+def _inspection_dimension(value):
+    text = re.sub(r'["″#]', '', str(value or '')).strip()
+    try:
+        return float(sum(Fraction(part) for part in text.split()))
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def _inspection_connection_key(value):
+    return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+
+def _inspection_connection_signature(description):
+    parts = _extract_inspection_entry_parts(description)
+    if not all(parts.get(key) for key in ("size", "weight", "connection", "end_type")):
+        return None
+    size, weight = _inspection_dimension(parts["size"]), _inspection_dimension(parts["weight"])
+    if size is None or weight is None:
+        return None
+    return size, weight, _inspection_connection_key(parts["connection"]), parts["end_type"]
+
+
+def _recipe_inspection_parts(recipe):
+    recipe_json = recipe.get("recipe_json") or {}
+    if not isinstance(recipe_json, dict):
+        recipe_json = {}
+    parts = _extract_inspection_entry_parts(recipe.get("source_report") or recipe_json.get("sourceReport"))
+    if not all(parts.get(key) for key in ("size", "weight", "connection", "end_type")):
+        parts = _extract_inspection_entry_parts(recipe.get("connection_type") or recipe.get("recipe_name"))
+    return {"size": recipe.get("size_label") or parts.get("size"),
+            "weight": recipe.get("weight_label") or parts.get("weight"),
+            "connection": recipe.get("grade_label") or parts.get("connection"),
+            "end_type": recipe.get("connector_type") or parts.get("end_type")}
+
+
+def _inspection_recipe_score(description, recipe):
+    wanted = _extract_inspection_entry_parts(description)
+    actual = _recipe_inspection_parts(recipe)
+    if not all(wanted.get(key) and actual.get(key) for key in ("size", "weight", "connection", "end_type")):
+        return None
+    if any(_inspection_dimension(wanted[key]) is None or _inspection_dimension(wanted[key]) != _inspection_dimension(actual[key]) for key in ("size", "weight")):
+        return None
+    if _inspection_connection_key(wanted["connection"]) != _inspection_connection_key(actual["connection"]):
+        return None
+    if wanted["end_type"].upper() != str(actual["end_type"]).upper():
+        return None
+    score = 100
+    recipe_json = recipe.get("recipe_json") or {}
+    drawing = recipe.get("drawing") or (recipe_json.get("drawing") if isinstance(recipe_json, dict) else "")
+    if wanted.get("drawing") and drawing:
+        if _inspection_connection_key(wanted["drawing"]) != _inspection_connection_key(drawing):
+            return None
+        score += 10
+    return score
 
 
 def remember_inspection_entry_values(branch=None, size_label=None, weight_label=None, connection_label=None):
@@ -1542,7 +1678,7 @@ def find_recipe_candidates(operation_description, branch=None):
 
     local_recipe_rows = _fetch_all_dicts(
         """
-        SELECT recipe_name, connection_type, branch, drawing, recipe_version
+        SELECT recipe_name, connection_type, branch, drawing, recipe_version, size_label, weight_label, grade_label, connector_type, source_report
         FROM app_recipe_headers
         WHERE is_active = TRUE
         ORDER BY recipe_name ASC, branch ASC, recipe_version DESC, updated_at DESC
@@ -1586,6 +1722,25 @@ def find_recipe_candidates(operation_description, branch=None):
             or _recipe_revision_key(recipe) > _recipe_revision_key(latest_sharepoint_recipes[key])
         ):
             latest_sharepoint_recipes[key] = recipe
+
+    specification = _extract_inspection_entry_parts(operation_description)
+    if all(specification.get(key) for key in ("size", "weight", "connection", "end_type")):
+        matched = {}
+        for recipe in [*latest_local_recipes.values(), *latest_sharepoint_recipes.values()]:
+            if branch and recipe.get("branch") not in {None, "", branch}:
+                continue
+            score = _inspection_recipe_score(operation_description, recipe)
+            if score is None:
+                continue
+            name = recipe.get("recipe_name")
+            if not name:
+                continue
+            recipe_json = recipe.get("recipe_json") or {}
+            drawing = recipe.get("drawing") or (recipe_json.get("drawing") if isinstance(recipe_json, dict) else "")
+            candidate = {"recipe_name": name, "display_name": _format_digital_irr_name(name, drawing), "match_type": "specification", "score": score}
+            if name not in matched or score > matched[name]["score"]:
+                matched[name] = candidate
+        return sorted(matched.values(), key=lambda item: (-item["score"], item["recipe_name"]))
 
     for recipe in latest_local_recipes.values():
         recipe_name = recipe["recipe_name"]
@@ -2151,40 +2306,12 @@ def evaluate_measurements(measurements, approval_rules=None):
     failed_count = 0
 
     def normalize_numeric_measurement(raw_value, measurement):
-        text = str(raw_value).strip()
-        nominal = measurement.get("nominal")
-        min_value = measurement.get("min")
-        max_value = measurement.get("max")
-        is_offset_entry = False
-        if nominal not in (None, ""):
-            try:
-                float(nominal)
-                is_offset_entry = (
-                    text.startswith(("+", "-"))
-                    or text.startswith(".")
-                    or bool(re.match(r"^\d+$", text))
-                )
-            except (TypeError, ValueError):
-                is_offset_entry = False
-
-        if is_offset_entry:
-            sign = -1 if text.startswith("-") else 1
-            offset_text = text[1:].strip() if text.startswith(("+", "-")) else text
-            if not offset_text:
-                raise ValueError("Missing offset")
-            if offset_text.startswith("."):
-                offset = float(offset_text)
-            else:
-                numeric_offset = int(offset_text) if offset_text.isdigit() else float(offset_text)
-                decimal_places = max(
-                    _count_decimal_places(nominal),
-                    _count_decimal_places(min_value),
-                    _count_decimal_places(max_value),
-                    3,
-                )
-                offset = numeric_offset / (10 ** decimal_places)
-            return float(nominal) + (sign * offset)
-        return float(text)
+        # Inspectors enter the complete value, including decimal point/sign.
+        # Never infer missing digits or add the input to the nominal dimension.
+        value = float(str(raw_value).strip())
+        if not math.isfinite(value):
+            raise ValueError("Measurement must be a finite number")
+        return value
 
     for measurement in measurements:
         updated = dict(measurement)
@@ -2237,7 +2364,7 @@ def evaluate_measurements(measurements, approval_rules=None):
 
 def get_pipe_unit(production_number, operation_description, pipe_number):
     """Return an existing pipe unit if this pipe has been seen before."""
-    return _fetch_one_dict(
+    exact = _fetch_one_dict(
         """
         SELECT id, production_number, operation_description, pipe_number, branch,
                current_status, latest_attempt_no
@@ -2248,6 +2375,20 @@ def get_pipe_unit(production_number, operation_description, pipe_number):
         """,
         (str(production_number).strip(), operation_description, str(pipe_number).strip()),
     )
+
+    if exact:
+        return exact
+    signature = _inspection_connection_signature(operation_description)
+    if signature is None:
+        return None
+    rows = _fetch_all_dicts(
+        "SELECT id, production_number, operation_description, pipe_number, branch, current_status, latest_attempt_no FROM pipe_units WHERE production_number = %s AND pipe_number = %s",
+        (str(production_number).strip(), str(pipe_number).strip()),
+    )
+    matches = [row for row in rows if _inspection_connection_signature(row.get("operation_description")) == signature]
+    if len(matches) > 1:
+        raise ValueError("Multiple saved pipe records match these connection specifications. Quality must review the duplicate records before continuing.")
+    return matches[0] if matches else None
 
 
 def get_pipe_unit_by_id(pipe_unit_id):
@@ -2274,6 +2415,11 @@ def get_pipe_attempt_history(pipe_unit_id):
                ia.requires_manager_approval,
                ia.manager_name,
                ia.inspector_name,
+               ia.inspector_adp,
+               sess.inspector_name AS original_inspector_name,
+               sess.inspector_adp AS original_inspector_adp,
+               COALESCE((SELECT jsonb_agg(jsonb_build_object('adp_number', b.relief_adp, 'name', b.relief_name, 'break_id', b.id) ORDER BY b.id)
+                   FROM inspection_relief_attempts ra JOIN inspection_breaks b ON b.id=ra.break_id WHERE ra.attempt_id=ia.id), '[]'::jsonb) AS relief_inspectors,
                ia.cnc_operator_name,
                ia.recipe_name,
                ia.started_at,
@@ -2315,7 +2461,7 @@ def update_attempt_measurements(attempt_id, measurements):
                 """
                 SELECT id
                 FROM inspection_attempts
-                WHERE id = %s
+                WHERE id = %s FOR UPDATE
                 """,
                 (attempt_id,),
             )
@@ -2383,6 +2529,11 @@ def get_pipe_history_details(pipe_unit_ids):
                ia.requires_manager_approval,
                ia.manager_name,
                ia.inspector_name,
+               ia.inspector_adp,
+               sess.inspector_name AS original_inspector_name,
+               sess.inspector_adp AS original_inspector_adp,
+               COALESCE((SELECT jsonb_agg(jsonb_build_object('adp_number', b.relief_adp, 'name', b.relief_name, 'break_id', b.id) ORDER BY b.id)
+                   FROM inspection_relief_attempts ra JOIN inspection_breaks b ON b.id=ra.break_id WHERE ra.attempt_id=ia.id), '[]'::jsonb) AS relief_inspectors,
                ia.cnc_operator_name,
                ia.recipe_name,
                ia.started_at,
@@ -2429,7 +2580,7 @@ def get_pipe_history_details(pipe_unit_ids):
     }
 
 
-def search_pipe_units(branch=None, production_number=None, pipe_number=None, status=None, inspection_scope=None, published_only=False):
+def search_pipe_units(branch=None, production_number=None, pipe_number=None, status=None, inspection_scope=None, published_only=False, operation_description=None):
     """Search pipe units with optional filters."""
     clauses = ["1 = 1"]
     params = []
@@ -2452,7 +2603,7 @@ def search_pipe_units(branch=None, production_number=None, pipe_number=None, sta
     if published_only:
         clauses.append("pu.published_at IS NOT NULL")
 
-    return _fetch_all_dicts(
+    rows = _fetch_all_dicts(
         f"""
         SELECT pu.id, pu.production_number, pu.operation_description, pu.pipe_number,
                pu.branch, pu.current_status, pu.latest_attempt_no, pu.published_at, pu.created_at, pu.updated_at,
@@ -2466,6 +2617,11 @@ def search_pipe_units(branch=None, production_number=None, pipe_number=None, sta
         """,
         tuple(params),
     )
+
+    if operation_description:
+        signature = _inspection_connection_signature(operation_description)
+        return [row for row in rows if row.get("operation_description") == operation_description or (signature is not None and _inspection_connection_signature(row.get("operation_description")) == signature)]
+    return rows
 
 
 def get_ncr_reports(branch=None, status=None):
@@ -2691,6 +2847,12 @@ def create_inspection_attempt(
     inspection_scope="standard",
 ):
     """Create a new inspection attempt and return plan context."""
+    from node_app.bridge.inspection_breaks import inspection_break_state, validate_context
+    validate_context(inspection_break_state(session_id))
+    # Reuse the original stored label when old manual entry used equivalent size/weight formatting.
+    existing_pipe = get_pipe_unit(production_number, operation_description, pipe_number)
+    if existing_pipe:
+        operation_description = existing_pipe["operation_description"]
     normalized_pipe_number = str(pipe_number).strip()
     rotation_index = int(normalized_pipe_number) if normalized_pipe_number.isdigit() else None
     connection = get_db_connection()
@@ -2715,7 +2877,7 @@ def create_inspection_attempt(
                 if previous_status == "in_progress":
                     cursor.execute(
                         """
-                        SELECT id, attempt_no, inspection_scope, started_at
+                        SELECT id, attempt_no, inspection_scope, started_at, session_id
                         FROM inspection_attempts
                         WHERE pipe_unit_id = %s
                           AND attempt_no = %s
@@ -2726,6 +2888,17 @@ def create_inspection_attempt(
                     )
                     existing_attempt = cursor.fetchone()
                     if existing_attempt:
+                        if str(existing_attempt.get("session_id")) != str(session_id):
+                            cursor.execute("SELECT logged_out_at FROM inspector_sessions WHERE id=%s", (existing_attempt.get("session_id"),))
+                            previous_session = cursor.fetchone()
+                            if previous_session and previous_session["logged_out_at"] is None:
+                                raise ValueError("This pipe is already being inspected in another active station session.")
+                            # A new signed-in shift can resume an unfinished pipe from a closed session.
+                            cursor.execute("""UPDATE inspection_attempts SET session_id=%s, inspector_item_id=%s,
+                                inspector_name=%s, inspector_adp=%s, cnc_operator_item_id=%s, cnc_operator_name=%s WHERE id=%s""",
+                                (session_id, _coerce_bigint(inspector["item_id"]), inspector["name"], inspector.get("adp_number"),
+                                 _coerce_bigint(cnc_operator["item_id"]) if cnc_operator else None,
+                                 cnc_operator["name"] if cnc_operator else None, existing_attempt["id"]))
                         attempt_no = existing_attempt["attempt_no"]
                         normalized_scope = (
                             "full"
@@ -2912,6 +3085,7 @@ def complete_inspection_attempt(
     manager_name="",
     manager_reason="",
     ncr_data=None,
+    coverage_version=None,
 ):
     """Persist measurements and close an attempt with its resulting pipe status."""
     requires_manager_approval = disposition == "manager_approved"
@@ -2942,6 +3116,18 @@ def complete_inspection_attempt(
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT status, pipe_unit_id FROM inspection_attempts WHERE id = %s FOR UPDATE",
+                (attempt_id,),
+            )
+            current_attempt = cursor.fetchone()
+            if not current_attempt or current_attempt[0] != "in_progress" or str(current_attempt[1]) != str(pipe_unit_id):
+                raise ValueError("Only the current in-progress inspection can be submitted. Saved inspections must use the authorized history edit workflow.")
+            from node_app.bridge.inspection_breaks import lock_attempt_context, record_relief
+            context = lock_attempt_context(cursor, attempt_id, coverage_version)
+            record_relief(cursor, attempt_id, context)
+            cursor.execute("UPDATE inspection_attempts SET inspector_name=%s, inspector_adp=%s, inspector_item_id=%s WHERE id=%s",
+                           (context["acting_name"], context["acting_adp"], context["acting_item_id"], attempt_id))
             cursor.execute(
                 """
                 DELETE FROM inspection_measurements
@@ -3157,6 +3343,7 @@ def close_inspector_session(session_id):
                 "UPDATE inspector_sessions SET logged_out_at = NOW() WHERE id = %s",
                 (session_id,),
             )
+            cursor.execute("UPDATE inspection_breaks SET ended_at=NOW() WHERE session_id=%s AND ended_at IS NULL", (session_id,))
         connection.commit()
     finally:
         connection.close()
@@ -3220,6 +3407,7 @@ def unlock_location(location_id):
                 (location_id,),
             )
             unlocked_sessions = cursor.fetchall()
+            cursor.execute("UPDATE inspection_breaks SET ended_at=NOW() WHERE session_id = ANY(%s) AND ended_at IS NULL", ([row["id"] for row in unlocked_sessions],))
 
         connection.commit()
         return {

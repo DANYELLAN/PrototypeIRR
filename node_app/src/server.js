@@ -1,4 +1,13 @@
+import { registerMoldApprovalRoutes } from "./moldApproval.js";
+import { registerBreakReportRoutes, renderAdminTabs } from "./breakReport.js";
+import { registerInspectionBreakRoutes, renderBreakControls } from "./inspectionBreaks.js";
+import { reliefColumnClass, reliefColumnLabel } from "./inspectionRelief.js";
 import express from "express";
+import { submittedMeasurementValue, loadNextInspection } from "./inspectionFlow.js";
+import { canEditInspectionHistory, createHistoryEditGuard, canViewPipeReport } from "./inspectionPermissions.js";
+import { resolveWorkOrderSelection, chooseInspectionRecipe } from "./inspectionSelection.js";
+import { registerLunchInspectionRoutes } from "./lunchInspections.js";
+import { registerPipeReportRoutes } from "./pipeReport.js";
 import session from "express-session";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -12,6 +21,7 @@ const WORKORDER_SYNC_RUN_ON_START = process.env.WORKORDER_SYNC_RUN_ON_START !== 
 let workOrderSyncInProgress = false;
 
 const app = express();
+const requireHistoryEditor = createHistoryEditGuard(callBridge);
 app.use(express.urlencoded({ extended: true, limit: "12mb" }));
 app.use(express.json({ limit: "12mb" }));
 app.use(
@@ -212,68 +222,6 @@ function formatPipeStatusResult(status, attemptStatus = "", requiresManagerAppro
   return status ? String(status) : "";
 }
 
-function countDecimalPlaces(value) {
-  if (value === null || value === undefined || value === "") return 0;
-  const text = normalizeNumericText(value);
-  if (!text.includes(".")) return 0;
-  return text.split(".")[1].length;
-}
-
-function normalizeNumericText(value) {
-  const text = String(value ?? "").trim();
-  if (!text) return "";
-  if (!/^-?\d+(?:\.\d+)?$/.test(text)) return text;
-  return text.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
-}
-
-function formatNumericReference(value, decimals, { trim = true } = {}) {
-  const numericValue = Number(value);
-  if (Number.isNaN(numericValue)) return "";
-  const text = numericValue.toFixed(decimals);
-  return trim ? normalizeNumericText(text) : text;
-}
-
-function buildNumericEntryConfig(element) {
-  if (element.nominal !== null && element.nominal !== undefined && element.nominal !== "") {
-    return null;
-  }
-
-  const candidates = [element.nominal, element.min, element.max]
-    .map((value) => Number(value))
-    .filter((value) => !Number.isNaN(value));
-
-  if (!candidates.length || candidates.some((value) => value < 0)) {
-    return null;
-  }
-
-  const decimals = Math.max(
-    countDecimalPlaces(element.nominal),
-    countDecimalPlaces(element.min),
-    countDecimalPlaces(element.max),
-  );
-
-  if (decimals < 2) {
-    return null;
-  }
-
-  const referenceSource =
-    element.nominal !== null && element.nominal !== undefined && element.nominal !== "" && Number(element.nominal) !== 0
-      ? element.nominal
-      : element.max ?? element.min ?? element.nominal;
-  const reference = formatNumericReference(referenceSource, decimals, { trim: false });
-  if (!reference || reference.length <= 2 || reference.length > 8) {
-    return null;
-  }
-
-  return {
-    prefix: reference.slice(0, -2),
-    tailLength: 2,
-    tailPlaceholder: reference.slice(-2),
-    fullPlaceholder: reference,
-    decimals,
-  };
-}
-
 function renderScopeBadge(scope) {
   const normalized = String(scope || "standard").toLowerCase();
   const label = normalized === "full" ? "Full Inspection" : "Standard Inspection";
@@ -351,11 +299,11 @@ function renderPipeHistorySheets(workorderGroups, { canManage = false } = {}) {
                                 ${group.columns
                         .map(
                           (column) => `<th
-                            class="inspection-col-history ${canManage ? "history-column-action" : ""}"
+                            class="inspection-col-history ${reliefColumnClass(column.relief_inspectors)} ${canManage ? "history-column-action" : ""}"
                             ${canManage ? `data-history-pipe-id="${escapeHtml(column.pipeUnitId)}" data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}" title="Click to edit this saved pipe. Right-click to delete it."` : ""}
                           >
                             <div class="pipe-history-connection-header centered">
-                              <span class="pipe-history-connection-label">Pipe # ${escapeHtml(column.pipeNumber || "")}</span>
+                              <span class="pipe-history-connection-label">Pipe # ${escapeHtml(column.pipeNumber || "")}</span>${reliefColumnLabel(column.relief_inspectors)}
                               ${
                                 canManage
                                   ? `<div class="pipe-history-header-actions">
@@ -388,7 +336,7 @@ function renderPipeHistorySheets(workorderGroups, { canManage = false } = {}) {
                             .map((column) => {
                               const measurement = column.measurementsBySequence?.get(Number(row.element_sequence));
                               return `<td
-                                class="inspection-history-cell ${canManage ? "history-column-action " : ""}${measurement ? "inspection-history-cell-filled" : "inspection-history-cell-empty"}"
+                                class="inspection-history-cell ${reliefColumnClass(column.relief_inspectors)} ${canManage ? "history-column-action " : ""}${measurement ? "inspection-history-cell-filled" : "inspection-history-cell-empty"}"
                                 ${canManage ? `data-history-pipe-id="${escapeHtml(column.pipeUnitId)}" data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}" title="Click to edit this saved pipe. Right-click to delete it."` : ""}
                               >${escapeHtml(measurement?.measured_value ?? "")}</td>`;
                             })
@@ -411,7 +359,7 @@ function renderPipeHistorySheets(workorderGroups, { canManage = false } = {}) {
                             column.requiresManagerApproval,
                           );
                           return `<td
-                            class="inspection-history-result-cell ${canManage ? "history-column-action" : ""}"
+                            class="inspection-history-result-cell ${reliefColumnClass(column.relief_inspectors)} ${canManage ? "history-column-action" : ""}"
                             ${canManage ? `data-history-pipe-id="${escapeHtml(column.pipeUnitId)}" data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}" title="Click to edit this saved pipe. Right-click to delete it."` : ""}
                           >${escapeHtml(resultLabel)}</td>`;
                         })
@@ -438,6 +386,10 @@ function renderWorkflowNav(activePath, req = null) {
   const canAccessAdmin = Boolean(req?.session?.canAccessAdmin);
   const items = [
     ...(hasInspectionSession ? [{ href: "/workflow/inspection", label: "Inspection Entry" }] : []),
+    ...(canViewPipeReport(req?.session?.inspector) ? [{ href: "/workflow/pipe-report", label: "Live Pipe Report" }, { href: "/admin/breaks", label: "Breaks" }] : []),
+    { href: "/workflow/mold-approval", label: "Mold Approval" },
+    { href: "/workflow/lunch", label: "Lunch Inspection" },
+    ...(canViewPipeReport(req?.session?.inspector) ? [{ href: "/workflow/lunch/history", label: "Lunch Inspections History" }] : []),
     { href: "/workflow/history", label: "Pipe History" },
     { href: "/workflow/ncr", label: "NCR Queue" },
     ...(canAccessAdmin ? [{ href: "/admin", label: "Admin Tools" }] : []),
@@ -491,76 +443,19 @@ function renderMeasurementMeta(element) {
   return meta.map((item) => `<span class="pill">${escapeHtml(item)}</span>`).join("");
 }
 
-function buildCarriedValueConfig(element, priorMeasuredValue, numericEntryConfig = null) {
-  if (priorMeasuredValue === null || priorMeasuredValue === undefined || priorMeasuredValue === "") return null;
-  if (element.capture_type === "boolean") {
-    const normalized = String(priorMeasuredValue).trim().toLowerCase();
-    return {
-      checked: ["yes", "y", "pass", "true", "1"].includes(normalized),
-      hiddenValue: ["yes", "y", "pass", "true", "1"].includes(normalized) ? "Yes" : "No",
-    };
-  }
-
-  const text = String(priorMeasuredValue).trim();
-  if (numericEntryConfig) {
-    const numericValue = Number(text);
-    if (!Number.isNaN(numericValue)) {
-      const formattedValue = formatNumericReference(numericValue, numericEntryConfig.decimals);
-      return {
-        fullValue: formattedValue,
-        shortTail: formattedValue.slice(-numericEntryConfig.tailLength),
-      };
-    }
-  }
-  return {
-    fullValue: text,
-    shortTail: text.slice(-2),
-  };
-}
-
-function renderInspectionInputControl(element, priorMeasuredValue = null) {
-  const numericEntryConfig = element.capture_type === "boolean" ? null : buildNumericEntryConfig(element);
-  const carriedValue = buildCarriedValueConfig(element, priorMeasuredValue, numericEntryConfig);
+function renderInspectionInputControl(element) {
   if (element.capture_type === "boolean") {
     return `<label class="measurement-checkbox-row inspection-table-checkbox">
-      <input
-        type="checkbox"
-        class="measurement-input measurement-checkbox"
-        data-capture-type="boolean"
-        data-full-target="element_full_${element.element_sequence}"
-        ${carriedValue?.checked ? "checked" : ""}
-      />
-      <span>Pass</span>
-      <input type="hidden" id="element_full_${element.element_sequence}" name="element_${element.element_sequence}" value="${escapeHtml(carriedValue?.hiddenValue || "No")}" />
+      <input type="checkbox" class="measurement-input measurement-checkbox" data-capture-type="boolean"
+        data-full-target="element_full_${element.element_sequence}" />
+      <span>Pass (unchecked = Fail)</span>
+      <input type="hidden" id="element_full_${element.element_sequence}" name="element_${element.element_sequence}" value="No" />
     </label>`;
   }
-
-  if (numericEntryConfig) {
-    return `<div class="measurement-short-entry inspection-table-short-entry">
-      <span class="measurement-prefix">${escapeHtml(numericEntryConfig.prefix)}</span>
-      <input
-        class="measurement-input measurement-short-input"
-        data-capture-type="numeric"
-        data-nominal="${escapeHtml(element.nominal ?? "")}"
-        data-min="${escapeHtml(element.min ?? "")}"
-        data-max="${escapeHtml(element.max ?? "")}"
-        data-prefix="${escapeHtml(numericEntryConfig.prefix)}"
-        data-tail-length="${escapeHtml(numericEntryConfig.tailLength)}"
-        data-full-target="element_full_${element.element_sequence}"
-        placeholder="${escapeHtml(numericEntryConfig.tailPlaceholder)}"
-        value="${escapeHtml(carriedValue?.shortTail || "")}"
-        inputmode="numeric"
-        maxlength="${escapeHtml(numericEntryConfig.tailLength)}"
-        required
-      />
-      <input type="hidden" id="element_full_${element.element_sequence}" name="element_${element.element_sequence}" value="${escapeHtml(carriedValue?.fullValue || "")}" />
-    </div>`;
-  }
-
-  return `<input class="measurement-input inspection-table-input" data-capture-type="numeric" data-nominal="${escapeHtml(element.nominal ?? "")}" data-min="${escapeHtml(element.min ?? "")}" data-max="${escapeHtml(element.max ?? "")}" placeholder="${escapeHtml(element.nominal ?? "")}" value="${escapeHtml(carriedValue?.fullValue || "")}" name="element_${element.element_sequence}" required />`;
+  return `<input class="measurement-input inspection-table-input" data-capture-type="numeric" data-nominal="${escapeHtml(element.nominal ?? "")}" data-min="${escapeHtml(element.min ?? "")}" data-max="${escapeHtml(element.max ?? "")}" placeholder="Full measurement" value="" name="element_${element.element_sequence}" inputmode="decimal" autocomplete="off" required />`;
 }
 
-function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, selection, sessionRecord, inspectorName, historyColumns = [] }) {
+function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, selection, sessionRecord, inspectorName, historyColumns = [], canEditHistory = false, breakVersion = 0 }) {
   const plan = activeInspection?.inspection_plan || [];
   const planMap = new Map(plan.map((element) => [Number(element.element_sequence), element]));
   const rows = recipeDefinition?.elements?.length ? recipeDefinition.elements : plan;
@@ -569,9 +464,6 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
   const locationName = sessionRecord?.location_name || "";
   const currentPipeNumber = activeInspection?.pipe_number || selection.pipeNumber || "";
   const hasPendingNextPipe = !activeInspection && Boolean(currentPipeNumber);
-  const previousMeasurementsBySequence = historyColumns.length
-    ? historyColumns[historyColumns.length - 1].measurementsBySequence
-    : new Map();
   const connectionCellForm = `
     <div class="connection-header-entry">
       <span class="connection-header-label">Pipe #</span>
@@ -593,12 +485,13 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
         activeInspection
           ? `Attempt #${escapeHtml(activeInspection.attempt_no)} | ${activeInspection.is_rework ? "Re-work" : "First inspection"} | ${renderScopeBadge(activeInspection.inspection_scope)}`
           : hasPendingNextPipe
-            ? "Next pipe is ready. Edit the pipe number if needed, then start it when inspection begins."
+            ? "Check the pipe number, then load it to continue inspection."
             : "Enter the pipe number in the table header to start or resume that pipe."
       }</p>
       ${
         activeInspection
           ? `<form method="post" action="/workflow/scope" class="inspection-scope-toggle-form">
+              <input type="hidden" name="_coverage_version" value="${breakVersion}" />
               <input type="hidden" name="inspectionScope" value="${activeInspection.inspection_scope === "full" ? "standard" : "full"}" />
               <button class="button secondary compact-button" type="submit">
                 ${activeInspection.inspection_scope === "full" ? "Switch to Standard Inspection" : "Switch to Full Inspection"}
@@ -614,8 +507,11 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
       <form id="worksheet-history-delete-form" method="post" action="/workflow/history/delete">
         <input type="hidden" id="worksheet-history-delete-pipe-unit-id" name="pipeUnitId" value="" />
       </form>
-      <form id="inspection-complete-form" method="post" action="/workflow/complete" class="form-grid">
+      <form id="inspection-complete-form" data-relief-inspectors="${escapeHtml(JSON.stringify(activeInspection?.relief_inspectors || []))}" method="post" action="/workflow/complete" class="form-grid">
+        <input type="hidden" name="_coverage_version" value="${breakVersion}" />
+        <input type="hidden" name="attempt_id" value="${escapeHtml(activeInspection?.attempt_id || "")}" />
         <input type="hidden" name="productionNumber" value="${escapeHtml(selection.productionNumber || "")}" />
+        <input type="hidden" name="operationDescription" value="${escapeHtml(selection.operationDescription || "")}" />
         <input type="hidden" name="sizeLabel" value="${escapeHtml(selection.sizeLabel || "")}" />
         <input type="hidden" name="weightLabel" value="${escapeHtml(selection.weightLabel || "")}" />
         <input type="hidden" name="connectionLabel" value="${escapeHtml(selection.connectionLabel || "")}" />
@@ -629,7 +525,7 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
             <div><strong>Machine #:</strong> ${escapeHtml(locationName)}</div>
           </div>
           <div class="inspection-sheet-meta-row">
-            <div><strong>Inspector:</strong> ${escapeHtml(inspectorName || "")}</div>
+            <div><strong>Inspector:</strong> <span data-current-inspector-name>${escapeHtml(inspectorName || "")}</span></div>
             <div><strong>Workorder #:</strong> ${escapeHtml(selection.productionNumber || "")}</div>
             <div><strong>Connection Type:</strong> ${escapeHtml(buildInspectionConnectionLabel(selection))}</div>
           </div>
@@ -645,17 +541,15 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
                 ${historyColumns
                   .map(
                     (column) => `<th
-                      class="inspection-col-history history-column-action"
-                      data-history-pipe-id="${escapeHtml(column.pipeUnitId)}"
-                      data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}"
-                      title="Click to edit this saved pipe. Right-click to delete it."
+                      class="inspection-col-history ${reliefColumnClass(column.relief_inspectors)} ${canEditHistory ? "history-column-action" : ""}"
+                      ${canEditHistory ? `data-history-pipe-id="${escapeHtml(column.pipeUnitId)}" data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}" title="Click to edit this saved pipe. Right-click to delete it."` : ""}
                     >
                       <div class="pipe-history-connection-header centered">
-                        <span class="pipe-history-connection-label">Pipe # ${escapeHtml(column.pipe_number || "")}</span>
-                        <div class="pipe-history-header-actions">
+                        <span class="pipe-history-connection-label">Pipe # ${escapeHtml(column.pipe_number || "")}</span>${reliefColumnLabel(column.relief_inspectors)}
+                        ${canEditHistory ? `<div class="pipe-history-header-actions">
                           <a class="pipe-history-inline-action" href="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}">Edit</a>
                           <button class="pipe-history-inline-action danger" type="button" data-delete-pipe-id="${escapeHtml(column.pipeUnitId)}">Delete</button>
-                        </div>
+                        </div>` : ""}
                       </div>
                     </th>`,
                   )
@@ -683,17 +577,15 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
                       .map((column) => {
                         const historicalMeasurement = column.measurementsBySequence?.get(Number(row.element_sequence));
                         return `<td
-                          class="inspection-history-cell history-column-action ${historicalMeasurement ? "inspection-history-cell-filled" : "inspection-history-cell-empty"}"
-                          data-history-pipe-id="${escapeHtml(column.pipeUnitId)}"
-                          data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}"
-                          title="Click to edit this saved pipe. Right-click to delete it."
+                          class="inspection-history-cell ${reliefColumnClass(column.relief_inspectors)} ${canEditHistory ? "history-column-action " : ""}${historicalMeasurement ? "inspection-history-cell-filled" : "inspection-history-cell-empty"}"
+                          ${canEditHistory ? `data-history-pipe-id="${escapeHtml(column.pipeUnitId)}" data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}" title="Click to edit this saved pipe. Right-click to delete it."` : ""}
                         >${escapeHtml(historicalMeasurement?.measured_value ?? "")}</td>`;
                       })
                       .join("")}
                     <td class="inspection-measure-cell">
                       ${
                         planned
-                          ? renderInspectionInputControl(planned, previousMeasurementsBySequence.get(Number(row.element_sequence))?.measured_value ?? null)
+                          ? renderInspectionInputControl(planned)
                           : activeInspection
                             ? `<span class="inspection-sheet-not-due">${escapeHtml(row.frequency === "rotating" ? "Rotating" : "")}</span>`
                             : hasPendingNextPipe
@@ -719,10 +611,8 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
                       column.requiresManagerApproval,
                     );
                     return `<td
-                      class="inspection-history-result-cell history-column-action"
-                      data-history-pipe-id="${escapeHtml(column.pipeUnitId)}"
-                      data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}"
-                      title="Click to edit this saved pipe. Right-click to delete it."
+                      class="inspection-history-result-cell ${reliefColumnClass(column.relief_inspectors)} ${canEditHistory ? "history-column-action" : ""}"
+                      ${canEditHistory ? `data-history-pipe-id="${escapeHtml(column.pipeUnitId)}" data-edit-url="/workflow/history/edit/${encodeURIComponent(column.pipeUnitId)}" title="Click to edit this saved pipe. Right-click to delete it."` : ""}
                     >${escapeHtml(resultLabel)}</td>`;
                   })
                   .join("")}
@@ -1137,6 +1027,7 @@ function layout({ title, sidebar, content, theme = "Light" }) {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escapeHtml(title)}</title>
     <link rel="stylesheet" href="/public/styles.css" />
+    <script defer src="/public/live-inspection.js?v=2"></script>
     </head>
     <body data-theme="${theme === "Dark" ? "dark" : "light"}">
       <div class="benoit-app-frame">
@@ -1591,79 +1482,13 @@ function layout({ title, sidebar, content, theme = "Light" }) {
           };
 
           const getEffectiveValue = (element) => {
-            const normalizeNumericTextForEntry = (value) => {
-              const text = String(value ?? "").trim();
-              if (!text) return "";
-              if (!/^-?\\d+(?:\\.\\d+)?$/.test(text)) return text;
-              return text.replace(/(\\.\\d*?)0+$/, "$1").replace(/\\.$/, "");
-            };
-            const countDecimalPlacesForEntry = (value) => {
-              const text = normalizeNumericTextForEntry(value);
-              if (!text.includes(".")) return 0;
-              return text.split(".")[1].length;
-            };
-            const normalizeNumericMeasurementValue = (rawValue, targetElement) => {
-              const text = String(rawValue ?? "").trim();
-              if (!text) return "";
-              const nominalText = String(targetElement.dataset.nominal || "").trim();
-              const minText = String(targetElement.dataset.min || "").trim();
-              const maxText = String(targetElement.dataset.max || "").trim();
-              const unsignedOffsetText = /^\.?\d+$/.test(text) && !text.includes(".");
-              const isOffsetEntry =
-                nominalText !== "" &&
-                !Number.isNaN(Number(nominalText)) &&
-                (/^[+-]/.test(text) ||
-                  text.startsWith(".") ||
-                  unsignedOffsetText);
-              if (isOffsetEntry) {
-                const sign = text.startsWith("-") ? -1 : 1;
-                const offsetText = /^[+-]/.test(text) ? text.slice(1).trim() : text;
-                if (!offsetText) return "";
-                let offset;
-                if (offsetText.startsWith(".")) {
-                  offset = Number(offsetText);
-                } else if (/^\d+$/.test(offsetText)) {
-                  const decimalPlaces = Math.max(
-                    countDecimalPlacesForEntry(nominalText),
-                    countDecimalPlacesForEntry(minText),
-                    countDecimalPlacesForEntry(maxText),
-                    3,
-                  );
-                  offset = Number(offsetText) / Math.pow(10, decimalPlaces);
-                } else {
-                  offset = Number(offsetText);
-                }
-                if (Number.isNaN(offset)) return "";
-                const decimals = Math.max(
-                  countDecimalPlacesForEntry(nominalText),
-                  countDecimalPlacesForEntry(minText),
-                  countDecimalPlacesForEntry(maxText),
-                  3,
-                );
-                return normalizeNumericTextForEntry((Number(nominalText) + sign * offset).toFixed(decimals));
-              }
-              return text;
-            };
-            if (element.classList.contains("measurement-short-input")) {
-              const hiddenTarget = document.getElementById(element.dataset.fullTarget || "");
-              const rawDigits = String(element.value ?? "").replace(/\D/g, "");
-              const tailLength = Number(element.dataset.tailLength || 0);
-              if (tailLength && rawDigits.length !== tailLength) {
-                if (hiddenTarget) hiddenTarget.value = "";
-                return "";
-              }
-              const prefix = String(element.dataset.prefix || "");
-              const fullValue = prefix + rawDigits;
-              if (hiddenTarget) hiddenTarget.value = fullValue;
-              return fullValue;
-            }
             if (element.classList.contains("measurement-checkbox")) {
               const hiddenTarget = document.getElementById(element.dataset.fullTarget || "");
               const checkboxValue = element.checked ? "Yes" : "No";
               if (hiddenTarget) hiddenTarget.value = checkboxValue;
               return checkboxValue;
             }
-            return normalizeNumericMeasurementValue(element.value, element);
+            return String(element.value ?? "").trim();
           };
 
           const isFilled = (element) => {
@@ -1752,16 +1577,6 @@ function layout({ title, sidebar, content, theme = "Light" }) {
           };
 
           const evaluate = (element) => {
-            if (element.classList.contains("measurement-short-input")) {
-              const sanitized = String(element.value ?? "").replace(/\D/g, "");
-              const tailLength = Number(element.dataset.tailLength || 0);
-              if (tailLength > 0) {
-                element.value = sanitized.slice(0, tailLength);
-              } else {
-                element.value = sanitized;
-              }
-            }
-
             const rawValue = getEffectiveValue(element);
             if (!rawValue) {
               applyState(element, null);
@@ -1778,7 +1593,7 @@ function layout({ title, sidebar, content, theme = "Light" }) {
             }
 
             const numericValue = Number(rawValue);
-            if (Number.isNaN(numericValue)) {
+            if (!Number.isFinite(numericValue)) {
               applyState(element, "fail");
               updateOverallResult();
               return;
@@ -1882,9 +1697,7 @@ function layout({ title, sidebar, content, theme = "Light" }) {
               }
               window.scrollTo({ top: currentScrollY, left: window.scrollX });
               const focusTarget =
-                isCompletingInspection
-                  ? nextWorkspace.querySelector("[data-pipe-number-entry]")
-                  : nextWorkspace.querySelector(".measurement-short-input, .inspection-table-input, .measurement-checkbox");
+                nextWorkspace.querySelector(".inspection-table-input, .measurement-checkbox, [data-pipe-number-entry]");
               if (focusTarget) {
                 focusTarget.focus();
                 if (typeof focusTarget.select === "function" && !focusTarget.classList.contains("measurement-checkbox")) {
@@ -1948,6 +1761,28 @@ function baseSidebar(req) {
     }
   `;
 }
+
+registerBreakReportRoutes(app, callBridge, (req, content) => layout({
+  title: "Admin Breaks", sidebar: baseSidebar(req), theme: req.session.themeMode,
+  content: `${renderWorkflowHeader(req)}${content}`,
+}));
+
+registerInspectionBreakRoutes(app, callBridge);
+
+registerMoldApprovalRoutes(app, callBridge, (req, content) => layout({
+  title: "Mold Approval", sidebar: baseSidebar(req), theme: req.session.themeMode,
+  content: `${renderWorkflowHeader(req)}${renderWorkflowNav("/workflow/mold-approval", req)}${content}`,
+}));
+
+registerLunchInspectionRoutes(app, callBridge, (req, content) => layout({
+  title: "Lunch Inspections", sidebar: baseSidebar(req), theme: req.session.themeMode,
+  content: `${renderWorkflowHeader(req)}${renderWorkflowNav("/workflow/lunch", req)}${content}`,
+}));
+
+registerPipeReportRoutes(app, callBridge, (req, content) => layout({
+  title: "Live Pipe Report", sidebar: baseSidebar(req), theme: req.session.themeMode,
+  content: `${renderWorkflowHeader(req)}${renderWorkflowNav("/workflow/pipe-report", req)}${content}`,
+}));
 
 async function ensureInitialized() {
   await callBridge("initialize");
@@ -2253,42 +2088,21 @@ app.get("/workflow/inspection", async (req, res, next) => {
   try {
     if (!req.session.inspector || !req.session.sessionRecord) return res.redirect("/");
     const inspector = req.session.inspector;
-    const selection = {
-      productionNumber: req.query.productionNumber || req.session.selection?.productionNumber || "",
-      sizeLabel: req.query.sizeLabel || req.session.selection?.sizeLabel || "",
-      weightLabel: req.query.weightLabel || req.session.selection?.weightLabel || "",
-      connectionLabel: req.query.connectionLabel || req.session.selection?.connectionLabel || "",
-      endType: req.query.endType || req.session.selection?.endType || "",
-      recipeName: req.query.recipeName || req.session.selection?.recipeName || "",
-      pipeNumber: req.session.selection?.pipeNumber || "",
-      inspectionScope: req.query.inspectionScope || req.session.selection?.inspectionScope || "standard",
-    };
-    req.session.selection = selection;
-    if (selection.sizeLabel || selection.weightLabel || selection.connectionLabel) {
-      await callBridge("remember_inspection_entry_values", {
-        branch: inspector.branch,
-        size_label: selection.sizeLabel,
-        weight_label: selection.weightLabel,
-        connection_label: selection.connectionLabel,
-      });
-    }
-
+    const previousSelection = req.session.selection || {};
     const workOrders = await callBridge("get_open_work_orders", { branch: inspector.branch });
-    const entryOptions = await callBridge("get_inspection_entry_options", { branch: inspector.branch });
+    const resolved = resolveWorkOrderSelection(workOrders, req.query, previousSelection);
+    const selection = resolved.selection;
     const productionNumbers = [...new Set(workOrders.map((item) => item.production_number))].sort();
-    if (!selection.productionNumber && productionNumbers.length) {
-      selection.productionNumber = productionNumbers[0];
+    if (resolved.changed) {
+      req.session.activeInspection = null;
+      req.session.showInspectionSheet = false;
     }
     const lookupDescription = buildInspectionConnectionLabel(selection);
-    const recipeCandidates = lookupDescription
-      ? await callBridge("find_recipe_candidates", { operation_description: lookupDescription, branch: inspector.branch })
+    const hasWorkOrderDetails = [selection.sizeLabel, selection.weightLabel, selection.connectionLabel, selection.endType].every(Boolean);
+    const recipeCandidates = hasWorkOrderDetails
+      ? await callBridge("find_recipe_candidates", { operation_description: selection.operationDescription, branch: inspector.branch })
       : [];
-    if (selection.recipeName && !recipeCandidates.some((item) => item.recipe_name === selection.recipeName)) {
-      selection.recipeName = "";
-    }
-    if (!selection.recipeName && recipeCandidates.length) {
-      selection.recipeName = recipeCandidates[0].recipe_name;
-    }
+    selection.recipeName = chooseInspectionRecipe(recipeCandidates, selection.recipeName);
     req.session.selection = selection;
     const activeInspection = req.session.activeInspection || null;
     const recipeDefinition = selection.recipeName
@@ -2305,14 +2119,16 @@ app.get("/workflow/inspection", async (req, res, next) => {
         })
       : null;
     const history = existingPipe ? await callBridge("get_pipe_attempt_history", { pipe_unit_id: existingPipe.id }) : [];
+    if (activeInspection) activeInspection.relief_inspectors = history.find(attempt => String(attempt.id) === String(activeInspection.attempt_id))?.relief_inspectors || [];
+
     const allPipeRows = lookupDescription && selection.productionNumber
       ? await callBridge("search_pipe_units", {
           branch: inspector.branch,
           production_number: selection.productionNumber,
+          operation_description: lookupDescription,
         })
       : [];
     const relevantPipeRows = allPipeRows
-      .filter((item) => item.operation_description === lookupDescription)
       .sort((a, b) => {
         const aNum = Number(a.pipe_number);
         const bNum = Number(b.pipe_number);
@@ -2334,6 +2150,7 @@ app.get("/workflow/inspection", async (req, res, next) => {
         pipeUnitId: pipeRow.id,
         pipe_number: pipeRow.pipe_number,
         status: pipeRow.current_status,
+        relief_inspectors: latestAttempt.relief_inspectors || [],
         attemptStatus: latestAttempt.status,
         requiresManagerApproval: Boolean(latestAttempt.requires_manager_approval),
         measurementsBySequence: new Map(measurements.map((item) => [Number(item.element_sequence), item])),
@@ -2344,24 +2161,24 @@ app.get("/workflow/inspection", async (req, res, next) => {
       ${renderWorkflowHeader(req)}
       ${renderNotice(req.session.notice)}
       ${renderWorkflowNav("/workflow/inspection", req)}
+      ${renderBreakControls(req.breakState || {version:0,original_name:inspector.name,acting_name:inspector.name})}
       <details class="card inspection-entry-panel"${showWorksheet ? "" : " open"}>
         <summary class="section-title">Inspection Entry</summary>
         <form method="get" action="/workflow/inspection" class="form-grid inspection-entry-form" id="inspection-selection-form">
-          <div class="field"><label>Production Number / WO</label><select name="productionNumber" onchange="this.form.recipeName.value=''; this.form.submit();">${renderOptions(productionNumbers, selection.productionNumber, (item) => item, (item) => item)}</select></div>
+          <input type="hidden" name="_coverage_version" value="${req.breakState?.version || 0}" />
+          <div class="field"><label>Production Number / WO</label><select name="productionNumber" onchange="this.form.operationDescription.value=''; this.form.recipeName.value=''; this.form.submit();">${renderOptions(productionNumbers, selection.productionNumber, (item) => item, (item) => item)}</select></div>
+          <div class="field"><label>Description</label><select name="operationDescription" required onchange="this.form.recipeName.value=''; this.form.submit();"><option value="">Select the WO description</option>${renderOptions(resolved.descriptions, selection.operationDescription, (item) => item.operation_description, (item) => `${item.operation_id ? item.operation_id + ' - ' : ''}${item.operation_description}`)}</select></div>
           <div class="inspection-entry-inline-row">
-            <div class="field"><label>Size <span class="required-marker" aria-hidden="true">*</span></label><input name="sizeLabel" list="size-options" value="${escapeHtml(selection.sizeLabel)}" oninput="this.form.recipeName.value='';" required /></div>
-            <div class="field"><label>Weight <span class="required-marker" aria-hidden="true">*</span></label><input name="weightLabel" list="weight-options" value="${escapeHtml(selection.weightLabel)}" oninput="this.form.recipeName.value='';" required /></div>
-            <div class="field"><label>Connection <span class="required-marker" aria-hidden="true">*</span></label><input name="connectionLabel" list="connection-options" value="${escapeHtml(selection.connectionLabel)}" oninput="this.form.recipeName.value='';" required /></div>
-            <div class="field"><label>Box / Pin <span class="required-marker" aria-hidden="true">*</span></label><select name="endType" onchange="this.form.recipeName.value='';" required><option value=""></option><option value="BOX" ${selection.endType === "BOX" ? "selected" : ""}>Box</option><option value="PIN" ${selection.endType === "PIN" ? "selected" : ""}>Pin</option></select></div>
+            <div class="field"><label>Size</label><input name="sizeLabel" value="${escapeHtml(selection.sizeLabel)}" readonly /></div>
+            <div class="field"><label>Weight</label><input name="weightLabel" value="${escapeHtml(selection.weightLabel)}" readonly /></div>
+            <div class="field"><label>Connection</label><input name="connectionLabel" value="${escapeHtml(selection.connectionLabel)}" readonly /></div>
+            <div class="field"><label>Box / Pin</label><input name="endType" value="${escapeHtml(selection.endType)}" readonly /></div>
           </div>
-          <datalist id="size-options">${(entryOptions?.size_options || []).map((item) => `<option value="${escapeHtml(item)}"></option>`).join("")}</datalist>
-          <datalist id="weight-options">${(entryOptions?.weight_options || []).map((item) => `<option value="${escapeHtml(item)}"></option>`).join("")}</datalist>
-          <datalist id="connection-options">${(entryOptions?.connection_options || []).map((item) => `<option value="${escapeHtml(item)}"></option>`).join("")}</datalist>
-          <div class="field"><label>Digital IRR</label><select name="recipeName"><option value=""></option>${renderOptions(recipeCandidates, selection.recipeName, (item) => item.recipe_name, (item) => item.display_name || item.recipe_name)}</select></div>
+          ${!selection.operationDescription ? `<p>Select a description to fill the inspection details from the work order.</p>` : !hasWorkOrderDetails ? `<p>The selected WO description does not contain size, weight, connection and Box/Pin. Select the description with the connection specifications.</p>` : !recipeCandidates.length ? `<p>No matching Digital IRR was found for this description. Have Quality check the recipe setup before starting.</p>` : !selection.recipeName ? `<p>More than one Digital IRR matches these specifications. Select the correct Digital IRR below.</p>` : ""}
+          <div class="field"><label>Digital IRR</label><select name="recipeName" required onchange="this.form.submit();"><option value="">${recipeCandidates.length ? 'Select matching Digital IRR' : 'No matching Digital IRR'}</option>${renderOptions(recipeCandidates, selection.recipeName, (item) => item.recipe_name, (item) => item.display_name || item.recipe_name)}</select></div>
           <div class="field"><label>Inspection Scope</label><select name="inspectionScope"><option value="standard" ${selection.inspectionScope === "full" ? "" : "selected"}>Standard Inspection</option><option value="full" ${selection.inspectionScope === "full" ? "selected" : ""}>Full Inspection</option></select></div>
           <div class="actions">
-            <button class="button secondary" type="submit">Load Digital IRR Options</button>
-            <button class="button workflow-action-button" type="submit" formaction="/workflow/start" formmethod="post">Start Inspection</button>
+            <button class="button workflow-action-button" type="submit" formaction="/workflow/start" formmethod="post" ${selection.recipeName && hasWorkOrderDetails ? "" : "disabled"}>Start Inspection</button>
           </div>
         </form>
       </details>
@@ -2411,8 +2228,10 @@ app.get("/workflow/inspection", async (req, res, next) => {
           recipeDefinition,
           selection,
           sessionRecord: req.session.sessionRecord,
-          inspectorName: req.session.inspector?.name,
+          inspectorName: req.breakState?.acting_name || req.session.inspector?.name,
+          breakVersion: req.breakState?.version || 0,
           historyColumns,
+          canEditHistory: canEditInspectionHistory(req.session.inspector),
         }) : ""}
         ${history.length ? `<h3 class="section-title">Pipe History</h3>${renderTable(history)}` : ""}
       </div>
@@ -2433,7 +2252,7 @@ app.get("/workflow/history", async (req, res, next) => {
     const hasInspectionSession = Boolean(req.session.sessionRecord?.id);
     if (!hasInspectionSession && !isAdmin) return res.redirect("/");
     req.session.canAccessAdmin = Boolean(isAdmin);
-    const canManage = Boolean(hasInspectionSession);
+    const canManage = Boolean(hasInspectionSession) && canEditInspectionHistory(inspector);
     const canViewAllHistory = Boolean(isAdmin);
     const requestedHistoryView = String(req.query.historyView || "").trim().toLowerCase();
     const historyView =
@@ -2484,7 +2303,7 @@ app.get("/workflow/history", async (req, res, next) => {
         ? attempts.some((attempt) => String(attempt.location_name || "").trim() === currentLocationName)
         : true;
       const matchesCurrentInspector = currentInspectorName
-        ? attempts.some((attempt) => String(attempt.inspector_name || "").trim() === currentInspectorName)
+        ? attempts.some((attempt) => [attempt.inspector_name, attempt.original_inspector_name, ...(attempt.relief_inspectors || []).map(person => person.name)].some(name => String(name || "").trim() === currentInspectorName))
         : true;
       if (historyView === "machine" && !matchesCurrentMachine) continue;
       if (historyView === "mine" && !matchesCurrentInspector) continue;
@@ -2574,6 +2393,7 @@ app.get("/workflow/history", async (req, res, next) => {
         pipeUnitId: pipeRow.id,
         pipeNumber: pipeRow.pipe_number,
         status: pipeRow.current_status,
+        relief_inspectors: latestAttempt.relief_inspectors || [],
         attemptStatus: latestAttempt.status,
         requiresManagerApproval: Boolean(latestAttempt.requires_manager_approval),
         measurementsBySequence: new Map(measurements.map((item) => [Number(item.element_sequence), item])),
@@ -2642,7 +2462,7 @@ app.get("/workflow/history", async (req, res, next) => {
   }
 });
 
-app.get("/workflow/history/edit/:pipeUnitId", async (req, res, next) => {
+app.get("/workflow/history/edit/:pipeUnitId", requireHistoryEditor, async (req, res, next) => {
   try {
     if (!req.session.inspector || !req.session.sessionRecord) return res.redirect("/");
     const pipeRow = await callBridge("get_pipe_unit_by_id", { pipe_unit_id: req.params.pipeUnitId });
@@ -2730,7 +2550,7 @@ app.get("/workflow/history/edit/:pipeUnitId", async (req, res, next) => {
   }
 });
 
-app.post("/workflow/history/edit/:pipeUnitId", async (req, res, next) => {
+app.post("/workflow/history/edit/:pipeUnitId", requireHistoryEditor, async (req, res, next) => {
   try {
     if (!req.session.inspector || !req.session.sessionRecord) return res.redirect("/");
     await callBridge("update_pipe_unit", {
@@ -2774,7 +2594,7 @@ app.post("/workflow/history/edit/:pipeUnitId", async (req, res, next) => {
   }
 });
 
-app.post("/workflow/history/delete", async (req, res, next) => {
+app.post("/workflow/history/delete", requireHistoryEditor, async (req, res, next) => {
   try {
     if (!req.session.inspector || !req.session.sessionRecord) return res.redirect("/");
     const redirectTo = String(req.body.redirectTo || "/workflow/history");
@@ -3070,54 +2890,26 @@ app.get("/workflow/ncr", async (req, res, next) => {
 app.post("/workflow/start", async (req, res, next) => {
   try {
     const previousSelection = req.session.selection || {};
-    const bodyValue = (name, fallback = "") =>
-      Object.prototype.hasOwnProperty.call(req.body, name)
-        ? req.body[name] || ""
-        : previousSelection[name] || fallback;
-    const selection = {
-      productionNumber: bodyValue("productionNumber"),
-      sizeLabel: bodyValue("sizeLabel"),
-      weightLabel: bodyValue("weightLabel"),
-      connectionLabel: bodyValue("connectionLabel"),
-      endType: bodyValue("endType"),
-      recipeName: bodyValue("recipeName"),
-      pipeNumber: bodyValue("pipeNumber"),
-      inspectionScope: bodyValue("inspectionScope", "standard") || "standard",
-    };
-    req.session.selection = selection;
-    req.session.showInspectionSheet = true;
     const inspector = req.session.inspector;
     const sessionRecord = req.session.sessionRecord;
-    await callBridge("remember_inspection_entry_values", {
-      branch: inspector?.branch,
-      size_label: selection.sizeLabel,
-      weight_label: selection.weightLabel,
-      connection_label: selection.connectionLabel,
-    });
+    if (!inspector || !sessionRecord) return res.redirect("/");
+    const workOrders = await callBridge("get_open_work_orders", { branch: inspector.branch });
+    const resolved = resolveWorkOrderSelection(workOrders, req.body, previousSelection);
+    const selection = resolved.selection;
+    req.session.selection = selection;
+    req.session.showInspectionSheet = true;
+    if (resolved.changed) req.session.activeInspection = null;
     const lookupDescription = buildInspectionConnectionLabel(selection);
-    const hasRequiredConnectionDetails = [
-      selection.sizeLabel,
-      selection.weightLabel,
-      selection.connectionLabel,
-      selection.endType,
-    ].every((value) => String(value || "").trim());
+    const hasRequiredConnectionDetails = [selection.operationDescription, selection.sizeLabel, selection.weightLabel, selection.connectionLabel, selection.endType].every(Boolean);
     if (!hasRequiredConnectionDetails) {
-      req.session.notice = { kind: "warning", message: "Enter size, weight, connection, and Box/Pin before starting an inspection." };
+      req.session.notice = { kind: "warning", message: "Select a WO description containing size, weight, connection and Box/Pin before starting an inspection." };
       return res.redirect("/workflow/inspection");
     }
-    if (!selection?.pipeNumber) {
-      req.session.activeInspection = null;
-      req.session.notice = {
-        kind: "info",
-        message: "Inspection sheet opened. Enter the pipe number in the worksheet header to start or resume that pipe.",
-      };
-      return res.redirect("/workflow/inspection");
-    }
-    const existingPipe = await callBridge("get_pipe_unit", {
+    const existingPipe = selection.pipeNumber ? await callBridge("get_pipe_unit", {
       production_number: selection.productionNumber,
       operation_description: lookupDescription,
       pipe_number: selection.pipeNumber,
-    });
+    }) : null;
     if (existingPipe && ["completed", "scrapped"].includes(String(existingPipe.current_status || "").toLowerCase())) {
       req.session.activeInspection = null;
       req.session.notice = {
@@ -3127,19 +2919,13 @@ app.post("/workflow/start", async (req, res, next) => {
       };
       return res.redirect("/workflow/inspection");
     }
-    let recipeName = selection.recipeName;
     const recipeCandidates = await callBridge("find_recipe_candidates", {
-      operation_description: lookupDescription,
+      operation_description: selection.operationDescription,
       branch: inspector.branch,
     });
-    if (recipeName && !recipeCandidates.some((item) => item.recipe_name === recipeName)) {
-      recipeName = "";
-    }
-    if (!recipeName && recipeCandidates.length === 1) {
-      recipeName = recipeCandidates[0].recipe_name;
-    }
+    const recipeName = chooseInspectionRecipe(recipeCandidates, selection.recipeName);
     if (!recipeName) {
-      req.session.notice = { kind: "warning", message: "Load and choose a Digital IRR before starting the inspection." };
+      req.session.notice = { kind: "warning", message: "Select a matching Digital IRR for the WO description before starting the inspection." };
       return res.redirect("/workflow/inspection");
     }
     selection.recipeName = recipeName;
@@ -3147,6 +2933,11 @@ app.post("/workflow/start", async (req, res, next) => {
     const recipeDefinition = await callBridge("get_recipe_elements", { recipe_name: recipeName, branch: inspector.branch });
     if (!recipeDefinition?.elements?.length) {
       req.session.notice = { kind: "warning", message: "The selected Digital IRR does not have any elements to inspect." };
+      return res.redirect("/workflow/inspection");
+    }
+    if (!selection.pipeNumber) {
+      req.session.activeInspection = null;
+      req.session.notice = { kind: "info", message: "Inspection sheet opened. Enter the first pipe number in the worksheet header to start the inspection." };
       return res.redirect("/workflow/inspection");
     }
     const activeInspection = await callBridge("create_inspection_attempt", {
@@ -3222,6 +3013,10 @@ app.post("/workflow/complete", async (req, res, next) => {
   try {
     const active = req.session.activeInspection;
     if (!active) return res.redirect("/workflow");
+    if (String(req.body.attempt_id || "") !== String(active.attempt_id)) {
+      req.session.notice = { kind: "warning", message: "This worksheet belongs to a different inspection attempt. Check the current pipe number before entering measurements." };
+      return res.redirect("/workflow/inspection");
+    }
     const measurements = active.inspection_plan.map((element) => ({
       element_sequence: element.element_sequence,
       element_description: element.element_description,
@@ -3232,7 +3027,7 @@ app.post("/workflow/complete", async (req, res, next) => {
       nominal: element.nominal,
       min: element.min,
       max: element.max,
-      measured_value: req.body[`element_${element.element_sequence}`],
+      measured_value: submittedMeasurementValue(element, req.body),
       inspected_this_pipe: true,
     }));
     const missingMeasurements = measurements.filter((measurement) => {
@@ -3287,6 +3082,7 @@ app.post("/workflow/complete", async (req, res, next) => {
         notes: combinedNotes,
         manager_name: req.body.manager_name || "",
         manager_reason: req.body.manager_reason || "",
+        coverage_version: req.breakState?.version,
         ncr_data: {
           tier_code: req.body.tier_code || "",
           nonconformance: req.body.nonconformance || "",
@@ -3296,9 +3092,6 @@ app.post("/workflow/complete", async (req, res, next) => {
     });
     req.session.activeInspection = null;
     req.session.showInspectionSheet = true;
-    if (req.session.selection) {
-      req.session.selection.pipeNumber = incrementPipeNumber(active.pipe_number || req.session.selection.pipeNumber || "");
-    }
     req.session.notice = {
       kind: result.pipe_status === "rework" ? "warning" : "success",
       message:
@@ -3310,6 +3103,16 @@ app.post("/workflow/complete", async (req, res, next) => {
             ? "Inspection completed and moved to Scrapped."
             : "Inspection submitted and moved to Re-work.",
     };
+    if (["completed", "rework"].includes(result.pipe_status)) {
+      const savedMessage = req.session.notice.message;
+      try {
+        const nextPipe = await loadNextInspection(req.session, active, callBridge, incrementPipeNumber, buildInspectionConnectionLabel);
+        req.session.notice.message = `${savedMessage} Pipe ${nextPipe} is loaded and ready for inspection.`;
+      } catch (error) {
+        // Completion is already committed. Preserve that result even if starting the next pipe fails.
+        req.session.notice = { kind: "warning", message: `${savedMessage} The next pipe could not be loaded: ${error.message} Check or change the pipe number and use Load Pipe.` };
+      }
+    }
     res.redirect("/workflow/inspection");
   } catch (error) {
     next(error);
@@ -3351,6 +3154,7 @@ app.get("/admin", async (req, res, next) => {
           </form>
         </div>
       </section>
+      ${renderAdminTabs("tools", canViewPipeReport(inspector))}
       ${renderNotice(req.session.notice)}
       <section class="card">
         <h2 class="section-title">Manager Review</h2>

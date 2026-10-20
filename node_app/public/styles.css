@@ -2627,3 +2627,42 @@ td {
     page-break-before: auto;
   }
 }
+
+/* Live station and inspection review */
+.pipe-report-grid-section { min-width:0; margin:18px 0; }
+.pipe-report-station-table { width:100%; }
+.pipe-report-grid-wrap { max-width:100%; }
+.pipe-report-grid th.inspection-col-history { min-width:var(--sheet-col-connection); white-space:normal; }
+.pipe-report-grid th small, .pipe-report-grid td small { display:block; margin-top:4px; font-size:11px; font-weight:400; white-space:normal; }
+.pipe-report-grid .pipe-report-value-pass { background:#e6f2e8; }
+.pipe-report-grid .pipe-report-value-fail { background:#fbe5e5; color:#921f25; }
+.pipe-report-grid .pipe-report-value-pending { background:#fafafa; }
+.pipe-report-grid .pipe-report-value, .pipe-report-grid .inspection-history-result-cell { text-align:center; white-space:normal; overflow-wrap:anywhere; }
+.pipe-report-grid .inspection-history-result-cell { vertical-align:top; padding:10px 7px; }
+.pipe-report-grid [data-verify-inspection] { margin:0; }
+.pipe-report-grid .button { padding:7px; font-size:11px; }
+.pipe-report-grid-caption { position:absolute; width:1px; height:1px; clip-path:inset(50%); overflow:hidden; white-space:nowrap; }
+.pipe-report-live-label { color:#8a1f24; font-weight:700 !important; }
+@media (max-width:900px) { .pipe-report-grid { --sheet-col-num:34px; --sheet-col-element:170px; --sheet-col-dwg:120px; --sheet-col-gauge:90px; } }
+.pipe-report-verified { color:#25703c; font-weight:700; }
+.pipe-report-pagination { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:20px; flex-wrap:wrap; }
+#pipe-report-error { color:#a51e26; font-weight:700; }
+
+/* Relief coverage outlines the complete pipe column, including unmeasured elements. */
+.inspection-sheet-table .relief-pipe-column {
+  border-left: 3px solid #dc2626 !important;
+  border-right: 3px solid #dc2626 !important;
+}
+.inspection-sheet-table thead .relief-pipe-column { border-top: 3px solid #dc2626 !important; }
+.inspection-sheet-table tfoot tr:last-child .relief-pipe-column { border-bottom: 3px solid #dc2626 !important; }
+.relief-pipe-label { display: block; margin-top: .35rem; color: #a31521; font-weight: 700; white-space: normal; }
+.inspection-break-controls { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
+#inspection-break-error:empty, #inspection-break-dialog-error:empty { display: none; }
+#inspection-break-error, #inspection-break-dialog-error { color: #a31521; }
+.inspection-break-dialog { width: min(30rem, calc(100vw - 3rem)); border: 2px solid #a31521; border-radius: .7rem; padding: 1.5rem; background: var(--surface, #fff); color: var(--text, #222); }
+.inspection-break-dialog::backdrop { background: rgba(0,0,0,.6); }
+.inspection-break-dialog label { display: grid; gap: .5rem; margin-bottom: 1rem; }
+.inspection-break-dialog .button { margin: .3rem .3rem .3rem 0; }
+.inspection-break-dialog [hidden] { display: none !important; }
+.inspection-sheet-table .relief-pipe-column .pipe-history-connection-header { flex-direction: column; }
+.inspection-sheet-table .relief-pipe-column .pipe-history-connection-label { flex: none; width: 100%; }

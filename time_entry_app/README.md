@@ -170,3 +170,15 @@ them for the host service account from an elevated prompt:
 ```powershell
 .\scripts\install_host_python_dependencies.ps1
 ```
+# Button diagnostics
+
+IT users can open **Button Diagnostics** in the navigation (or `/admin/click-diagnostics`). It records pointer presses and clicks across the app, browser validation failures, form submissions/cancellations, server receipt, server response with duration and notice outcome, page loads, and script-error occurrence. Filter by button label, station, employee ID, interaction ID, or browser-tab ID. The same interaction ID connects a button press to its form request. Keyboard activation is included. No input values, form bodies, credentials, or error messages are collected.
+
+Use `pointerdown` followed by `click` to confirm the browser saw a press. `invalid` means browser validation blocked submission. `submit_cancelled` means confirmation or app validation cancelled it. `server_received` confirms the request reached the app; `server_response` shows elapsed milliseconds and the app's notice kind (`warning` can accompany HTTP 302). A response does not by itself prove the next page displayed; `page_loaded` from the same browser tab helps confirm navigation. Pointer events on non-button elements help identify clicks landing on an overlay. Disabled controls may produce only a press, and some browsers suppress even that.
+
+Logs start after restarting the updated app and reloading browser clients; they cannot reconstruct earlier clicks. Browser events queue in session storage (up to 200) and retry every five seconds while the tab stays open. Missing events are inconclusive when JavaScript/storage/network fails or a tab closes. Client timestamps and server receipt timestamps can differ; correlate IDs rather than arrival order. Server logs rotate at roughly 5 MiB, keeping four archives (roughly 25 MiB total), under `time_entry_app/data/diagnostics/`; the view reads the latest 1,000 records and shows up to 500 matches. Files are local to this server and excluded from Git. Access to the viewer requires the `it` role, assigned by the existing IT/full-access department and ADP rules (`CNC_TIME_FULL_ACCESS_DEPARTMENT_KEYWORDS` and `CNC_TIME_FULL_ACCESS_ADP_NUMBERS`). Approvers without that role cannot view it, including by direct URL. Sign out and back in after restarting to refresh roles. Logging failures do not block time entry.
+
+
+## Mold approval moved to inspection
+
+Create new mold approval requests in the inspection app’s **Mold Approval** tab. Time Entry retains Change Material and Assistance ASAP, existing notification history/status polling, and the token-protected mold decision callback for outstanding requests. Its notification store and backend are shared with inspection so existing Quality/Teams/SharePoint configuration continues to work.

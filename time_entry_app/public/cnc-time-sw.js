@@ -1,7 +1,8 @@
-const CACHE_NAME = "cnc-time-v6";
+const CACHE_NAME = "cnc-time-v9";
 const ASSETS = [
   "/public/cnc-time.css",
   "/public/cnc-time.js?v=5",
+  "/public/click-diagnostics.js?v=1",
   "/public/cnc-time.webmanifest",
   "/public/BenoitLogoRegistered-Red.png",
   "/public/BenoitIconRegistered-Red.png",
@@ -23,6 +24,7 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  if (new URL(event.request.url).pathname.startsWith("/admin/click-diagnostics")) return;
   event.respondWith(
     fetch(event.request)
       .then((response) => {

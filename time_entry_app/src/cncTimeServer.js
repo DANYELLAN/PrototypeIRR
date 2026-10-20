@@ -6,6 +6,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { callCncBridge } from "./cncTimeBridge.js";
 import { dailyTimeReviewMarkup } from "./dailyTimeReview.js";
+import { createClickDiagnostics, requireIT } from "./clickDiagnostics.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,6 +27,27 @@ app.use(
   }),
 );
 app.use("/public", express.static(path.resolve(__dirname, "..", "public")));
+const clickDiagnostics = createClickDiagnostics(path.resolve(__dirname, "..", "data", "diagnostics"));
+app.post("/diagnostics/events", (req, res) => clickDiagnostics.ingest(req, res));
+app.use(clickDiagnostics.middleware);
+
+app.get("/admin/click-diagnostics", requireIT, async (req, res, next) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    const filter = String(req.query.filter || "").slice(0, 160);
+    const all = await clickDiagnostics.read();
+    const rows = all.filter((event) => !filter || JSON.stringify(event).toLowerCase().includes(filter.toLowerCase())).slice(-500).reverse();
+    res.send(layout({ title: "Button Diagnostics", active: "click-diagnostics", sessionData: req.session.cncUser,
+      body: `<section class="cnc-card"><h1>Button Diagnostics</h1>
+      <p>Press → click → submit → server received → server response. Invalid means a required field or other browser validation blocked submission. Submit cancelled means the operator cancelled confirmation or the app blocked it. A success/info outcome is the app's reported result; an HTTP 302 alone does not prove success.</p>
+      <p>Compare matching interaction IDs. Browser ID links events across pages in one tab. Times below are server receipt times (UTC); hover for the device time. Client events can arrive after server events. A missing event is inconclusive if the device was offline, JavaScript failed, or the tab closed before upload. A press on a disabled button may have no click.</p>
+      <form method="get" action="/admin/click-diagnostics" class="cnc-form"><label>Filter by employee, station, button, interaction or browser ID<input name="filter" value="${escapeHtml(filter)}" /></label><button class="cnc-button" type="submit">Refresh / Filter</button></form>
+      <p>Showing ${rows.length} most recent matching events from the latest 1,000 records. Refresh to see new activity.</p>
+      <div style="overflow:auto"><table><thead><tr><th>Received (UTC)</th><th>Employee / Station</th><th>Event</th><th>Button / Field</th><th>Page / Action</th><th>Result</th><th>Interaction / Browser</th></tr></thead><tbody>
+      ${rows.map((row) => `<tr><td title="Device: ${escapeHtml(row.client_at || "n/a")}">${escapeHtml(row.received_at)}</td><td>${escapeHtml(row.employee)} / ${escapeHtml(row.station)}</td><td>${escapeHtml(row.kind)}${row.disabled ? " (disabled)" : ""}</td><td>${escapeHtml(row.control)}</td><td>${escapeHtml(row.page || row.action)}</td><td>${escapeHtml(row.outcome || "")}${row.status ? ` HTTP ${escapeHtml(row.status)}` : ""}${row.duration_ms != null ? ` · ${escapeHtml(row.duration_ms)} ms` : ""}</td><td><small>${escapeHtml(row.interaction)}<br>${escapeHtml(row.browser)}</small></td></tr>`).join("")}
+      </tbody></table></div></section>` }));
+  } catch (error) { next(error); }
+});
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -285,6 +307,9 @@ function layout({ title, body, sessionData, notice, active = "" }) {
   if (authed && hasRole(sessionData, "approver")) {
     navItems.push({ key: "admin", href: "/admin", label: "Admin Approvals" });
   }
+  if (authed && hasRole(sessionData, "it")) {
+    navItems.push({ key: "click-diagnostics", href: "/admin/click-diagnostics", label: "Button Diagnostics" });
+  }
 
   return `<!doctype html>
   <html lang="en">
@@ -295,6 +320,7 @@ function layout({ title, body, sessionData, notice, active = "" }) {
       <title>${escapeHtml(title)}</title>
       <link rel="manifest" href="/public/cnc-time.webmanifest" />
       <link rel="stylesheet" href="/public/cnc-time.css" />
+      <script defer src="/public/click-diagnostics.js?v=1"></script>
       <script defer src="/public/cnc-time.js?v=5"></script>
     </head>
     <body>
@@ -1797,9 +1823,9 @@ app.get("/notifications", requireOperator, async (req, res, next) => {
       emp_id: req.session.cncUser.employee.emp_id,
       request_id: req.query.watch,
     });
-    const selectedType = ["mold_approval", "change_material", "assistance_asap"].includes(req.query.type)
+    const selectedType = ["change_material", "assistance_asap"].includes(req.query.type)
       ? req.query.type
-      : "mold_approval";
+      : "change_material";
     const workOrderOptions = (context.work_orders || [])
       .map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)
       .join("");
@@ -1809,13 +1835,7 @@ app.get("/notifications", requireOperator, async (req, res, next) => {
     const watchedRequest = (context.requests || []).find((request) => String(request.id) === String(req.query.watch || ""));
 
     let requestForm = "";
-    if (selectedType === "mold_approval") {
-      requestForm = `<form method="post" action="/notifications" class="cnc-form two-col">
-        <input type="hidden" name="notification_type" value="mold_approval" />
-        <label class="full"><span>Work Order</span><select name="work_order" required><option value="">Select work order</option>${workOrderOptions}</select></label>
-        <button class="cnc-button" type="submit">Request Mold Approval</button>
-      </form>`;
-    } else if (selectedType === "change_material") {
+    if (selectedType === "change_material") {
       requestForm = `<form method="post" action="/notifications" class="cnc-form two-col">
         <input type="hidden" name="notification_type" value="change_material" />
         <label><span>Work Order</span><select name="work_order" required><option value="">Select work order</option>${workOrderOptions}</select></label>
@@ -1849,8 +1869,8 @@ app.get("/notifications", requireOperator, async (req, res, next) => {
         active: "notifications",
         body: `<section class="cnc-hero compact"><div><p class="eyebrow">Operations</p><h2>Notifications</h2></div></section>
         ${watchPanel}
+        <p>Mold approval requests are now in the inspection app under <strong>Mold Approval</strong>. Existing requests remain in Recent Notifications below.</p>
         <nav class="notification-tabs" aria-label="Notification type">
-          <a class="${selectedType === "mold_approval" ? "active" : ""}" href="/notifications?type=mold_approval">Mold Approval</a>
           <a class="${selectedType === "change_material" ? "active" : ""}" href="/notifications?type=change_material">Change Material</a>
           <a class="${selectedType === "assistance_asap" ? "active" : ""}" href="/notifications?type=assistance_asap">Assistance ASAP</a>
         </nav>
@@ -1865,7 +1885,8 @@ app.get("/notifications", requireOperator, async (req, res, next) => {
 });
 
 app.post("/notifications", requireOperator, async (req, res) => {
-  const notificationType = String(req.body.notification_type || "mold_approval");
+  const notificationType = String(req.body.notification_type || "change_material");
+  if (notificationType === "mold_approval") return res.status(410).send("Mold approval requests have moved to the inspection app. Open Mold Approval there.");
   try {
     const result = await callCncBridge("submit_notification_request", {
       employee: req.session.cncUser.employee,

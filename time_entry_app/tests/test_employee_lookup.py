@@ -130,7 +130,7 @@ class EmployeeLookupTests(unittest.TestCase):
         result = lookup_employee_by_adp("991", employees)
 
         self.assertIsNotNone(result)
-        self.assertEqual(result["roles"], ["operator", "exporter", "approver"])
+        self.assertEqual(result["roles"], ["operator", "exporter", "approver", "it"])
 
     def test_it_keyword_does_not_match_inside_quality(self):
         employees = [

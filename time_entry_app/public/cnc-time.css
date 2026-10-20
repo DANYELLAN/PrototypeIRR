@@ -719,8 +719,6 @@ button, input, select, textarea { font: inherit; }
   border-color: rgba(158, 27, 30, 0.2);
 }
 
-.data-card h3,
-.cnc-card h3,
 .daily-time-review {
   width: min(880px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);
@@ -748,6 +746,8 @@ button, input, select, textarea { font: inherit; }
   .daily-review-actions form button { width: 100%; }
 }
 
+.data-card h3,
+.cnc-card h3,
 .cnc-section-header h3,
 .panel-title-row h3 {
   margin: 0 0 8px;
