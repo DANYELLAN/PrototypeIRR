@@ -182,3 +182,167 @@ Logs start after restarting the updated app and reloading browser clients; they 
 ## Mold approval moved to inspection
 
 Create new mold approval requests in the inspection app’s **Mold Approval** tab. Time Entry retains Change Material and Assistance ASAP, existing notification history/status polling, and the token-protected mold decision callback for outstanding requests. Its notification store and backend are shared with inspection so existing Quality/Teams/SharePoint configuration continues to work.
+
+
+## Offline operation in the browser
+
+App installation is optional and is not offered by the current UI. Use trusted HTTPS,
+sign in, and open Time Entry once while connected. `/time` opens Review / Corrections
+and prepares available WO operations and detail options for offline use. If the server
+cannot be reached, the prepared browser worksheet opens as the offline fallback. Its status strip distinguishes
+HTTPS setup, preparation, connection loss, and the number of actions waiting to upload.
+
+The tablet stores drafts, timer starts, lunch/break transitions, manual time, and misc
+time in IndexedDB. Timer timestamps are captured when the operator acts, not when an
+upload eventually succeeds. With Relief breaks remain productive; Lunch and No Relief
+breaks are deducted. Downtime for the active operation is deducted from its timer.
+Closing/reopening the prepared page retains the timer and queued actions.
+
+Uploads run in order while the page is open, including after reconnect and foreground
+resume. Every event has a UUID. `tablet_time_events`, `tablet_time_timers`, and insertion
+into `approval_queue` commit together in the local SQLite database. Retrying a request
+after a lost response returns the saved receipt. Employee, machine and shift must match
+the authenticated session; new sign-ins need connectivity. Missing WOs or other server
+conflicts keep the queued data for review rather than silently changing it.
+
+Time from tablet timers and manual/misc submissions enters the existing supervisor
+approval queue; Acumatica export and daily over-limit confirmation remain server-side.
+Existing timers started in the original UI must be stopped there before starting a new
+tablet timer. Review/corrections remain available at `/time?traditional=1` while online.
+Checklist, support, maintenance and approvals require connectivity. Recovery downloads
+are restricted to the currently selected local worksheet, not other employees' profiles.
+
+On Server2-PC, trusted HTTPS is on port 3443. The CA's public download is
+`http://10.100.100.224:3100/tablet-ca.crt`; private keys stay under the secured
+`C:\ProgramData\Benoit\Apps\tls` folder. The background task `Benoit Time Entry Server`
+starts after reboot and runs the protected `Run-BenoitApp.ps1` watchdog. Sessions may
+require sign-in after a server restart; queued tablet data remains on the tablet.
+Reserve Server2-PC's Wi-Fi address in the router so bookmarks and certificate SANs
+remain valid. Renew the server certificate before its expiry, keeping the same CA.
+
+The worker at `/cnc-time-sw.js` has root scope and caches only static assets. Login,
+administration, API responses and personalized server pages are not placed in its cache.
+Cookies are named `benoit.time.sid` to avoid collisions with Inspection on the same host.
+Use the same HTTPS address consistently; HTTP and HTTPS store separate local work.
+
+
+### Navigation and active timer controls
+
+The tablet worksheet retains the normal Machine Overview, Time Entry, Daily Checklist,
+Notifications, Maintenance and IT Support tabs while a timer is running or paused.
+Role-specific tabs come from the same navigation definition as the traditional screen;
+their server permissions remain enforced. Leaving and returning to Time Entry does not
+stop its saved timer. The Active Entry card uses the regular app's status and action
+styling. Log Downtime is available alongside Take Break, Lunch, Resume Production and
+Stop And Submit. Active downtime is pinned to the current timer/WO/operation, queues
+through the existing offline event flow and deducts from production time once. A stale
+worksheet cannot attach downtime to a replacement timer. Refresh connected clients
+after restarting the app so offline asset release v15 can install; keep tablet storage
+intact to preserve unsynced work.
+
+
+### Relief identity and handoffs
+
+**Take Break → With Relief → Start Break** prompts the relief operator for an ADP
+number before coverage begins. Connected tablets validate the ADP immediately; offline
+actions preserve the entered ADP for server validation on sync. The server requires an
+active Ennis employee different from the original operator and resolves the name itself.
+Production keeps accruing during relieved coverage. **End Relieved Break** records the
+original operator returning and closes coverage without deducting its minutes.
+
+During a **No Relief** break, **Relief Arrived** prompts for the replacement ADP and
+splits the break at the arrival timestamp. Only the preceding uncovered interval is
+deducted. Both intervals, relief identity, and original operator return are retained in
+the tablet timer/approval audit; the traditional screen keeps the same identity and
+linked intervals in `break_events`. A conversion and its traditional sync record commit
+together. Refresh connected tablets after restarting to install offline asset release v16.
+
+
+### Default Time Entry view
+
+`/time` opens the full Review / Corrections layout while connected. If the server
+cannot be reached, the service worker opens the cached tablet worksheet so prepared
+devices can continue recording offline. The worksheet returns to `/time` when the
+server connection is restored. Existing offline timers and queued actions remain intact;
+the normal page embeds their existing timer/sync controls so they can finish without
+switching the whole page to another layout. Other sections are unchanged. Offline
+asset release v18 restores the offline worksheet fallback.
+
+
+### Maintenance requests to SharePoint
+
+`CNC_TIME_MAINTENANCE_SHAREPOINT_WRITES_ENABLED=true` enables maintenance delivery to
+Benoit Maintenance / Ennis Maintenance Request without enabling other queued writes.
+The global `CNC_TIME_SHAREPOINT_WRITES_ENABLED` setting remains independent.
+Requests are queued locally before sending and background sync retries pending
+maintenance requests on startup and at the configured sync interval (one hour by default).
+The SharePoint list uses an indexed unique text column, `TimeEntryRequestKey`, so
+retries can recover an existing item instead of creating duplicates. The submission
+page reports either sent to SharePoint with its item number, or saved locally and
+waiting to send. SharePoint currently limits the title and description to 255 characters.
+
+
+### IT requests to SharePoint Help Desk
+
+IT Request submissions now target Benoit IT / IT Support Help Desk, replacing the
+legacy IT webhook/outbox path. `CNC_TIME_IT_SHAREPOINT_WRITES_ENABLED=true` enables
+this list independently of maintenance and the global SharePoint write setting.
+Requester name/email, department when available, category, full issue description,
+and machine number are retained. New tickets use Status New and Location Ennis;
+Date of Issue uses Central time. Priority is left for IT to assign.
+
+The local database retains requests before delivery. The existing background sync
+retries pending support requests, and the list's unique indexed `TimeEntryRequestKey`
+column prevents duplicate tickets when a response is lost. Confirmation distinguishes
+sent-to-SharePoint from saved-and-waiting. The legacy outbox can be imported with
+`python time_entry_app/scripts/migrate_it_outbox.py`; imports are repeatable, preserve
+the source file, and ignore supervisor messages.
+
+
+### Full admin access by department or title
+
+`CNC_TIME_FULL_ACCESS_DEPARTMENTS` and `CNC_TIME_FULL_ACCESS_JOB_TITLES` accept
+comma-separated exact matches, ignoring case and extra whitespace. Titles match
+either the normalized position title or ADPJobTitleDesc. Matching either department
+or title grants operator, exporter, approver and IT roles; the active Ennis employee
+requirement still applies. Existing explicit ADP access and IT keyword rules remain.
+Users must sign out and back in to refresh their session roles.
+
+The full-access keyword configuration also includes `integration technologist`, so
+all title levels and location variants containing that phrase receive the same
+access. Active Ennis eligibility remains required.
+
+
+Button Diagnostics includes station tabs for every configured machine/station, plus
+observed stations and an Unassigned tab when pre-selection events exist. All Stations
+shows the combined view. Tab counts reflect date and text filters across all retained log files; station, date and
+text filters apply before selecting the newest 500 matching events. Tabs preserve the
+text filter and the selected station remains selected when refreshing. IT access is
+required for every station view.
+
+Button Diagnostics supports inclusive From/To dates in America/Chicago (Central Time).
+Set both dates to the same day for a single-date search. Either boundary can be left
+blank. Station tabs preserve all filters, Clear Dates preserves station and text,
+and reversed or invalid ranges display a validation message. Receipt times are shown
+in Central Time; available log dates are displayed. The current log and all four
+retained rotation files are searched before applying the 500-row display limit.
+
+Lunch reminders follow the signed-in shift in both connected and offline Time Entry:
+Day Shift (40) at 11:30 AM, Night Shift (41) at 10:00 PM, in America/Chicago.
+The same styled Yes/No dialog starts the existing lunch action or dismisses the
+reminder. Daily dismissal remains scoped to the operator, station and shift.
+
+
+Acumatica tenant cutover: the Benoit tenant uses the Labor / 25.100.001 endpoint.
+Its LaborEntry Details must include Machine, DetailType and LaborComments, with the
+same mappings as Test. The production cutover timestamp excludes approvals from
+before the switch. Acumatica batch IDs, delivery receipts, status summaries and run
+locks are isolated by tenant: legacy unprefixed tables remain Test history; other
+tenants use separately prefixed tables in the same database. Existing Test receipts
+cannot be used to update a Benoit batch with the same number. No old approvals are
+replayed automatically across the cutover.
+
+Acumatica eligibility is based on the station, not the employee Machinist flag.
+Only CNC machines 1-6 (using the existing machine-to-area mapping) receive Acumatica
+labor payloads. The same rule applies to timer, manual, downtime and approval edits.
+Approval status and the Benoit cutover timestamp remain required for sending.

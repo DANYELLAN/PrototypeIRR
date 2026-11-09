@@ -9,16 +9,25 @@ class MoldApprovalTests(unittest.TestCase):
         self.employee={'adp_number':'123','name':'Test Inspector'}
         self.lookup=patch.object(mold.db,'get_employee_by_adp',return_value=self.employee)
         self.lookup.start(); self.addCleanup(self.lookup.stop)
+        self.operations=patch.object(mold.db,'get_open_work_orders',return_value=[{'production_number':'WO','operation_description':'BOX','operation_id':'0010'}])
+        self.operations.start();self.addCleanup(self.operations.stop)
 
     def test_request_uses_verified_employee_and_active_station(self):
         with patch.object(mold.db,'_fetch_one_dict',return_value={'inspector_adp':'123','location_name':'E-1','logged_out_at':None}), patch.object(mold.notifications,'submit_notification_request',return_value={'id':7}) as send:
-            self.assertEqual(mold.request_mold_approval('123',5,'WO')['id'],7)
-            self.assertEqual(send.call_args.kwargs,{'employee':{'emp_id':'123','full_name':'Test Inspector'},'machine_no':'E-1','notification_type':'mold_approval','work_order':'WO'})
+            self.assertEqual(mold.request_mold_approval('123',5,'WO','BOX')['id'],7)
+            self.assertEqual(send.call_args.kwargs,{'employee':{'emp_id':'123','full_name':'Test Inspector'},'machine_no':'E-1','notification_type':'mold_approval','work_order':'WO','operation_description':'BOX'})
+
+    def test_wrong_or_missing_detail_never_sends(self):
+        with patch.object(mold.notifications,'submit_notification_request') as send:
+            for detail in ['', 'not-this-wo']:
+                with self.assertRaisesRegex(ValueError,'belonging'):
+                    mold.request_mold_approval('123',5,'WO',detail)
+            send.assert_not_called()
 
     def test_closed_or_foreign_session_cannot_request(self):
         with patch.object(mold.notifications,'submit_notification_request') as send:
             for station in [None,{'inspector_adp':'other','location_name':'E-1','logged_out_at':None},{'inspector_adp':'123','location_name':'E-1','logged_out_at':'ended'}]:
-                with patch.object(mold.db,'_fetch_one_dict',return_value=station), self.assertRaises(ValueError):mold.request_mold_approval('123',5,'WO')
+                with patch.object(mold.db,'_fetch_one_dict',return_value=station), self.assertRaises(ValueError):mold.request_mold_approval('123',5,'WO','BOX')
             send.assert_not_called()
 
     def test_ownership_type_and_callback_token_privacy(self):

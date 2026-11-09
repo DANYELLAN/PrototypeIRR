@@ -1,0 +1,12 @@
+.tablet-status{padding:12px 16px;background:#edf5ed;border-left:4px solid #27713c;font-weight:700}.tablet-status.offline{background:#fff4d9;border-color:#ad7600}.tablet-status.setup-required{background:#fce8e8;border-color:#a02020}.operation-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px}.operation-fields label{min-width:0}#timer-clock{font-size:1.35rem;font-weight:700}#feedback:empty{display:none}#feedback{padding:12px;background:#fff4d9}#pending{font-weight:700}[hidden]{display:none!important}@media(max-width:650px){.operation-fields{grid-template-columns:1fr}.benoit-topbar{flex-wrap:wrap}.topbar-status{flex-wrap:wrap}}
+
+#timer-actions .cnc-active-downtime .cnc-form { margin-top: 12px; }
+#timer-actions .tablet-stop-form { margin-top: 18px; }
+#timer-clock { font-family: var(--font-data); }
+
+.tablet-time-embedded .benoit-topbar,.tablet-time-embedded .benoit-tabs,
+.tablet-time-embedded #connection,.tablet-time-embedded #start-card,
+.tablet-time-embedded #workspace > .cnc-grid { display: none !important; }
+.tablet-time-embedded .benoit-app-shell { min-height: 0; padding: 0; }
+.tablet-time-embedded .benoit-main { max-width: none; padding: 0; }
+.tablet-time-embedded #active { margin-top: 0; }

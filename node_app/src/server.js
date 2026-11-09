@@ -1,3 +1,6 @@
+import {enableTabletHttps} from "../../shared/appTransport.js";
+import {registerTabletInspection} from "./tabletInspection.js";
+import { registerLunchPopupRoutes } from "./lunchPopup.js";
 import { registerMoldApprovalRoutes } from "./moldApproval.js";
 import { registerBreakReportRoutes, renderAdminTabs } from "./breakReport.js";
 import { registerInspectionBreakRoutes, renderBreakControls } from "./inspectionBreaks.js";
@@ -5,7 +8,7 @@ import { reliefColumnClass, reliefColumnLabel } from "./inspectionRelief.js";
 import express from "express";
 import { submittedMeasurementValue, loadNextInspection } from "./inspectionFlow.js";
 import { canEditInspectionHistory, createHistoryEditGuard, canViewPipeReport } from "./inspectionPermissions.js";
-import { resolveWorkOrderSelection, chooseInspectionRecipe } from "./inspectionSelection.js";
+import { resolveWorkOrderSelection, chooseInspectionRecipe, INSPECTION_CONNECTION_TYPES } from "./inspectionSelection.js";
 import { registerLunchInspectionRoutes } from "./lunchInspections.js";
 import { registerPipeReportRoutes } from "./pipeReport.js";
 import session from "express-session";
@@ -27,10 +30,17 @@ app.use(express.json({ limit: "12mb" }));
 app.use(
   session({
     secret: process.env.SESSION_SECRET || "autoirr-node-dev",
+    name: "benoit.inspection.sid",
+    cookie: {httpOnly:true,sameSite:"lax",secure:"auto",maxAge:7*24*60*60*1000},
     resave: false,
     saveUninitialized: false,
   }),
 );
+app.get('/inspection-sw.js',(req,res)=>{
+  res.set({'Service-Worker-Allowed':'/','Cache-Control':'no-cache'});
+  res.sendFile(path.resolve(__dirname,'..','public','inspection-sw.js'));
+});
+registerTabletInspection(app,{callBridge,connectionLabel:buildInspectionConnectionLabel,nextPipeNumber:incrementPipeNumber});
 app.use("/public", express.static(path.resolve(__dirname, "..", "public")));
 
 function escapeHtml(value) {
@@ -388,7 +398,6 @@ function renderWorkflowNav(activePath, req = null) {
     ...(hasInspectionSession ? [{ href: "/workflow/inspection", label: "Inspection Entry" }] : []),
     ...(canViewPipeReport(req?.session?.inspector) ? [{ href: "/workflow/pipe-report", label: "Live Pipe Report" }, { href: "/admin/breaks", label: "Breaks" }] : []),
     { href: "/workflow/mold-approval", label: "Mold Approval" },
-    { href: "/workflow/lunch", label: "Lunch Inspection" },
     ...(canViewPipeReport(req?.session?.inspector) ? [{ href: "/workflow/lunch/history", label: "Lunch Inspections History" }] : []),
     { href: "/workflow/history", label: "Pipe History" },
     { href: "/workflow/ncr", label: "NCR Queue" },
@@ -452,10 +461,10 @@ function renderInspectionInputControl(element) {
       <input type="hidden" id="element_full_${element.element_sequence}" name="element_${element.element_sequence}" value="No" />
     </label>`;
   }
-  return `<input class="measurement-input inspection-table-input" data-capture-type="numeric" data-nominal="${escapeHtml(element.nominal ?? "")}" data-min="${escapeHtml(element.min ?? "")}" data-max="${escapeHtml(element.max ?? "")}" placeholder="Full measurement" value="" name="element_${element.element_sequence}" inputmode="decimal" autocomplete="off" required />`;
+  return `<input class="measurement-input inspection-table-input" data-capture-type="numeric" data-nominal="${escapeHtml(element.nominal ?? "")}" data-min="${escapeHtml(element.min ?? "")}" data-max="${escapeHtml(element.max ?? "")}" data-measurement-offset placeholder="Full value or +/- offset" value="" name="element_${element.element_sequence}" inputmode="decimal" autocomplete="off" required />`;
 }
 
-function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, selection, sessionRecord, inspectorName, historyColumns = [], canEditHistory = false, breakVersion = 0 }) {
+function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, selection, sessionRecord, inspectorName, historyColumns = [], canEditHistory = false, breakVersion = 0, breakState = null }) {
   const plan = activeInspection?.inspection_plan || [];
   const planMap = new Map(plan.map((element) => [Number(element.element_sequence), element]));
   const rows = recipeDefinition?.elements?.length ? recipeDefinition.elements : plan;
@@ -480,7 +489,7 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
 
   return `
     <section class="card nested-card inspection-sheet-card">
-      <h3 class="section-title">Current Attempt</h3>
+      ${renderBreakControls(breakState || {version:breakVersion,original_name:inspectorName,acting_name:inspectorName}, activeInspection)}
       <p>${
         activeInspection
           ? `Attempt #${escapeHtml(activeInspection.attempt_no)} | ${activeInspection.is_rework ? "Re-work" : "First inspection"} | ${renderScopeBadge(activeInspection.inspection_scope)}`
@@ -488,17 +497,6 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
             ? "Check the pipe number, then load it to continue inspection."
             : "Enter the pipe number in the table header to start or resume that pipe."
       }</p>
-      ${
-        activeInspection
-          ? `<form method="post" action="/workflow/scope" class="inspection-scope-toggle-form">
-              <input type="hidden" name="_coverage_version" value="${breakVersion}" />
-              <input type="hidden" name="inspectionScope" value="${activeInspection.inspection_scope === "full" ? "standard" : "full"}" />
-              <button class="button secondary compact-button" type="submit">
-                ${activeInspection.inspection_scope === "full" ? "Switch to Standard Inspection" : "Switch to Full Inspection"}
-              </button>
-            </form>`
-          : ""
-      }
       ${
         activeInspection && !plan.length
           ? renderNotice({ kind: "warning", message: "This attempt has no measurement plan yet. Go back to the selection above and make sure a Digital IRR is selected before preparing the inspection." })
@@ -660,7 +658,7 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
           <textarea name="relief_note" placeholder="Example: Relieved inspector at 10:15. I inspected pipes 42-47."></textarea>
         </div>
         <div class="field"><label>Attempt Notes</label><textarea name="notes"></textarea></div>
-        <div class="actions">${activeInspection ? `<button id="complete-inspection-button" class="button" type="submit">Complete Inspection</button>` : ""}</div>
+        <div class="actions">${activeInspection ? `<button id="complete-inspection-button" class="button" type="submit">Load Next Pipe</button>` : ""}</div>
       </form>
     </section>
   `;
@@ -1026,7 +1024,9 @@ function layout({ title, sidebar, content, theme = "Light" }) {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escapeHtml(title)}</title>
+      <script type="module" src="/public/tablet-session-lock.js"></script>
     <link rel="stylesheet" href="/public/styles.css" />
+    <script src="/public/measurement-values.js?v=1"></script>
     <script defer src="/public/live-inspection.js?v=2"></script>
     </head>
     <body data-theme="${theme === "Dark" ? "dark" : "light"}">
@@ -1165,6 +1165,20 @@ function layout({ title, sidebar, content, theme = "Light" }) {
         })();
 
         (function () {
+          const preserveInspectionActions = (nextWorkspace) => {
+            const current = document.getElementById("inspection-break-controls");
+            const next = nextWorkspace.querySelector("#inspection-break-controls");
+            if (!current || !next) return;
+            const currentScope = current.querySelector("#inspection-scope-action-form");
+            const nextScope = next.querySelector("#inspection-scope-action-form");
+            if (currentScope && nextScope) currentScope.innerHTML = nextScope.innerHTML;
+            next.replaceWith(current);
+            for (const id of ["inspection-break-dialog", "lunch-inspection-dialog"]) {
+              const currentDialog = document.getElementById(id);
+              const nextDialog = nextWorkspace.querySelector("#" + id);
+              if (currentDialog && nextDialog) nextDialog.replaceWith(currentDialog);
+            }
+          };
           const initializeInspectionWorkspace = (root = document) => {
           const inspectionSheetWrap = root.querySelector(".inspection-sheet-wrap");
           if (inspectionSheetWrap) {
@@ -1283,6 +1297,7 @@ function layout({ title, sidebar, content, theme = "Light" }) {
             if (!nextWorkspace) throw new Error("Pipe load response was missing the inspection workspace.");
             const workspace = document.getElementById("inspection-workspace");
             if (!workspace) throw new Error("Inspection workspace is missing.");
+            preserveInspectionActions(nextWorkspace);
             workspace.replaceWith(nextWorkspace);
             initializeInspectionWorkspace(nextWorkspace);
             if (popupNotice) {
@@ -1426,6 +1441,8 @@ function layout({ title, sidebar, content, theme = "Light" }) {
             });
           });
           scopeToggleForms.forEach((form) => {
+            if (form.dataset.scopeBound === "1") return;
+            form.dataset.scopeBound = "1";
             form.addEventListener("submit", async (event) => {
               if (!window.fetch || !window.DOMParser) return;
               event.preventDefault();
@@ -1571,7 +1588,7 @@ function layout({ title, sidebar, content, theme = "Light" }) {
               if (failureActionSelect && failureActionSelect.value === "rework" && allFilled && anyFail) {
                 completeInspectionButton.textContent = "Submit Re-work";
               } else {
-                completeInspectionButton.textContent = "Complete Inspection";
+                completeInspectionButton.textContent = "Load Next Pipe";
               }
             }
           };
@@ -1592,7 +1609,7 @@ function layout({ title, sidebar, content, theme = "Light" }) {
               return;
             }
 
-            const numericValue = Number(rawValue);
+            const numericValue = window.resolveInspectionMeasurement(rawValue, element.dataset.nominal).value;
             if (!Number.isFinite(numericValue)) {
               applyState(element, "fail");
               updateOverallResult();
@@ -1665,6 +1682,8 @@ function layout({ title, sidebar, content, theme = "Light" }) {
             const workspace = document.getElementById("inspection-workspace");
             if (!workspace || !window.fetch || !window.DOMParser) return;
             event.preventDefault();
+            if (form.dataset.savingInspection === "1") return;
+            form.dataset.savingInspection = "1";
             const submitButton = event.submitter || form.querySelector('button[type="submit"]');
             const requestAction = submitButton?.getAttribute("formaction")
               ? new URL(submitButton.getAttribute("formaction"), window.location.href).href
@@ -1675,7 +1694,7 @@ function layout({ title, sidebar, content, theme = "Light" }) {
             const currentScrollY = window.scrollY;
             if (submitButton) {
               submitButton.disabled = true;
-              submitButton.textContent = isCompletingInspection ? "Saving..." : "Loading...";
+              submitButton.textContent = isCompletingInspection ? "Saving and loading..." : "Loading...";
             }
             try {
               const formData = new FormData(form);
@@ -1690,7 +1709,8 @@ function layout({ title, sidebar, content, theme = "Light" }) {
               const nextWorkspace = nextDocument.getElementById("inspection-workspace");
               const popupNotice = nextDocument.querySelector(".notice[data-popup='true']");
               if (!nextWorkspace) throw new Error("Pipe load response was missing the inspection workspace.");
-              workspace.replaceWith(nextWorkspace);
+              preserveInspectionActions(nextWorkspace);
+            workspace.replaceWith(nextWorkspace);
               initializeInspectionWorkspace(nextWorkspace);
               if (popupNotice) {
                 window.alert(popupNotice.textContent.trim());
@@ -1711,6 +1731,7 @@ function layout({ title, sidebar, content, theme = "Light" }) {
               form.dataset.nativeSubmit = "1";
               form.submit();
             } finally {
+              delete form.dataset.savingInspection;
               if (submitButton) {
                 submitButton.disabled = false;
                 submitButton.textContent = previousButtonText;
@@ -1768,6 +1789,7 @@ registerBreakReportRoutes(app, callBridge, (req, content) => layout({
 }));
 
 registerInspectionBreakRoutes(app, callBridge);
+registerLunchPopupRoutes(app, callBridge, buildInspectionConnectionLabel);
 
 registerMoldApprovalRoutes(app, callBridge, (req, content) => layout({
   title: "Mold Approval", sidebar: baseSidebar(req), theme: req.session.themeMode,
@@ -2100,7 +2122,7 @@ app.get("/workflow/inspection", async (req, res, next) => {
     const lookupDescription = buildInspectionConnectionLabel(selection);
     const hasWorkOrderDetails = [selection.sizeLabel, selection.weightLabel, selection.connectionLabel, selection.endType].every(Boolean);
     const recipeCandidates = hasWorkOrderDetails
-      ? await callBridge("find_recipe_candidates", { operation_description: selection.operationDescription, branch: inspector.branch })
+      ? await callBridge("find_recipe_candidates", { operation_description: resolved.usesManualDetails ? lookupDescription : selection.operationDescription, branch: inspector.branch })
       : [];
     selection.recipeName = chooseInspectionRecipe(recipeCandidates, selection.recipeName);
     req.session.selection = selection;
@@ -2161,23 +2183,26 @@ app.get("/workflow/inspection", async (req, res, next) => {
       ${renderWorkflowHeader(req)}
       ${renderNotice(req.session.notice)}
       ${renderWorkflowNav("/workflow/inspection", req)}
-      ${renderBreakControls(req.breakState || {version:0,original_name:inspector.name,acting_name:inspector.name})}
+      ${!showWorksheet ? renderBreakControls(req.breakState || {version:0,original_name:inspector.name,acting_name:inspector.name}, activeInspection) : ""}
       <details class="card inspection-entry-panel"${showWorksheet ? "" : " open"}>
         <summary class="section-title">Inspection Entry</summary>
+        ${selection.recipeName ? `<a class="button secondary" href="/public/tablet-inspection.html">Open Tablet Worksheet / Prepare Offline</a>` : ""}
         <form method="get" action="/workflow/inspection" class="form-grid inspection-entry-form" id="inspection-selection-form">
+          <input type="hidden" name="specificationContext" value="${escapeHtml(resolved.specificationContext)}" />
           <input type="hidden" name="_coverage_version" value="${req.breakState?.version || 0}" />
           <div class="field"><label>Production Number / WO</label><select name="productionNumber" onchange="this.form.operationDescription.value=''; this.form.recipeName.value=''; this.form.submit();">${renderOptions(productionNumbers, selection.productionNumber, (item) => item, (item) => item)}</select></div>
           <div class="field"><label>Description</label><select name="operationDescription" required onchange="this.form.recipeName.value=''; this.form.submit();"><option value="">Select the WO description</option>${renderOptions(resolved.descriptions, selection.operationDescription, (item) => item.operation_description, (item) => `${item.operation_id ? item.operation_id + ' - ' : ''}${item.operation_description}`)}</select></div>
           <div class="inspection-entry-inline-row">
-            <div class="field"><label>Size</label><input name="sizeLabel" value="${escapeHtml(selection.sizeLabel)}" readonly /></div>
-            <div class="field"><label>Weight</label><input name="weightLabel" value="${escapeHtml(selection.weightLabel)}" readonly /></div>
-            <div class="field"><label>Connection</label><input name="connectionLabel" value="${escapeHtml(selection.connectionLabel)}" readonly /></div>
-            <div class="field"><label>Box / Pin</label><input name="endType" value="${escapeHtml(selection.endType)}" readonly /></div>
+            <div class="field"><label>Size</label><input name="sizeLabel" value="${escapeHtml(selection.sizeLabel)}" ${resolved.missingFields.includes("sizeLabel") && selection.operationDescription ? 'placeholder="Enter missing value"' : "readonly"} /></div>
+            <div class="field"><label>Weight</label><input name="weightLabel" value="${escapeHtml(selection.weightLabel)}" ${resolved.missingFields.includes("weightLabel") && selection.operationDescription ? 'placeholder="Enter missing value"' : "readonly"} /></div>
+            <div class="field"><label>Connection</label>${resolved.missingFields.includes("connectionLabel") && selection.operationDescription ? `<select name="connectionLabel"><option value="">Select Connection</option>${renderOptions(INSPECTION_CONNECTION_TYPES, selection.connectionLabel, (item) => item, (item) => item)}</select>` : `<input name="connectionLabel" value="${escapeHtml(selection.connectionLabel)}" readonly />`}</div>
+            <div class="field"><label>Box / Pin</label>${resolved.missingFields.includes("endType") && selection.operationDescription ? `<select name="endType"><option value="">Select Box / Pin</option>${renderOptions(["BOX","PIN"], selection.endType, (item) => item, (item) => item)}</select>` : `<input name="endType" value="${escapeHtml(selection.endType)}" readonly />`}</div>
           </div>
-          ${!selection.operationDescription ? `<p>Select a description to fill the inspection details from the work order.</p>` : !hasWorkOrderDetails ? `<p>The selected WO description does not contain size, weight, connection and Box/Pin. Select the description with the connection specifications.</p>` : !recipeCandidates.length ? `<p>No matching Digital IRR was found for this description. Have Quality check the recipe setup before starting.</p>` : !selection.recipeName ? `<p>More than one Digital IRR matches these specifications. Select the correct Digital IRR below.</p>` : ""}
+          ${!selection.operationDescription ? `<p>Select a description to fill the inspection details from the work order.</p>` : !hasWorkOrderDetails ? `<p>Enter the missing details, then select Find Matching IRR.</p>` : !recipeCandidates.length ? `<p>No matching Digital IRR was found for this description. Have Quality check the recipe setup before starting.</p>` : !selection.recipeName ? `<p>More than one Digital IRR matches these specifications. Select the correct Digital IRR below.</p>` : ""}
           <div class="field"><label>Digital IRR</label><select name="recipeName" required onchange="this.form.submit();"><option value="">${recipeCandidates.length ? 'Select matching Digital IRR' : 'No matching Digital IRR'}</option>${renderOptions(recipeCandidates, selection.recipeName, (item) => item.recipe_name, (item) => item.display_name || item.recipe_name)}</select></div>
           <div class="field"><label>Inspection Scope</label><select name="inspectionScope"><option value="standard" ${selection.inspectionScope === "full" ? "" : "selected"}>Standard Inspection</option><option value="full" ${selection.inspectionScope === "full" ? "selected" : ""}>Full Inspection</option></select></div>
           <div class="actions">
+            ${selection.operationDescription && resolved.missingFields.length ? `<button class="button" type="submit" formnovalidate>Find Matching IRR</button>` : ""}
             <button class="button workflow-action-button" type="submit" formaction="/workflow/start" formmethod="post" ${selection.recipeName && hasWorkOrderDetails ? "" : "disabled"}>Start Inspection</button>
           </div>
         </form>
@@ -2230,6 +2255,7 @@ app.get("/workflow/inspection", async (req, res, next) => {
           sessionRecord: req.session.sessionRecord,
           inspectorName: req.breakState?.acting_name || req.session.inspector?.name,
           breakVersion: req.breakState?.version || 0,
+          breakState: req.breakState,
           historyColumns,
           canEditHistory: canEditInspectionHistory(req.session.inspector),
         }) : ""}
@@ -2902,7 +2928,7 @@ app.post("/workflow/start", async (req, res, next) => {
     const lookupDescription = buildInspectionConnectionLabel(selection);
     const hasRequiredConnectionDetails = [selection.operationDescription, selection.sizeLabel, selection.weightLabel, selection.connectionLabel, selection.endType].every(Boolean);
     if (!hasRequiredConnectionDetails) {
-      req.session.notice = { kind: "warning", message: "Select a WO description containing size, weight, connection and Box/Pin before starting an inspection." };
+      req.session.notice = { kind: "warning", message: "Select a WO description and complete the missing size, weight, connection and Box/Pin details before starting an inspection." };
       return res.redirect("/workflow/inspection");
     }
     const existingPipe = selection.pipeNumber ? await callBridge("get_pipe_unit", {
@@ -2920,7 +2946,7 @@ app.post("/workflow/start", async (req, res, next) => {
       return res.redirect("/workflow/inspection");
     }
     const recipeCandidates = await callBridge("find_recipe_candidates", {
-      operation_description: selection.operationDescription,
+      operation_description: resolved.usesManualDetails ? lookupDescription : selection.operationDescription,
       branch: inspector.branch,
     });
     const recipeName = chooseInspectionRecipe(recipeCandidates, selection.recipeName);
@@ -2967,7 +2993,7 @@ app.post("/workflow/start", async (req, res, next) => {
           ? `Started re-work inspection for pipe ${selection.pipeNumber}.`
           : `Inspection started for pipe ${selection.pipeNumber}.`,
     };
-    res.redirect("/workflow/inspection");
+    res.redirect("/public/tablet-inspection.html");
   } catch (error) {
     next(error);
   }
@@ -3587,3 +3613,5 @@ app.post("/admin/recipes/:recipeHeaderId/publish", async (req, res, next) => {
   }
   res.redirect("/admin");
 });
+
+enableTabletHttps(app,{name:"Inspection",port:Number(process.env.INSPECTION_HTTPS_PORT||3444)});

@@ -8,6 +8,7 @@ if str(ROOT) not in sys.path:
 
 from sharepoint_api import sync_inspection_recipes_to_postgres, sync_work_orders_to_postgres  # noqa: E402
 from irr_import import parse_irr_upload  # noqa: E402
+from node_app.bridge.lunch_popup import start_lunch_popup, complete_lunch_popup, get_popup_lunch
 from node_app.bridge.mold_approval import mold_approval_context, mold_approval_status, request_mold_approval
 from time_entry_app.bridge.cnc_time_backend import respond_to_mold_approval
 from node_app.bridge.break_report import get_break_report
@@ -83,7 +84,7 @@ def _error(message):
 
 def main():
     payload = _payload()
-    action = payload.get("action")
+    action = payload.pop("action", None)
 
     try:
         if action == "initialize":
@@ -104,6 +105,9 @@ def main():
             return _result(start_inspection_break(**payload))
         if action == "end_inspection_break":
             return _result(end_inspection_break(**payload))
+        if action in {"start_lunch_popup", "complete_lunch_popup", "get_popup_lunch"}:
+            handler = {"start_lunch_popup": start_lunch_popup, "complete_lunch_popup": complete_lunch_popup, "get_popup_lunch": get_popup_lunch}[action]
+            return _result(handler(**payload))
         if action == "lunch_target":
             return _result(lunch_target(**payload))
         if action == "start_lunch":
@@ -120,6 +124,10 @@ def main():
             return _result(save_live_inspection_draft(payload.get("attempt_id"), payload.get("session_id"), payload.get("inspector_adp"), payload.get("measurements"), payload.get("client_sequence"), payload.get("coverage_version"), payload.get("edited_sequence")))
         if action == "verify_pipe_inspection":
             return _result(verify_pipe_inspection(payload.get("attempt_id"), payload.get("expected_hash"), payload.get("verifier_adp")))
+        if action in {"tablet_inspection_prepare", "tablet_inspection_apply"}:
+            from node_app.bridge.tablet_inspection import prepare, apply_pipe
+            params=payload.get("params") or {}
+            return _result(prepare(params) if action == "tablet_inspection_prepare" else apply_pipe(params,payload.get("event") or {}))
         if action == "get_locations":
             return _result(get_locations())
         if action == "get_employee_by_adp":

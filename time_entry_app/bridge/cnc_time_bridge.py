@@ -69,8 +69,15 @@ def main():
     action = payload.get("action")
 
     try:
+        if action in {"tablet_time_active", "tablet_time_event"}:
+            from time_entry_app.bridge.tablet_time import active_timer, apply_event
+            session = payload.get("session") or {}
+            return _result(active_timer(session) if action == "tablet_time_active" else apply_event(session, payload.get("event") or {}))
         if action == "get_sign_in_context":
             return _result(get_sign_in_context())
+        if action == "tablet_relief_operator":
+            from time_entry_app.bridge.tablet_time import relief_operator
+            return _result(relief_operator(payload.get("adp_number"), payload.get("original_adp")))
         if action == "get_employee_lookup":
             return _result(get_employee_lookup(payload.get("adp_number")))
         if action == "sign_in":
@@ -131,16 +138,21 @@ def main():
                     payload.get("detail_type"),
                 )
             )
+        if action == "relief_arrived":
+            from time_entry_app.bridge.cnc_time_backend import relief_arrived
+            return _result(relief_arrived(payload.get("entry_id"),payload.get("relief_adp"),payload.get("original_adp")))
         if action == "pause_for_lunch":
             return _result(
                 pause_for_lunch(
                     payload.get("entry_id"),
                     payload.get("break_type"),
                     payload.get("comments"),
+                    payload.get("relief_adp"),
+                    payload.get("original_adp"),
                 )
             )
         if action == "resume_from_lunch":
-            return _result(resume_from_lunch(payload.get("entry_id")))
+            return _result(resume_from_lunch(payload.get("entry_id"),payload.get("original_adp")))
         if action == "stop_time_entry":
             return _result(stop_time_entry(payload.get("entry_id"), payload.get("quantity")))
         if action == "edit_active_time_entry":
@@ -281,6 +293,7 @@ def main():
                     payload.get("machine_no"),
                     payload.get("category"),
                     payload.get("issue"),
+                    payload.get("department"),
                 )
             )
         if action == "send_supervisor_message":

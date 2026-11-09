@@ -33,13 +33,27 @@ def mold_approval_context(inspector_adp, request_id=None):
     if watched:
         watched = notifications._refresh_sharepoint_mold_decision(watched)
         records = [watched] + [row for row in records if row['id'] != watched['id']]
-    return {'work_orders': notifications._notification_work_orders(),
+    operations = _operations(employee)
+    return {'work_orders': sorted({row['production_number'] for row in operations}, reverse=True),
+            'operations': operations,
             'requests': [notifications._public_notification_record(row) for row in records],
             'watch_id': watched['id'] if watched else None}
 
 
-def request_mold_approval(inspector_adp, session_id, work_order):
+def _operations(employee):
+    return [dict(production_number=row['production_number'],
+                 operation_description=row['operation_description'],
+                 operation_id=row.get('operation_id', ''))
+            for row in db.get_open_work_orders(employee.get('branch'))
+            if row.get('operation_description')]
+
+
+def request_mold_approval(inspector_adp, session_id, work_order, operation_description=None):
     employee = _employee(inspector_adp)
+    work_order = str(work_order or '').strip()
+    operation_description = str(operation_description or '').strip()
+    if not any(row['production_number'] == work_order and row['operation_description'] == operation_description for row in _operations(employee)):
+        raise ValueError('Select a detail / description belonging to the selected work order.')
     station = db._fetch_one_dict('SELECT inspector_adp, location_name, logged_out_at FROM inspector_sessions WHERE id=%s', (int(session_id),))
     if (not station or station['logged_out_at'] is not None
             or str(station['inspector_adp']) != str(employee['adp_number'])):
@@ -48,4 +62,5 @@ def request_mold_approval(inspector_adp, session_id, work_order):
         raise ValueError('Select an inspection station before requesting approval.')
     return notifications.submit_notification_request(
         employee={'emp_id': employee['adp_number'], 'full_name': employee['name']},
-        machine_no=station['location_name'], notification_type='mold_approval', work_order=work_order)
+        machine_no=station['location_name'], notification_type='mold_approval', work_order=work_order,
+        operation_description=operation_description)

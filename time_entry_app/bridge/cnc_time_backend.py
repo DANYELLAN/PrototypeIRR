@@ -6,6 +6,7 @@ import re
 import secrets
 import sys
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
@@ -58,7 +59,7 @@ from local_store import (
     update_notification_delivery,
     upsert_machine_options,
 )
-from time_entry_app.acumatica_sync import get_approval_batch_status, sync_approved_entries
+from time_entry_app.acumatica_sync import get_approval_batch_status, sync_approved_entries, machine_area
 from postgres_sync import get_db_connection, initialize_database, sync_list_to_postgres
 from sharepoint_api import sync_cnc_time_lists_to_postgres
 from sharepoint_client import (
@@ -115,6 +116,7 @@ LISTS = {
         "id": "e5d9d01b-fb27-4abb-8d93-eb285c98c228",
         "name": "CNC Maintenace Pre-Use/Daily Checklist",
     },
+    "it_support_requests": {"site": IT_SITE, "id": "7a414ae4-9343-46d7-ae34-42d14224f84c", "name": "IT Support Help Desk"},
     "tech_categories": {
         "site": IT_SITE,
         "id": "74ee8aa3-7227-4b0c-9dde-44d901fe062f",
@@ -195,6 +197,17 @@ SHAREPOINT_WRITES_ENABLED = os.getenv("CNC_TIME_SHAREPOINT_WRITES_ENABLED", "fal
     "yes",
     "on",
 }
+MAINTENANCE_SHAREPOINT_WRITES_ENABLED = os.getenv("CNC_TIME_MAINTENANCE_SHAREPOINT_WRITES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+IT_SHAREPOINT_WRITES_ENABLED = os.getenv("CNC_TIME_IT_SHAREPOINT_WRITES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _sharepoint_writes_enabled(list_key):
+    return (SHAREPOINT_WRITES_ENABLED
+            or (list_key == "maintenance_requests" and MAINTENANCE_SHAREPOINT_WRITES_ENABLED)
+            or (list_key == "it_support_requests" and IT_SHAREPOINT_WRITES_ENABLED))
+
+
 ALLOW_DIRECT_SHAREPOINT_READS = os.getenv("CNC_TIME_ALLOW_DIRECT_SHAREPOINT_READS", "false").strip().lower() in {
     "1",
     "true",
@@ -229,6 +242,14 @@ FULL_ACCESS_DEPARTMENT_KEYWORDS = tuple(
     ).split(",")
     if item.strip()
 )
+def _access_label(value):
+    return " ".join(str(value or "").split()).casefold()
+
+
+FULL_ACCESS_DEPARTMENTS = {_access_label(value) for value in os.getenv("CNC_TIME_FULL_ACCESS_DEPARTMENTS", "").split(",") if value.strip()}
+FULL_ACCESS_JOB_TITLES = {_access_label(value) for value in os.getenv("CNC_TIME_FULL_ACCESS_JOB_TITLES", "").split(",") if value.strip()}
+
+
 FULL_ACCESS_ADP_NUMBERS = {
     (item.strip()[:-2] if item.strip().endswith(".0") else item.strip()).lstrip("0") or item.strip()
     for item in os.getenv("CNC_TIME_FULL_ACCESS_ADP_NUMBERS", "").replace(";", ",").split(",")
@@ -259,6 +280,7 @@ WRITE_RECORD_TARGETS = {
     "manual_time": {"list_key": "timeentry", "mode": "create"},
     "daily_checklist": {"list_key": "checklist", "mode": "create"},
     "maintenance_request": {"list_key": "maintenance_requests", "mode": "create"},
+    "it_support_request": {"list_key": "it_support_requests", "mode": "create"},
     "stop_time_entry": {"list_key": "timeentry", "mode": "create"},
     "pause_lunch": {"list_key": "startstop", "mode": "update"},
     "resume_lunch": {"list_key": "startstop", "mode": "update"},
@@ -473,8 +495,14 @@ def sync_reference_data_from_sharepoint():
 def sync_pending_writes_to_sharepoint(limit=50):
     """Replay locally queued app writes to SharePoint when connectivity returns."""
     ensure_db()
-    records = list_pending_records(limit=limit)
-    if not SHAREPOINT_WRITES_ENABLED:
+    enabled_types = []
+    if MAINTENANCE_SHAREPOINT_WRITES_ENABLED:
+        enabled_types.append("maintenance_request")
+    if IT_SHAREPOINT_WRITES_ENABLED:
+        enabled_types.append("it_support_request")
+    record_types = None if SHAREPOINT_WRITES_ENABLED else enabled_types
+    records = list_pending_records(limit=limit, record_types=record_types)
+    if not SHAREPOINT_WRITES_ENABLED and not enabled_types:
         return {
             "synced": 0,
             "failed": 0,
@@ -490,7 +518,7 @@ def sync_pending_writes_to_sharepoint(limit=50):
 
     for record in records:
         target = WRITE_RECORD_TARGETS.get(record.get("record_type"))
-        if not target:
+        if not target or not _sharepoint_writes_enabled(target["list_key"]):
             skipped += 1
             continue
 
@@ -513,6 +541,10 @@ def sync_pending_writes_to_sharepoint(limit=50):
                     skipped += 1
                     continue
                 _update_item(target["list_key"], item_id, fields)
+            elif record.get("record_type") in {"maintenance_request", "it_support_request"}:
+                key = fields.get("TimeEntryRequestKey") or hashlib.sha256((str(record["id"]) + str(record.get("created_at")) + record["payload"]).encode()).hexdigest()
+                deliver = _deliver_it_request if record["record_type"] == "it_support_request" else _deliver_maintenance_request
+                deliver(fields, key)
             else:
                 _create_item(target["list_key"], fields)
 
@@ -537,8 +569,8 @@ def sync_background_jobs():
 
 
 def _create_item(list_key, fields):
-    if not SHAREPOINT_WRITES_ENABLED:
-        raise SharePointWritesDisabled("SharePoint writes are disabled.")
+    if not _sharepoint_writes_enabled(list_key):
+        raise SharePointWritesDisabled("SharePoint writes are disabled for this list.")
 
     token = _get_time_entry_access_token()
     headers = build_headers(token)
@@ -559,8 +591,8 @@ def _create_item(list_key, fields):
 
 
 def _update_item(list_key, item_id, fields):
-    if not SHAREPOINT_WRITES_ENABLED:
-        raise SharePointWritesDisabled("SharePoint writes are disabled.")
+    if not _sharepoint_writes_enabled(list_key):
+        raise SharePointWritesDisabled("SharePoint writes are disabled for this list.")
 
     token = _get_time_entry_access_token()
     headers = build_headers(token)
@@ -580,8 +612,8 @@ def _update_item(list_key, item_id, fields):
 
 
 def _delete_item(list_key, item_id):
-    if not SHAREPOINT_WRITES_ENABLED:
-        raise SharePointWritesDisabled("SharePoint writes are disabled.")
+    if not _sharepoint_writes_enabled(list_key):
+        raise SharePointWritesDisabled("SharePoint writes are disabled for this list.")
 
     token = _get_time_entry_access_token()
     headers = build_headers(token)
@@ -711,6 +743,7 @@ def _normalize_employee(item):
         "machinist": _as_bool(_value(fields, "Machinist", "machinist", "IsMachinist")),
         "department": str(department or "").strip(),
         "job_title": str(title or "").strip(),
+        "adp_job_title": str(_value(fields, "ADPJobTitleDesc") or "").strip(),
         "role_text": _joined_values(
             fields,
             "DepartmentName",
@@ -730,6 +763,10 @@ def _is_active_ennis_employee(employee):
 def _employee_matches_full_access(employee):
     normalized_emp_id = _normalize_identifier(employee.get("emp_id"))
     if normalized_emp_id in FULL_ACCESS_ADP_NUMBERS:
+        return True
+    if _access_label(employee.get("department")) in FULL_ACCESS_DEPARTMENTS:
+        return True
+    if any(_access_label(employee.get(key)) in FULL_ACCESS_JOB_TITLES for key in ("job_title", "adp_job_title")):
         return True
 
     values = [
@@ -923,22 +960,18 @@ def _operation_fields(operation, production_number, operation_id):
 
 
 def _is_cnc_machine(machine_no):
-    text = str(machine_no or "").strip().lower()
-    if not text:
+    try:
+        machine_area(machine_no)
+        return True
+    except ValueError:
         return False
-    if text.startswith("cnc "):
-        text = text.removeprefix("cnc ").strip()
-    return text.isdigit()
-
-
-def _is_cnc_machinist_time(employee, machine_no):
-    return bool((employee or {}).get("machinist")) and _is_cnc_machine(machine_no)
 
 
 def _attach_acumatica_payload(payload, employee, fields, reason_code=""):
     payload.pop("acumatica_labor_transaction", None)
     payload.pop("acumatica_labor_transactions", None)
-    if not _is_cnc_machinist_time(employee, fields.get("MachineNo")):
+    # Acumatica eligibility follows the CNC station, independent of employee onboarding flags.
+    if not _is_cnc_machine(fields.get("MachineNo")):
         return payload
 
     detail_code = str(fields.get("DetailsType") or "").strip()
@@ -1150,17 +1183,7 @@ def _approval_context_entry(record):
 def _refresh_approval_acumatica_payload(payload, fields):
     detail_code = str(fields.get("DetailsType") or "").strip()
     reason_code = str(fields.get("DetailsTypeII") or "").strip()
-    had_acumatica_payload = bool(
-        payload.get("acumatica_labor_transaction") or payload.get("acumatica_labor_transactions")
-    )
-    employee = payload.get("employee") or {
-        "machinist": bool(
-            payload.get("is_cnc_machinist_time")
-            or _is_cnc_machine(fields.get("MachineNo"))
-            or (had_acumatica_payload and _is_cnc_machine(fields.get("MachineNo")))
-        )
-    }
-    return _attach_acumatica_payload(payload, employee, fields, reason_code if detail_code == "DT" else "")
+    return _attach_acumatica_payload(payload, payload.get("employee") or {}, fields, reason_code if detail_code == "DT" else "")
 
 
 def _local_record_key(value):
@@ -1518,6 +1541,15 @@ def get_dashboard_context(emp_id, user_email):
         ),
         None,
     )
+    active_break = get_active_break_event(active_entry["sp_id"]) if active_entry else None
+    if active_entry:
+        active_entry["timing"] = {
+            "start": active_entry.get("start"),
+            "break_minutes": active_entry.get("break_minutes", 0),
+            "downtime_minutes": _active_downtime_minutes(active_entry),
+            "break_started_at": active_entry.get("lunch_start") if active_entry.get("status") == "Paused" else None,
+            "break_deducts": _break_counts_against_production(active_break),
+        }
     visible_startstop_entries = [
         item
         for item in startstop_entries
@@ -1536,7 +1568,7 @@ def get_dashboard_context(emp_id, user_email):
     return {
         "machine_no": station["machine_no"] if station else "",
         "active_entry": active_entry,
-        "active_break": get_active_break_event(active_entry["sp_id"]) if active_entry else None,
+        "active_break": active_break,
         "recent_entries": recent_entries,
         "details_step_one": [item for item in details if item["option_step"] == 1],
         "details_step_two": [item for item in details if item["option_step"] == 2],
@@ -2259,13 +2291,21 @@ def delete_time_entry(entry_id, entry_list="timeentry"):
         return {"deleted": False, "queued": True, "offline_only": True}
 
 
-def pause_for_lunch(entry_id, break_type=None, comments=None):
+def _require_break_owner(entry, original_adp):
+    if original_adp is not None and _normalize_identifier(original_adp)!=_normalize_identifier(entry.get('emp_id')):
+        raise ValueError('This entry belongs to another operator. Return to your own active entry.')
+
+
+def pause_for_lunch(entry_id, break_type=None, comments=None, relief_adp=None, original_adp=None):
     entry = _get_startstop_by_id(entry_id)
+    _require_break_owner(entry,original_adp)
     if entry.get("status") == "Paused":
         raise ValueError("This entry is already paused.")
     selected_break_type = str(break_type or "Lunch").strip()
     if selected_break_type not in {"Lunch", "With Relief", "No Relief"}:
         raise ValueError("Select a valid break type.")
+    from time_entry_app.bridge.tablet_time import relief_operator
+    relief=relief_operator(relief_adp,entry.get('emp_id')) if selected_break_type=='With Relief' else None
     break_start = _iso_now()
     fields = {"LunchStart": break_start, "LunchStop": None, "Status": "Paused"}
     item_id = entry["sp_id"]
@@ -2277,6 +2317,7 @@ def pause_for_lunch(entry_id, break_type=None, comments=None):
         emp_id=entry.get("emp_id"),
         employee_name=entry.get("operators_name"),
         started_at=break_start,
+        relief_adp=relief['emp_id'] if relief else None, relief_name=relief['full_name'] if relief else None,
     )
     queued_id = queue_record(
         "pause_lunch",
@@ -2286,6 +2327,7 @@ def pause_for_lunch(entry_id, break_type=None, comments=None):
             "fields": fields,
             "break_type": selected_break_type,
             "break_comment": str(comments or "").strip(),
+            "relief_adp":relief['emp_id'] if relief else None, "relief_name":relief['full_name'] if relief else None,
         },
         machine_no=entry.get("machine_no"),
         emp_id=entry.get("emp_id"),
@@ -2300,8 +2342,9 @@ def pause_for_lunch(entry_id, break_type=None, comments=None):
         return {"paused": False, "queued": True, "offline_only": True}
 
 
-def resume_from_lunch(entry_id):
+def resume_from_lunch(entry_id, original_adp=None):
     entry = _get_startstop_by_id(entry_id)
+    _require_break_owner(entry,original_adp)
     lunch_start = entry["lunch_start"]
     if not lunch_start:
         raise ValueError("Lunch start time is missing for this entry.")
@@ -2313,7 +2356,7 @@ def resume_from_lunch(entry_id):
     deducted_minutes = current_break_minutes if _break_counts_against_production(active_break) else 0
     break_minutes = entry["break_minutes"] + deducted_minutes
     fields = {"LunchStop": now_dt.isoformat(), "Status": "In Progress", "BreakMinutes": break_minutes}
-    finish_break_event(item_id, ended_at=now_dt.isoformat(), duration_minutes=current_break_minutes)
+    finish_break_event(item_id, ended_at=now_dt.isoformat(), duration_minutes=current_break_minutes, returned_adp=str(entry.get("emp_id") or ""), end_reason="operator_returned")
     queued_id = queue_record(
         "resume_lunch",
         {"entry_id": item_id, "item_id": item_id, "fields": fields},
@@ -2583,13 +2626,47 @@ def submit_daily_checklist(employee, shift_id, machine_no, initials, notes, chec
         return {"submitted": False, "queued": True, "offline_only": True}
 
 
+def _find_maintenance_request(key):
+    headers = build_headers(_get_time_entry_access_token())
+    site_id = _site_id(MAINTENANCE_SITE, headers)
+    list_id = LISTS["maintenance_requests"]["id"]
+    escaped = str(key).replace("'", "''")
+    result = _request("GET", f"/sites/{site_id}/lists/{list_id}/items?$filter=fields/TimeEntryRequestKey eq '{escaped}'&$expand=fields", headers)
+    return next(iter(result.get("value", [])), None)
+
+
+def _deliver_maintenance_request(fields, key):
+    if not _sharepoint_writes_enabled("maintenance_requests"):
+        raise SharePointWritesDisabled("Maintenance SharePoint writes are disabled.")
+    existing = _find_maintenance_request(key)
+    if existing:
+        return existing
+    try:
+        return _create_item("maintenance_requests", {**fields, "TimeEntryRequestKey": key})
+    except Exception:
+        # Recover a successful POST whose response was lost, or a concurrent retry.
+        existing = _find_maintenance_request(key)
+        if existing:
+            return existing
+        raise
+
+
 def submit_maintenance_request(employee, requester_id, requester_name, title, description, priority, location_id, asset_id, user_email):
+    title = str(title or "").strip()
+    description = str(description or "").strip()
+    if not title or not description:
+        raise ValueError("Enter a maintenance title and description.")
+    if len(title) > 255 or len(description) > 255:
+        raise ValueError("Maintenance title and description must each be 255 characters or fewer for SharePoint.")
+    if priority not in {"Low", "Medium", "High"}:
+        raise ValueError("Select Low, Medium or High priority.")
     locations = [_normalize_location(item) for item in _read_list("maintenance_locations")]
     assets = [_normalize_asset(item) for item in _read_list("maintenance_assets")]
     location = next((item for item in locations if str(item["id"]) == str(location_id)), None)
     asset = next((item for item in assets if str(item["asset_id"]) == str(asset_id) or str(item["id"]) == str(asset_id)), None)
 
     fields = {
+        "TimeEntryRequestKey": secrets.token_hex(16),
         "Title": title,
         "Description": description,
         "Priority": priority,
@@ -2615,11 +2692,11 @@ def submit_maintenance_request(employee, requester_id, requester_name, title, de
         source="offline-first",
     )
     try:
-        _create_item("maintenance_requests", fields)
+        item = _deliver_maintenance_request(fields, fields["TimeEntryRequestKey"])
         mark_record_synced(queued_id)
-        return {"submitted": True}
+        return {"submitted": True, "sharepoint_item_id": item.get("id"), "queue_id": queued_id}
     except Exception:
-        return {"submitted": False, "queued": True, "offline_only": True}
+        return {"submitted": False, "queued": True, "offline_only": True, "queue_id": queued_id}
 
 
 def _public_notification_record(record):
@@ -2654,6 +2731,9 @@ def _submit_sharepoint_notification(record):
     site_url, list_id = _notification_sharepoint_target(record["notification_type"])
     fields = {"Title": f"Time Entry Request {record['id']}"}
     if record["notification_type"] == "mold_approval":
+        detail = (record.get("details") or {}).get("operation_description")
+        if detail:
+            fields["Title"] = f"Mold Approval {record['id']} - {record['work_order']} - {detail}"[:255]
         fields.update({
             "MachinistName": record["requester_name"],
             "MachineNumber": record["machine_no"],
@@ -2767,6 +2847,7 @@ def submit_notification_request(
     work_order=None,
     material_change_type=None,
     message=None,
+    operation_description=None,
 ):
     notification_type = str(notification_type or "").strip().lower()
     if notification_type not in {"mold_approval", "change_material", "assistance_asap"}:
@@ -2775,10 +2856,15 @@ def submit_notification_request(
     work_order = str(work_order or "").strip()
     material_change_type = str(material_change_type or "").strip()
     message = str(message or "").strip()
+    operation_description = str(operation_description or "").strip()
     if notification_type in {"mold_approval", "change_material"}:
         if not work_order:
             raise ValueError("Select a work order.")
-        if work_order not in _notification_work_orders():
+        if notification_type == "mold_approval" and operation_description:
+            from workflow_db import get_open_work_orders
+            if not any(row['production_number'] == work_order and row.get('operation_description') == operation_description for row in get_open_work_orders()):
+                raise ValueError("The selected work order detail is no longer available.")
+        elif work_order not in _notification_work_orders():
             raise ValueError("The selected work order is not currently available.")
     if notification_type == "change_material" and material_change_type not in MATERIAL_CHANGE_TYPES:
         raise ValueError("Select a valid material change type.")
@@ -2797,6 +2883,7 @@ def submit_notification_request(
     details = {
         "material_change_type": material_change_type,
         "message": message,
+        "operation_description": operation_description,
     }
     if notification_type == "assistance_asap":
         with (APP_ROOT / "config" / "assistance.json").open(encoding="utf-8") as routing_file:
@@ -2825,6 +2912,7 @@ def submit_notification_request(
         notification_message = (
             f"{requester_name} at {machine_no or 'an unassigned station'} is requesting mold approval "
             f"for Work Order {work_order}."
+            + (f" Detail: {operation_description}" if operation_description else "")
         )
     elif notification_type == "change_material":
         notification_message = (
@@ -2847,6 +2935,7 @@ def submit_notification_request(
         "material_change_type": material_change_type,
         "message": notification_message,
         "additional_message": message,
+        "operation_description": operation_description,
         "requested_at": record["created_at"],
     }
     if notification_type == "assistance_asap":
@@ -2904,22 +2993,66 @@ def respond_to_mold_approval(request_id, decision_token, decision, responder_nam
     return _public_notification_record(get_notification_request(request_id))
 
 
-def send_it_request(user_email, user_name, machine_no, category, issue):
-    payload = {
-        "user_email": user_email,
-        "user_name": user_name,
-        "machine_no": machine_no,
-        "category": category,
-        "issue": issue,
+def _it_request_fields(user_email, user_name, machine_no, category, issue, department=None, submitted_at=None):
+    email = str(user_email or "").strip()
+    name = str(user_name or "").strip()
+    category = str(category or "").strip()
+    issue = str(issue or "").strip()
+    if not email or not name or not category or not issue:
+        raise ValueError("Enter your email, technical category and issue description.")
+    if any(len(value) > 255 for value in [email, name, category]):
+        raise ValueError("Requester name, email and category must be 255 characters or fewer.")
+    machine = str(machine_no or "").strip()
+    when = datetime.fromisoformat(str(submitted_at).replace("Z", "+00:00")) if submitted_at else _utc_now()
+    fields = {
+        "Title": (f"{category} - Machine {machine}" if machine else category)[:255],
+        "RequesterName": name,
+        "RequesterEmail": email,
+        "Status": "New",
+        "Location": "Ennis",
+        "DateofIssue": when.astimezone(ZoneInfo("America/Chicago")).date().isoformat(),
+        "IssueSubjec": category,
+        "IssueDescription": f"Machine: {machine or 'Not specified'}\nCategory: {category}\n\n{issue}",
     }
-    webhook_url = os.getenv("CNC_TIME_IT_WEBHOOK_URL", "").strip()
-    if webhook_url:
-        response = requests.post(webhook_url, json=payload, timeout=20)
-        if response.status_code not in {200, 201, 202}:
-            raise ValueError("The IT webhook rejected the request.")
-        return {"delivered": True}
-    _queue_notification("it_support", payload)
-    return {"delivered": False, "queued": True}
+    if department:
+        fields["Department"] = str(department).strip()[:255]
+    return fields
+
+
+def _find_it_request(key):
+    headers = build_headers(_get_time_entry_access_token())
+    site_id = _site_id(IT_SITE, headers)
+    list_id = LISTS["it_support_requests"]["id"]
+    escaped = str(key).replace("'", "''")
+    result = _request("GET", f"/sites/{site_id}/lists/{list_id}/items?$filter=fields/TimeEntryRequestKey eq '{escaped}'&$expand=fields", headers)
+    return next(iter(result.get("value", [])), None)
+
+
+def _deliver_it_request(fields, key):
+    if not _sharepoint_writes_enabled("it_support_requests"):
+        raise SharePointWritesDisabled("IT Help Desk SharePoint writes are disabled.")
+    existing = _find_it_request(key)
+    if existing:
+        return existing
+    try:
+        return _create_item("it_support_requests", {**fields, "TimeEntryRequestKey": key})
+    except Exception:
+        existing = _find_it_request(key)
+        if existing:
+            return existing
+        raise
+
+
+def send_it_request(user_email, user_name, machine_no, category, issue, department=None):
+    fields = _it_request_fields(user_email, user_name, machine_no, category, issue, department)
+    fields["TimeEntryRequestKey"] = secrets.token_hex(16)
+    queued_id = queue_record("it_support_request", {"fields": fields}, machine_no=machine_no, employee_name=user_name, source="offline-first")
+    try:
+        item = _deliver_it_request(fields, fields["TimeEntryRequestKey"])
+        mark_record_synced(queued_id)
+        return {"delivered": True, "sharepoint_item_id": item.get("id"), "queue_id": queued_id}
+    except Exception:
+        return {"delivered": False, "queued": True, "queue_id": queued_id}
 
 
 def send_supervisor_message(user_name, machine_no, comment):
@@ -2936,3 +3069,23 @@ def send_supervisor_message(user_name, machine_no, comment):
         return {"delivered": True}
     _queue_notification("supervisor_message", payload)
     return {"delivered": False, "queued": True}
+
+
+def relief_arrived(entry_id, relief_adp, original_adp=None):
+    from time_entry_app.bridge.tablet_time import relief_operator
+    from local_store import convert_break_to_relief
+    entry=_get_startstop_by_id(entry_id)
+    _require_break_owner(entry,original_adp)
+    active=get_active_break_event(entry['sp_id'])
+    if entry.get('status')!='Paused' or not active or active['break_type']!='No Relief':
+        raise ValueError('Relief Arrived is available only during a break without relief.')
+    relief=relief_operator(relief_adp,entry.get('emp_id'))
+    now=_utc_now();at=now.isoformat()
+    duration=max(int((now-datetime.fromisoformat(str(active['started_at']).replace('Z','+00:00'))).total_seconds()//60),0)
+    fields={'LunchStart':at,'LunchStop':None,'Status':'Paused','BreakMinutes':entry['break_minutes']+duration}
+    queued_id=convert_break_to_relief(entry['sp_id'],active['id'],relief,at,duration,fields)
+    try:
+        _update_item('startstop',entry['sp_id'],fields);mark_record_synced(queued_id)
+        return {'relieved':True}
+    except Exception:
+        return {'relieved':True,'queued':True,'offline_only':True}

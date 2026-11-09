@@ -1,10 +1,29 @@
 import json
+import os
+import hashlib
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent / "data" / "cnc_time_local.db"
 LOCAL_MACHINE_CONFIG = Path(__file__).resolve().parent / "config" / "machines.json"
+
+
+def _acumatica_sql(sql):
+    """Keep each tenant's batch IDs, delivery receipts and run locks separate.
+
+    Existing unprefixed tables belong to Test and remain intact. Other tenants
+    receive their own tables and indexes in the same backed-up local database.
+    Only fixed application SQL is passed here; the tenant becomes a hash, never
+    an SQL identifier supplied by a user.
+    """
+    tenant = os.getenv("ACUMATICA_TENANT", "Test").strip().casefold()
+    if tenant == "test":
+        return sql
+    prefix = "tenant_" + hashlib.sha256(tenant.encode("utf-8")).hexdigest()[:16] + "_"
+    for table in ("acumatica_batches", "acumatica_sync_items", "acumatica_sync_runs"):
+        sql = sql.replace(table, prefix + table)
+    return sql
 
 
 def _utc_now_iso():
@@ -113,6 +132,9 @@ def ensure_db():
         )
         """
     )
+    for column in ("relief_adp", "relief_name", "returned_adp", "end_reason"):
+        _ensure_column(conn, "break_events", column, "TEXT")
+    _ensure_column(conn, "break_events", "parent_break_id", "INTEGER")
     _ensure_column(conn, "approval_queue", "revision_no", "INTEGER NOT NULL DEFAULT 1")
     _ensure_column(conn, "approval_queue", "active_direct_entry_id", "TEXT")
     conn.execute(
@@ -141,7 +163,7 @@ def ensure_db():
         """
     )
     conn.execute(
-        """
+        _acumatica_sql("""
         CREATE TABLE IF NOT EXISTS acumatica_batches (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             labor_date TEXT NOT NULL,
@@ -153,10 +175,10 @@ def ensure_db():
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
+        """)
     )
     conn.execute(
-        """
+        _acumatica_sql("""
         CREATE TABLE IF NOT EXISTS acumatica_sync_items (
             approval_id INTEGER PRIMARY KEY,
             revision_no INTEGER NOT NULL DEFAULT 1,
@@ -169,10 +191,10 @@ def ensure_db():
             last_error TEXT,
             updated_at TEXT NOT NULL
         )
-        """
+        """)
     )
     conn.execute(
-        """
+        _acumatica_sql("""
         CREATE TABLE IF NOT EXISTS acumatica_sync_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             trigger_name TEXT NOT NULL,
@@ -183,10 +205,10 @@ def ensure_db():
             status TEXT NOT NULL DEFAULT 'running',
             summary TEXT
         )
-        """
+        """)
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_acumatica_batches_group ON acumatica_batches (labor_date, area, id DESC)"
+        _acumatica_sql("CREATE INDEX IF NOT EXISTS idx_acumatica_batches_group ON acumatica_batches (labor_date, area, id DESC)")
     )
     conn.execute(
         """
@@ -217,7 +239,7 @@ def ensure_db():
     _ensure_column(conn, "notification_requests", "sharepoint_list_id", "TEXT")
     _ensure_column(conn, "notification_requests", "sharepoint_item_id", "TEXT")
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_acumatica_sync_status ON acumatica_sync_items (status, updated_at)"
+        _acumatica_sql("CREATE INDEX IF NOT EXISTS idx_acumatica_sync_status ON acumatica_sync_items (status, updated_at)")
     )
     conn.commit()
     conn.close()
@@ -503,13 +525,20 @@ def queue_record(record_type, payload, machine_no=None, emp_id=None, employee_na
     return record_id
 
 
-def list_pending_records(limit=50):
+def list_pending_records(limit=50, record_types=None):
     ensure_db()
     conn = _connect()
-    rows = conn.execute(
-        "SELECT * FROM time_entries WHERE sync_status = 'pending' ORDER BY created_at DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
+    query = "SELECT * FROM time_entries WHERE sync_status = 'pending'"
+    params = []
+    if record_types is not None:
+        if not record_types:
+            conn.close()
+            return []
+        query += " AND record_type IN (" + ",".join("?" for _ in record_types) + ")"
+        params.extend(record_types)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(query, params).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
@@ -859,17 +888,17 @@ def update_approval_with_revision(record_id, payload, editor=None, reason=None):
             ),
         )
         existing_sync = conn.execute(
-            "SELECT status FROM acumatica_sync_items WHERE approval_id = ?",
+            _acumatica_sql("SELECT status FROM acumatica_sync_items WHERE approval_id = ?"),
             (record_id,),
         ).fetchone()
         if existing_sync:
             sync_status = "changed_after_send" if existing_sync["status"] == "sent" else existing_sync["status"]
             conn.execute(
-                """
+                _acumatica_sql("""
                 UPDATE acumatica_sync_items
                 SET status = ?, last_error = NULL, updated_at = ?
                 WHERE approval_id = ?
-                """,
+                """),
                 (sync_status, _utc_now_iso(), record_id),
             )
         conn.commit()
@@ -900,7 +929,7 @@ def list_acumatica_candidates(limit=500, reviewed_after=None):
     ensure_db()
     conn = _connect()
     rows = conn.execute(
-        """
+        _acumatica_sql("""
         SELECT q.*, s.status AS acumatica_status, s.revision_no AS sent_revision_no,
                s.batch_nbr, s.line_nbrs, s.last_error, s.sent_at
         FROM approval_queue q
@@ -914,7 +943,7 @@ def list_acumatica_candidates(limit=500, reviewed_after=None):
           )
         ORDER BY q.submitted_at, q.id
         LIMIT ?
-        """,
+        """),
         (reviewed_after, reviewed_after, limit),
     ).fetchall()
     conn.close()
@@ -925,7 +954,7 @@ def get_acumatica_sync_item(approval_id):
     ensure_db()
     conn = _connect()
     row = conn.execute(
-        "SELECT * FROM acumatica_sync_items WHERE approval_id = ?",
+        _acumatica_sql("SELECT * FROM acumatica_sync_items WHERE approval_id = ?"),
         (approval_id,),
     ).fetchone()
     conn.close()
@@ -945,7 +974,7 @@ def upsert_acumatica_sync_item(
     now = _utc_now_iso()
     conn = _connect()
     conn.execute(
-        """
+        _acumatica_sql("""
         INSERT INTO acumatica_sync_items (
             approval_id, revision_no, status, batch_nbr, line_nbrs,
             sent_payload, last_attempt_at, sent_at, last_error, updated_at
@@ -960,7 +989,7 @@ def upsert_acumatica_sync_item(
             sent_at = CASE WHEN excluded.status = 'sent' THEN excluded.sent_at ELSE acumatica_sync_items.sent_at END,
             last_error = excluded.last_error,
             updated_at = excluded.updated_at
-        """,
+        """),
         (
             approval_id,
             int(revision_no or 1),
@@ -983,12 +1012,12 @@ def save_acumatica_batch(labor_date, area, batch_nbr, description, status="On Ho
     now = _utc_now_iso()
     conn = _connect()
     conn.execute(
-        """
+        _acumatica_sql("""
         INSERT INTO acumatica_batches (
             labor_date, area, batch_nbr, description, status, is_supplemental, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(batch_nbr) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at
-        """,
+        """),
         (labor_date, area, batch_nbr, description, status, int(bool(is_supplemental)), now, now),
     )
     conn.commit()
@@ -999,11 +1028,11 @@ def find_latest_acumatica_batch(labor_date, area):
     ensure_db()
     conn = _connect()
     row = conn.execute(
-        """
+        _acumatica_sql("""
         SELECT * FROM acumatica_batches
         WHERE labor_date = ? AND area = ?
         ORDER BY id DESC LIMIT 1
-        """,
+        """),
         (labor_date, area),
     ).fetchone()
     conn.close()
@@ -1014,7 +1043,7 @@ def update_acumatica_batch_status(batch_nbr, status):
     ensure_db()
     conn = _connect()
     conn.execute(
-        "UPDATE acumatica_batches SET status = ?, updated_at = ? WHERE batch_nbr = ?",
+        _acumatica_sql("UPDATE acumatica_batches SET status = ?, updated_at = ? WHERE batch_nbr = ?"),
         (status, _utc_now_iso(), batch_nbr),
     )
     conn.commit()
@@ -1027,12 +1056,12 @@ def begin_acumatica_sync_run(trigger_name, actor=None, stale_minutes=30):
     try:
         conn.execute("BEGIN IMMEDIATE")
         active = conn.execute(
-            """
+            _acumatica_sql("""
             SELECT id FROM acumatica_sync_runs
             WHERE status = 'running'
               AND julianday(started_at) >= julianday('now', ?)
             ORDER BY id DESC LIMIT 1
-            """,
+            """),
             (f"-{int(stale_minutes)} minutes",),
         ).fetchone()
         if active:
@@ -1040,15 +1069,15 @@ def begin_acumatica_sync_run(trigger_name, actor=None, stale_minutes=30):
             conn.close()
             return None
         conn.execute(
-            "UPDATE acumatica_sync_runs SET status = 'abandoned', completed_at = ? WHERE status = 'running'",
+            _acumatica_sql("UPDATE acumatica_sync_runs SET status = 'abandoned', completed_at = ? WHERE status = 'running'"),
             (_utc_now_iso(),),
         )
         cursor = conn.execute(
-            """
+            _acumatica_sql("""
             INSERT INTO acumatica_sync_runs (
                 trigger_name, actor_emp_id, actor_name, started_at, status
             ) VALUES (?, ?, ?, ?, 'running')
-            """,
+            """),
             (
                 trigger_name,
                 str((actor or {}).get("emp_id") or "").strip(),
@@ -1070,11 +1099,11 @@ def finish_acumatica_sync_run(run_id, status, summary):
     ensure_db()
     conn = _connect()
     conn.execute(
-        """
+        _acumatica_sql("""
         UPDATE acumatica_sync_runs
         SET completed_at = ?, status = ?, summary = ?
         WHERE id = ?
-        """,
+        """),
         (_utc_now_iso(), status, json.dumps(summary, default=str), run_id),
     )
     conn.commit()
@@ -1085,22 +1114,22 @@ def get_acumatica_sync_summary(reviewed_after=None):
     ensure_db()
     conn = _connect()
     rows = conn.execute(
-        "SELECT status, COUNT(*) AS count FROM acumatica_sync_items GROUP BY status"
+        _acumatica_sql("SELECT status, COUNT(*) AS count FROM acumatica_sync_items GROUP BY status")
     ).fetchall()
     unsent_rows = conn.execute(
-        """
+        _acumatica_sql("""
         SELECT q.payload
         FROM approval_queue q
         LEFT JOIN acumatica_sync_items s ON s.approval_id = q.id
         WHERE q.approval_status = 'approved'
           AND s.approval_id IS NULL
           AND (? IS NULL OR q.reviewed_at >= ?)
-        """
+        """)
         ,
         (reviewed_after, reviewed_after),
     ).fetchall()
     latest = conn.execute(
-        "SELECT * FROM acumatica_sync_runs ORDER BY id DESC LIMIT 1"
+        _acumatica_sql("SELECT * FROM acumatica_sync_runs ORDER BY id DESC LIMIT 1")
     ).fetchone()
     conn.close()
     counts = {row["status"]: row["count"] for row in rows}
@@ -1116,16 +1145,16 @@ def get_acumatica_sync_summary(reviewed_after=None):
     return {"counts": counts, "latest_run": dict(latest) if latest else None}
 
 
-def start_break_event(entry_id, break_type, comment=None, machine_no=None, emp_id=None, employee_name=None, started_at=None):
+def start_break_event(entry_id, break_type, comment=None, machine_no=None, emp_id=None, employee_name=None, started_at=None, relief_adp=None, relief_name=None):
     ensure_db()
     started = started_at or _utc_now_iso()
     conn = _connect()
     conn.execute(
         """
         INSERT INTO break_events (
-            entry_id, emp_id, employee_name, machine_no, break_type, comment, started_at, created_at
+            entry_id, emp_id, employee_name, machine_no, break_type, comment, started_at, created_at, relief_adp, relief_name
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             str(entry_id or "").strip(),
@@ -1135,14 +1164,14 @@ def start_break_event(entry_id, break_type, comment=None, machine_no=None, emp_i
             str(break_type or "").strip(),
             comment or "",
             started,
-            _utc_now_iso(),
+            _utc_now_iso(), relief_adp, relief_name,
         ),
     )
     conn.commit()
     conn.close()
 
 
-def finish_break_event(entry_id, ended_at=None, duration_minutes=None):
+def finish_break_event(entry_id, ended_at=None, duration_minutes=None, returned_adp=None, end_reason=None):
     ensure_db()
     ended = ended_at or _utc_now_iso()
     conn = _connect()
@@ -1161,10 +1190,10 @@ def finish_break_event(entry_id, ended_at=None, duration_minutes=None):
     conn.execute(
         """
         UPDATE break_events
-        SET ended_at = ?, duration_minutes = ?
+        SET ended_at = ?, duration_minutes = ?, returned_adp = ?, end_reason = ?
         WHERE id = ?
         """,
-        (ended, duration_minutes, row["id"]),
+        (ended, duration_minutes, returned_adp, end_reason, row["id"]),
     )
     conn.commit()
     conn.close()
@@ -1185,3 +1214,27 @@ def get_active_break_event(entry_id):
     ).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def convert_break_to_relief(entry_id, expected_break_id, relief, at, duration_minutes, fields):
+    """End the unrelieved interval and start relieved coverage in one local transaction."""
+    ensure_db()
+    conn=_connect()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        row=conn.execute("SELECT * FROM break_events WHERE entry_id=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1",(str(entry_id),)).fetchone()
+        if not row or row['id']!=expected_break_id or row['break_type']!='No Relief':
+            raise ValueError('The active break changed. Refresh its controls before recording relief.')
+        conn.execute("UPDATE break_events SET ended_at=?,duration_minutes=?,end_reason='relief_arrived' WHERE id=?",(at,duration_minutes,row['id']))
+        conn.execute("""INSERT INTO break_events(entry_id,emp_id,employee_name,machine_no,break_type,comment,started_at,created_at,relief_adp,relief_name,parent_break_id)
+            VALUES (?,?,?,?,'With Relief',?,?,?,?,?,?)""",(row['entry_id'],row['emp_id'],row['employee_name'],row['machine_no'],row['comment'],at,_utc_now_iso(),relief['emp_id'],relief['full_name'],row['id']))
+        payload={'entry_id':str(entry_id),'item_id':str(entry_id),'fields':fields,'break_type':'With Relief','relief_adp':relief['emp_id'],'relief_name':relief['full_name']}
+        queued=conn.execute("""INSERT INTO time_entries(record_type,machine_no,emp_id,employee_name,payload,created_at,sync_status,source)
+            VALUES ('pause_lunch',?,?,?,?,?,'pending','offline-first')""",(row['machine_no'],row['emp_id'],row['employee_name'],json.dumps(payload),_utc_now_iso()))
+        queued_id=queued.lastrowid
+        conn.commit()
+        return queued_id
+    except Exception:
+        conn.rollback();raise
+    finally:
+        conn.close()

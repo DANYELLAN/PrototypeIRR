@@ -31,8 +31,8 @@ class InspectionEntryTests(unittest.TestCase):
             "max": maximum, "measured_value": value,
         }])
 
-    def test_complete_values_are_literal_without_nominal_offset(self):
-        for entered, expected in [("1.234", 1.234), ("5", 5), (".234", .234), ("-1.234", -1.234), ("+1.234", 1.234)]:
+    def test_unsigned_complete_values_are_literal(self):
+        for entered, expected in [("1.234", 1.234), ("5", 5), (".234", .234)]:
             with self.subTest(entered=entered):
                 self.assertEqual(self.numeric(entered)["measurements"][0]["measured_value"], expected)
         self.assertFalse(self.numeric("1.234")["has_failures"])

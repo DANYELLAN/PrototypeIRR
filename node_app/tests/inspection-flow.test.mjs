@@ -1,3 +1,4 @@
+import {renderBreakControls} from "../src/inspectionBreaks.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
@@ -11,7 +12,7 @@ function functionSource(name) {
   const end = source.indexOf("\nfunction ", start + 1);
   return source.slice(start, end);
 }
-const context = vm.createContext({reliefColumnClass,reliefColumnLabel});
+const context = vm.createContext({reliefColumnClass,reliefColumnLabel,renderBreakControls});
 vm.runInContext(["escapeHtml", "renderPopupNoticeModal", "incrementPipeNumber", "buildInspectionConnectionLabel", "renderScopeBadge", "formatDateValue", "formatDigitalIrrName", "formatPipeStatusResult", "renderInspectionInputControl", "renderCurrentAttemptWorksheet", "layout"].map(functionSource).join("\n"), context);
 
 const numeric = { element_sequence: 1, element_description: "Diameter", capture_type: "numeric", nominal: 1.234, min: 1.23, max: 1.24, dwg_dim: "1.234", frequency: "every_pipe" };
@@ -28,7 +29,7 @@ test("new worksheet is empty even when previous pipe values passed; inline brows
   const sheet = context.renderCurrentAttemptWorksheet({ activeInspection: current.activeInspection, recipeDefinition: recipe,
     selection: current.selection, inspectorName: "Test Inspector", sessionRecord: { location_name: "TEST" },
     historyColumns: [{ pipeUnitId: 3, pipeNumber: "P008", measurementsBySequence: new Map([[1, { measured_value: 1.235 }], [2, { measured_value: "Yes" }]]) }] });
-  assert.match(sheet, /placeholder="Full measurement" value="" name="element_1"/);
+  assert.match(sheet, /placeholder="Full value or \+\/- offset" value="" name="element_1"/);
   assert.doesNotMatch(sheet, /data-prefix=|data-tail-length=|maxlength=|\schecked[\s/>]/);
   assert.match(sheet, /name="element_2" value="No"/);
   assert.match(sheet, /name="pipeNumber" value="P009"/);

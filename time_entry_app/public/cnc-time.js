@@ -1,42 +1,3 @@
-let deferredInstallPrompt = null;
-let installAcceptedThisSession = false;
-
-function hasInstalledLaunchFlag() {
-  try {
-    return new URLSearchParams(window.location.search).get("installed") === "1";
-  } catch {
-    return false;
-  }
-}
-
-function isInstalledApp() {
-  return (
-    installAcceptedThisSession ||
-    hasInstalledLaunchFlag() ||
-    window.matchMedia("(display-mode: standalone)").matches ||
-    window.navigator.standalone === true
-  );
-}
-
-function hideInstallButton() {
-  const button = document.getElementById("install-app-button");
-  if (button) button.hidden = true;
-}
-
-window.addEventListener("beforeinstallprompt", (event) => {
-  event.preventDefault();
-  if (isInstalledApp()) return;
-  deferredInstallPrompt = event;
-  const button = document.getElementById("install-app-button");
-  if (button) button.hidden = false;
-});
-
-window.addEventListener("appinstalled", () => {
-  installAcceptedThisSession = true;
-  deferredInstallPrompt = null;
-  hideInstallButton();
-});
-
 window.addEventListener("load", () => {
   const dailyReview = document.getElementById("daily-time-review");
   if (dailyReview) {
@@ -53,13 +14,6 @@ window.addEventListener("load", () => {
     });
     document.getElementById("daily-review-reason").addEventListener("input", (event) => event.target.setCustomValidity(""));
   }
-  if (hasInstalledLaunchFlag()) {
-    installAcceptedThisSession = true;
-    if (window.history.replaceState) {
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }
-  }
-
   const headerClock = document.getElementById("header_clock");
   if (headerClock) {
     const updateHeaderClock = () => {
@@ -71,26 +25,6 @@ window.addEventListener("load", () => {
     };
     updateHeaderClock();
     window.setInterval(updateHeaderClock, 1000);
-  }
-
-  const installButton = document.getElementById("install-app-button");
-  if (installButton) {
-    if (isInstalledApp()) {
-      hideInstallButton();
-    }
-    installButton.addEventListener("click", async () => {
-      if (!deferredInstallPrompt) {
-        window.alert("Use the install icon in the browser address bar if the install prompt is not ready here.");
-        return;
-      }
-      deferredInstallPrompt.prompt();
-      const choice = await deferredInstallPrompt.userChoice;
-      if (choice?.outcome === "accepted") {
-        installAcceptedThisSession = true;
-      }
-      deferredInstallPrompt = null;
-      installButton.hidden = true;
-    });
   }
 
   const adpInput = document.getElementById("adp_number_input");
@@ -168,7 +102,7 @@ window.addEventListener("load", () => {
   }
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/public/cnc-time-sw.js").catch(() => {});
+    navigator.serviceWorker.register("/cnc-time-sw.js", {scope: "/"}).catch(() => {});
   }
 
   const locationSelects = Array.from(document.querySelectorAll(".location-select"));
@@ -300,3 +234,54 @@ window.addEventListener("load", () => {
     notificationWatch.pollTimer = window.setInterval(refreshNotification, 10000);
   }
 });
+
+import("/public/tablet-session-lock.js").catch(()=>{});
+
+// Ask for relief identity in a touch-friendly modal before submitting the original form.
+let reliefDialog, pendingReliefForm, pendingReliefSubmitter;
+const confirmedReliefForms=new WeakSet();
+function openReliefDialog(form, submitter){
+ if(!reliefDialog){
+  reliefDialog=document.createElement('dialog');
+  reliefDialog.id='relief-adp-dialog';reliefDialog.className='cnc-relief-dialog';
+  reliefDialog.setAttribute('aria-labelledby','relief-adp-heading');
+  reliefDialog.setAttribute('aria-describedby','relief-adp-description');
+  reliefDialog.innerHTML='<div class="relief-dialog-header"><p class="relief-eyebrow">Break coverage</p><h2 id="relief-adp-heading">Start break with relief</h2><p id="relief-adp-description">Enter the ADP number of the operator taking over.</p></div><form id="relief-adp-form" class="cnc-form relief-dialog-body"><div class="relief-production-note"><strong>Production stays running</strong><span>This break will not count as downtime.</span></div><label for="relief-adp-input">Relief operator ADP number</label><input id="relief-adp-input" name="relief_adp" inputmode="numeric" pattern="[0-9]+" required autocomplete="off" placeholder="Enter ADP number" aria-describedby="relief-adp-note relief-adp-error" autofocus><p id="relief-adp-note">Use the ADP number of the person providing relief.</p><p id="relief-adp-error" role="alert"></p><div class="relief-dialog-actions"><button class="cnc-button ghost" id="relief-adp-cancel" type="button">Cancel</button><button class="cnc-button" type="submit">Confirm Relief</button></div></form>';
+  document.body.append(reliefDialog);
+  reliefDialog.querySelector('#relief-adp-cancel').addEventListener('click',()=>reliefDialog.close());
+  reliefDialog.addEventListener('close',()=>{pendingReliefForm=null;pendingReliefSubmitter=null;});
+  reliefDialog.querySelector('form').addEventListener('submit',event=>{
+   event.preventDefault();if(!pendingReliefForm)return;
+   const adp=reliefDialog.querySelector('[name="relief_adp"]').value.trim();
+   if(!/^\d+$/.test(adp)){reliefDialog.querySelector('#relief-adp-error').textContent='Enter a valid ADP number.';return;}
+   const original=pendingReliefForm,button=pendingReliefSubmitter;
+   let field=original.querySelector('[name="relief_adp"]');
+   if(!field){field=document.createElement('input');field.type='hidden';field.name='relief_adp';original.append(field);}
+   field.value=adp;confirmedReliefForms.add(original);reliefDialog.close();
+   original.requestSubmit(button||undefined);
+  });
+ }
+ if(reliefDialog.open)return;
+ pendingReliefForm=form;pendingReliefSubmitter=submitter;
+ reliefDialog.querySelector('form').reset();
+ reliefDialog.querySelector('#relief-adp-error').textContent='';
+ reliefDialog.querySelector('#relief-adp-heading').textContent=form.getAttribute('action')==='/time/relief-arrived'?'Relief has arrived':'Start break with relief';
+ reliefDialog.showModal();reliefDialog.querySelector('[name="relief_adp"]').focus();
+}
+document.addEventListener('submit',event=>{
+ const form=event.target;
+ if(!form.matches?.('form[action="/time/relief-arrived"], form[action="/time/pause"]'))return;
+ if(form.getAttribute('action')==='/time/pause'&&form.elements.break_type?.value!=='With Relief')return;
+ if(confirmedReliefForms.delete(form))return;
+ event.preventDefault();openReliefDialog(form,event.submitter);
+});
+
+if(document.querySelector('form[action="/time/stop"]')){
+ import('/public/lunch-reminder.js').then(({installLunchReminder,lunchForm})=>installLunchReminder({getActive:()=>{
+  const form=lunchForm();if(!form)return null;
+  const token=form.elements.entry_id?.value;if(!token)return null;
+  const owner=document.getElementById('earlier-tablet-work')?.dataset.owner||token;
+  let shift='40';try{shift=JSON.parse(owner)[2]||shift;}catch{}
+  return {form,token,owner,shift};
+ }})).catch(()=>{});
+}

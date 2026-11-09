@@ -57,16 +57,18 @@ def get_lunch(inspection_id, reviewer_adp):
     return dict(row)
 
 
-def evaluate_full(plan, values):
+def evaluate_full(plan, values, require_explicit_visual=False):
     measurements = []
     for element in plan:
         row = dict(element)
         value = values.get(str(element["element_sequence"]), "")
         if element.get("capture_type") == "boolean":
+            if require_explicit_visual and str(value).strip().lower() not in {"yes", "no"}:
+                raise ValueError("Select Pass or Fail for every visual element.")
             value = "Yes" if str(value).lower() in {"yes", "true", "1", "on"} else "No"
         elif element.get("capture_type") == "numeric":
             try:
-                if not math.isfinite(float(str(value).strip())):
+                if not math.isfinite(float(str(value).strip().replace("−", "-"))):
                     raise ValueError()
             except (ValueError, TypeError):
                 raise ValueError("Enter a complete finite measurement for every numeric element.")
@@ -81,7 +83,7 @@ def complete_lunch(inspection_id, reviewer_adp, values, notes=""):
     row = get_lunch(inspection_id, reviewer_adp)
     if row["status"] != "in_progress":
         return row  # Retry is idempotent; submitted lunch records are immutable.
-    result = evaluate_full(row["recipe_snapshot"], values)
+    result = evaluate_full(row["recipe_snapshot"], values, require_explicit_visual=bool(row["source_snapshot"].get("require_explicit_visual")))
     connection = db.get_db_connection()
     try:
         with connection.cursor() as cursor:

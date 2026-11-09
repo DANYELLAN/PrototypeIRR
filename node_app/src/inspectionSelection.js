@@ -1,31 +1,48 @@
+export const INSPECTION_CONNECTION_TYPES = Object.freeze(['BEN-IGT','BEN-EUI','BEN-HT6','BEN-FJ','BEN-SF','BEN-HSF II','BTS-6']);
+const canonicalConnection = value => {
+  const normalized=String(value ?? '').trim().toUpperCase().replace(/\s*-\s*/g,'-').replace(/\s+/g,' ');
+  return INSPECTION_CONNECTION_TYPES.includes(normalized) ? normalized : '';
+};
+
 export function resolveWorkOrderSelection(workOrders, requested = {}, previous = {}) {
   const numbers = [...new Set(workOrders.map((item) => item.production_number))].sort();
-  const productionNumber = String(requested.productionNumber ?? previous.productionNumber ?? numbers[0] ?? "");
+  const productionNumber = String(requested.productionNumber ?? previous.productionNumber ?? numbers[0] ?? '');
   const operations = workOrders.filter((item) => String(item.production_number) === productionNumber);
   const descriptions = [...new Map(operations.map((item) => [item.operation_description, item])).values()];
   const sameWorkOrder = productionNumber === previous.productionNumber;
-  let description = String(requested.operationDescription ?? (sameWorkOrder ? previous.operationDescription : "") ?? "");
-  if (!descriptions.some((item) => item.operation_description === description)) description = "";
-  // A single fully specified operation is unambiguous; otherwise let the inspector choose.
+  let description = String(requested.operationDescription ?? (sameWorkOrder ? previous.operationDescription : '') ?? '');
+  if (!descriptions.some((item) => item.operation_description === description)) description = '';
   const specified = descriptions.filter((item) => {
     const parts = item.inspection_entry || {};
-    return parts.size && parts.weight && parts.connection && parts.end_type;
+    return parts.size && parts.weight && canonicalConnection(parts.connection) && parts.end_type;
   });
   if (!description && specified.length === 1) description = specified[0].operation_description;
   const operation = descriptions.find((item) => item.operation_description === description);
   const parts = operation?.inspection_entry || {};
   const changed = productionNumber !== previous.productionNumber || description !== previous.operationDescription;
+  const specificationContext = JSON.stringify([productionNumber,description]);
+  // Submitted fields belong only to the description that rendered them.
+  const acceptRequested = !changed || requested.specificationContext === specificationContext;
+  const automatic = {sizeLabel:parts.size || '',weightLabel:parts.weight || '',connectionLabel:canonicalConnection(parts.connection),endType:parts.end_type || ''};
+  const missingFields=Object.keys(automatic).filter(key=>!automatic[key]);
+  const details={};
+  for(const key of Object.keys(automatic)) {
+    const fallback=acceptRequested && Object.hasOwn(requested,key) ? requested[key] : !changed ? previous[key] : '';
+    details[key]=operation ? automatic[key] || String(fallback ?? '').trim() : '';
+  }
+  details.connectionLabel=canonicalConnection(details.connectionLabel);
+  details.endType=['BOX','PIN'].includes(details.endType.toUpperCase()) ? details.endType.toUpperCase() : '';
+  const detailsChanged=!changed && Object.keys(details).some(key=>Object.hasOwn(previous,key) && previous[key]!==details[key]);
   return {
-    descriptions,
+    descriptions, missingFields, specificationContext,
+    usesManualDetails:missingFields.some(key=>Boolean(details[key])),
     selection: {
-      productionNumber,
-      operationDescription: description,
-      sizeLabel: parts.size || "", weightLabel: parts.weight || "", connectionLabel: parts.connection || "", endType: parts.end_type || "",
-      recipeName: String(requested.recipeName ?? (changed ? "" : previous.recipeName) ?? ""),
-      pipeNumber: changed ? "" : String(requested.pipeNumber ?? previous.pipeNumber ?? ""),
-      inspectionScope: requested.inspectionScope || previous.inspectionScope || "standard",
+      productionNumber,operationDescription:description,...details,
+      recipeName:String(requested.recipeName ?? (changed || detailsChanged ? '' : previous.recipeName) ?? ''),
+      pipeNumber:changed || detailsChanged ? '' : String(requested.pipeNumber ?? previous.pipeNumber ?? ''),
+      inspectionScope:requested.inspectionScope || previous.inspectionScope || 'standard',
     },
-    changed,
+    changed:changed || detailsChanged,
   };
 }
 

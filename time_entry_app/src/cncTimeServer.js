@@ -1,4 +1,7 @@
+import {timeNavigation} from "../public/time-entry-ui.js";
 import "./environment.js";
+import {enableTabletHttps} from "../../shared/appTransport.js";
+import {registerTabletTime} from "./tabletTime.js";
 import { randomBytes } from "node:crypto";
 import express from "express";
 import session from "express-session";
@@ -7,6 +10,7 @@ import { fileURLToPath } from "url";
 import { callCncBridge } from "./cncTimeBridge.js";
 import { dailyTimeReviewMarkup } from "./dailyTimeReview.js";
 import { createClickDiagnostics, requireIT } from "./clickDiagnostics.js";
+import { diagnosticStationView, diagnosticStationHref, diagnosticTime } from "./diagnosticStations.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,10 +26,17 @@ app.use(express.json());
 app.use(
   session({
     secret: process.env.SESSION_SECRET || randomBytes(32).toString("hex"),
+    name: "benoit.time.sid",
+    cookie: {httpOnly:true,sameSite:"lax",secure:"auto",maxAge:7*24*60*60*1000},
     resave: false,
     saveUninitialized: false,
   }),
 );
+app.get('/cnc-time-sw.js', (req,res)=>{
+  res.set({'Service-Worker-Allowed':'/','Cache-Control':'no-cache'});
+  res.sendFile(path.resolve(__dirname,'..','public','cnc-time-sw.js'));
+});
+registerTabletTime(app,{callBridge:callCncBridge,hasRole});
 app.use("/public", express.static(path.resolve(__dirname, "..", "public")));
 const clickDiagnostics = createClickDiagnostics(path.resolve(__dirname, "..", "data", "diagnostics"));
 app.post("/diagnostics/events", (req, res) => clickDiagnostics.ingest(req, res));
@@ -35,16 +46,28 @@ app.get("/admin/click-diagnostics", requireIT, async (req, res, next) => {
   try {
     res.set("Cache-Control", "no-store");
     const filter = String(req.query.filter || "").slice(0, 160);
-    const all = await clickDiagnostics.read();
-    const rows = all.filter((event) => !filter || JSON.stringify(event).toLowerCase().includes(filter.toLowerCase())).slice(-500).reverse();
+    const selectedStation = String(req.query.station || "").slice(0, 160);
+    const dates = { from: String(req.query.from || "").slice(0, 32), to: String(req.query.to || "").slice(0, 32) };
+    const [all, stationContext] = await Promise.all([
+      clickDiagnostics.read(),
+      callCncBridge("get_sign_in_context").catch(() => ({ machine_options: [] })),
+    ]);
+    const view = diagnosticStationView(all, stationContext.machine_options || [], selectedStation, filter, dates);
+    const { rows } = view;
+    const stationTabs = [{ key: "", label: "All Stations", count: view.matchingCount }, ...view.stations]
+      .map((station) => `<a class="${station.key === view.selected ? "active" : ""}" ${station.key === view.selected ? 'aria-current="page"' : ""} href="${escapeHtml(diagnosticStationHref(station.key, filter, dates))}">${escapeHtml(station.label)} <span class="diagnostic-tab-count">${station.count}</span></a>`).join("");
     res.send(layout({ title: "Button Diagnostics", active: "click-diagnostics", sessionData: req.session.cncUser,
       body: `<section class="cnc-card"><h1>Button Diagnostics</h1>
       <p>Press → click → submit → server received → server response. Invalid means a required field or other browser validation blocked submission. Submit cancelled means the operator cancelled confirmation or the app blocked it. A success/info outcome is the app's reported result; an HTTP 302 alone does not prove success.</p>
-      <p>Compare matching interaction IDs. Browser ID links events across pages in one tab. Times below are server receipt times (UTC); hover for the device time. Client events can arrive after server events. A missing event is inconclusive if the device was offline, JavaScript failed, or the tab closed before upload. A press on a disabled button may have no click.</p>
-      <form method="get" action="/admin/click-diagnostics" class="cnc-form"><label>Filter by employee, station, button, interaction or browser ID<input name="filter" value="${escapeHtml(filter)}" /></label><button class="cnc-button" type="submit">Refresh / Filter</button></form>
-      <p>Showing ${rows.length} most recent matching events from the latest 1,000 records. Refresh to see new activity.</p>
-      <div style="overflow:auto"><table><thead><tr><th>Received (UTC)</th><th>Employee / Station</th><th>Event</th><th>Button / Field</th><th>Page / Action</th><th>Result</th><th>Interaction / Browser</th></tr></thead><tbody>
-      ${rows.map((row) => `<tr><td title="Device: ${escapeHtml(row.client_at || "n/a")}">${escapeHtml(row.received_at)}</td><td>${escapeHtml(row.employee)} / ${escapeHtml(row.station)}</td><td>${escapeHtml(row.kind)}${row.disabled ? " (disabled)" : ""}</td><td>${escapeHtml(row.control)}</td><td>${escapeHtml(row.page || row.action)}</td><td>${escapeHtml(row.outcome || "")}${row.status ? ` HTTP ${escapeHtml(row.status)}` : ""}${row.duration_ms != null ? ` · ${escapeHtml(row.duration_ms)} ms` : ""}</td><td><small>${escapeHtml(row.interaction)}<br>${escapeHtml(row.browser)}</small></td></tr>`).join("")}
+      <p>Compare matching interaction IDs. Browser ID links events across pages in one tab. Dates and times use Central Time and server receipt timestamps; hover for the device time. Client events can arrive after server events. A missing event is inconclusive if the device was offline, JavaScript failed, or the tab closed before upload. A press on a disabled button may have no click.</p>
+      <nav class="notification-tabs diagnostic-station-tabs" aria-label="Station diagnostics">${stationTabs}</nav>
+      <form method="get" action="/admin/click-diagnostics" class="cnc-form diagnostic-filters"><input type="hidden" name="station" value="${escapeHtml(view.selected)}" /><label class="diagnostic-search">Filter by employee, button, interaction or browser ID<input name="filter" value="${escapeHtml(filter)}" /></label><label>From date<input type="date" name="from" value="${escapeHtml(dates.from)}" /></label><label>To date<input type="date" name="to" value="${escapeHtml(dates.to)}" /></label><div class="diagnostic-filter-actions"><button class="cnc-button" type="submit">Apply Filters</button><a class="cnc-button ghost" href="${escapeHtml(diagnosticStationHref(view.selected, filter))}">Clear Dates</a></div><p class="diagnostic-date-note">Use the same From and To date for one day. Date ranges include both days, in Central Time.</p></form>
+      ${view.range.error ? `<p class="cnc-empty" role="alert">${escapeHtml(view.range.error)}</p>` : ""}
+      <p>${view.firstDay ? `Available log dates: ${escapeHtml(view.firstDay)} through ${escapeHtml(view.lastDay)} (Central Time).` : "No dated log records are available yet."}</p>
+      <p>Showing ${rows.length} most recent matching events ${view.selected ? `for ${escapeHtml(view.stations.find(station => station.key === view.selected)?.label || selectedStation)}` : "across all stations"} from the retained logs (up to 500 displayed). Refresh to see new activity.</p>
+      ${rows.length ? "" : '<p class="cnc-empty">No matching activity for the selected station, dates and text filter.</p>'}
+      <div style="overflow:auto"><table><thead><tr><th>Received (Central)</th><th>Employee / Station</th><th>Event</th><th>Button / Field</th><th>Page / Action</th><th>Result</th><th>Interaction / Browser</th></tr></thead><tbody>
+      ${rows.map((row) => `<tr><td title="Device: ${escapeHtml(row.client_at || "n/a")}">${escapeHtml(diagnosticTime(row.received_at))}</td><td>${escapeHtml(row.employee)} / ${escapeHtml(row.station)}</td><td>${escapeHtml(row.kind)}${row.disabled ? " (disabled)" : ""}</td><td>${escapeHtml(row.control)}</td><td>${escapeHtml(row.page || row.action)}</td><td>${escapeHtml(row.outcome || "")}${row.status ? ` HTTP ${escapeHtml(row.status)}` : ""}${row.duration_ms != null ? ` · ${escapeHtml(row.duration_ms)} ms` : ""}</td><td><small>${escapeHtml(row.interaction)}<br>${escapeHtml(row.browser)}</small></td></tr>`).join("")}
       </tbody></table></div></section>` }));
   } catch (error) { next(error); }
 });
@@ -287,29 +310,7 @@ function exportFileName(startDate, endDate) {
 function layout({ title, body, sessionData, notice, active = "" }) {
   const authed = Boolean(sessionData?.employee);
   const now = new Date();
-  const navItems = [
-    { key: "home", href: "/dashboard", label: "Machine Overview" },
-    { key: "time", href: "/time", label: "Time Entry" },
-    { key: "checklist", href: "/checklist", label: "Daily Checklist" },
-    { key: "notifications", href: "/notifications", label: "Notifications" },
-    { key: "maintenance", href: "/maintenance", label: "Maintenance" },
-    { key: "it", href: "/contact/it", label: "IT Support" },
-  ].filter((item) => {
-    if (!authed) return true;
-    if (item.key === "home" || item.key === "time" || item.key === "checklist" || item.key === "notifications" || item.key === "maintenance" || item.key === "it") {
-      return hasRole(sessionData, "operator");
-    }
-    return true;
-  });
-  if (authed && hasRole(sessionData, "exporter")) {
-    navItems.push({ key: "exports", href: "/exports", label: "Exports" });
-  }
-  if (authed && hasRole(sessionData, "approver")) {
-    navItems.push({ key: "admin", href: "/admin", label: "Admin Approvals" });
-  }
-  if (authed && hasRole(sessionData, "it")) {
-    navItems.push({ key: "click-diagnostics", href: "/admin/click-diagnostics", label: "Button Diagnostics" });
-  }
+  const navItems = timeNavigation(sessionData, hasRole);
 
   return `<!doctype html>
   <html lang="en">
@@ -318,10 +319,9 @@ function layout({ title, body, sessionData, notice, active = "" }) {
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <meta name="theme-color" content="#8a1f24" />
       <title>${escapeHtml(title)}</title>
-      <link rel="manifest" href="/public/cnc-time.webmanifest" />
       <link rel="stylesheet" href="/public/cnc-time.css" />
       <script defer src="/public/click-diagnostics.js?v=1"></script>
-      <script defer src="/public/cnc-time.js?v=5"></script>
+      <script defer src="/public/cnc-time.js?v=6"></script>
     </head>
     <body>
       <div class="benoit-app-shell">
@@ -960,7 +960,6 @@ app.get("/", async (req, res, next) => {
                 <label><span>Shift</span><select name="shift_id">${shiftOptions}</select></label>
                 <div class="login-actions">
                   <button class="cnc-button" type="submit">Sign In</button>
-                  <button class="cnc-button install ghost" id="install-app-button" type="button" hidden>Install App</button>
                 </div>
               </form>
             </section>
@@ -1379,6 +1378,7 @@ app.get("/time", requireOperator, async (req, res, next) => {
   try {
     const context = await dashboardContext(req);
     const sessionData = req.session.cncUser;
+    const earlierTabletTimer = await callCncBridge('tablet_time_active',{session:sessionData});
     const dailyReview = await callCncBridge("get_daily_time_review", {
       employee: sessionData.employee,
       labor_date: req.session.dailyReviewDate,
@@ -1408,6 +1408,8 @@ app.get("/time", requireOperator, async (req, res, next) => {
         notice: req.session.notice,
         active: "time",
         body: `${dailyTimeReviewMarkup(dailyReview, { editing: req.session.dailyReviewEditing, error: req.session.dailyReviewError })}
+        <section class="cnc-card" id="earlier-tablet-work" data-owner="${escapeHtml(JSON.stringify([String(sessionData.employee.emp_id).replace(/^0+/, '') || '0', String(sessionData.machine_no), String(sessionData.shift_id)]))}" data-server-timer="${earlierTabletTimer ? 'yes' : 'no'}" ${earlierTabletTimer ? '' : 'hidden'}><h3>Earlier tablet work</h3><p id="offline-work-status">Saved offline work is syncing. Any running timer continues below.</p><div id="offline-timer-container"></div></section>
+        <script type="module" src="/public/review-time-recovery.js"></script>
         <section class="cnc-hero compact">
           <div>
             <p class="eyebrow">Time Entry</p>
@@ -1427,6 +1429,7 @@ app.get("/time", requireOperator, async (req, res, next) => {
                       context.active_entry.status === "Paused" && context.active_break
                         ? `<div class="break-note">
                             <strong>${escapeHtml(context.active_break.break_type || "Break")}</strong>
+                            ${context.active_break.relief_adp ? `<span>Relief: ${escapeHtml(context.active_break.relief_name || "")} · ADP ${escapeHtml(context.active_break.relief_adp)} · Production continuing</span>` : ""}
                             ${context.active_break.comment ? `<span>${escapeHtml(context.active_break.comment)}</span>` : ""}
                           </div>`
                         : ""
@@ -1490,7 +1493,7 @@ app.get("/time", requireOperator, async (req, res, next) => {
                       }
                       ${
                         context.active_entry.status === "Paused"
-                          ? `<form method="post" action="/time/resume" class="cnc-active-downtime lunch-action-tile"><input type="hidden" name="entry_id" value="${escapeHtml(context.active_entry.sp_id)}" /><button class="cnc-button ghost" type="submit">Resume Production</button></form>`
+                          ? `<form method="post" action="/time/resume" class="cnc-active-downtime lunch-action-tile"><input type="hidden" name="entry_id" value="${escapeHtml(context.active_entry.sp_id)}" /><button class="cnc-button ghost" type="submit">${context.active_break?.break_type === "With Relief" ? "End Relieved Break" : "Resume Production"}</button></form>${context.active_break?.break_type === "No Relief" ? `<form method="post" action="/time/relief-arrived" class="cnc-active-downtime lunch-action-tile"><input type="hidden" name="entry_id" value="${escapeHtml(context.active_entry.sp_id)}"><button class="cnc-button ghost" type="submit">Relief Arrived</button></form>` : ""}`
                           : ""
                       }
                     </div>
@@ -1601,6 +1604,7 @@ app.post("/time/review/confirm", requireOperator, async (req, res) => {
 
 app.post("/time/start", requireOperator, async (req, res) => {
   try {
+    if(await callCncBridge('tablet_time_active',{session:req.session.cncUser})) throw new Error('A tablet timer is running. Stop it in Time Entry before starting another.');
     await callCncBridge("start_time_entry", {
       employee: req.session.cncUser.employee,
       shift_id: req.session.cncUser.shift_id,
@@ -1622,23 +1626,33 @@ app.post("/time/pause", requireOperator, async (req, res) => {
       entry_id: req.body.entry_id,
       break_type: req.body.break_type,
       comments: req.body.comments,
+      relief_adp: req.body.relief_adp,
+      original_adp: req.session.cncUser.employee.emp_id,
     });
     const label = req.body.break_type === "Lunch" ? "Lunch started." : "Break started.";
-    req.session.notice = { kind: "info", message: `${label} Production time is paused.` };
+    req.session.notice = { kind: "info", message: req.body.break_type === "With Relief" ? "Relieved break started. Production time continues." : `${label} Production time is paused.` };
   } catch (error) {
     req.session.notice = { kind: "warning", message: error.message };
   }
-  res.redirect("/time");
+  res.redirect("/time?traditional=1");
 });
 
 app.post("/time/resume", requireOperator, async (req, res) => {
   try {
-    await callCncBridge("resume_from_lunch", { entry_id: req.body.entry_id });
+    await callCncBridge("resume_from_lunch", { entry_id: req.body.entry_id, original_adp: req.session.cncUser.employee.emp_id });
     req.session.notice = { kind: "success", message: "Break ended. Production time resumed." };
   } catch (error) {
     req.session.notice = { kind: "warning", message: error.message };
   }
-  res.redirect("/time");
+  res.redirect("/time?traditional=1");
+});
+
+app.post("/time/relief-arrived", requireOperator, async (req,res)=>{
+  try {
+    await callCncBridge("relief_arrived",{entry_id:req.body.entry_id,relief_adp:req.body.relief_adp,original_adp:req.session.cncUser.employee.emp_id});
+    req.session.notice={kind:"success",message:"Relief arrived. Production time is continuing."};
+  } catch(error) {req.session.notice={kind:"warning",message:error.message};}
+  res.redirect("/time?traditional=1");
 });
 
 app.post("/time/stop", requireOperator, async (req, res) => {
@@ -1968,8 +1982,8 @@ app.get("/maintenance", requireOperator, async (req, res, next) => {
         body: `<section class="cnc-hero compact"><div><p class="eyebrow">Maintenance</p><h2>Open a maintenance request for the Ennis CNC area.</h2></div></section>
         <section class="cnc-card">
           <form method="post" action="/maintenance" class="cnc-form two-col">
-            <label class="full"><span>Needed</span><input name="title" placeholder="What needs to be done?" required /></label>
-            <label class="full"><span>Description</span><textarea name="description" rows="5" required></textarea></label>
+            <label class="full"><span>Needed</span><input name="title" maxlength="255" placeholder="What needs to be done?" required /></label>
+            <label class="full"><span>Description</span><textarea name="description" rows="5" maxlength="255" placeholder="Describe the issue (up to 255 characters)." required></textarea></label>
             <label><span>Priority</span><select name="priority"><option>Low</option><option>Medium</option><option>High</option></select></label>
             <label><span>Requester Badge</span><input name="requester_id" value="${escapeHtml(req.session.cncUser.employee.emp_id)}" required /></label>
             <label class="full"><span>Requester Name</span><input name="requester_name" value="${escapeHtml(req.session.cncUser.employee.full_name)}" required /></label>
@@ -1988,7 +2002,7 @@ app.get("/maintenance", requireOperator, async (req, res, next) => {
 
 app.post("/maintenance", requireOperator, async (req, res) => {
   try {
-    await callCncBridge("submit_maintenance_request", {
+    const result = await callCncBridge("submit_maintenance_request", {
       employee: req.session.cncUser.employee,
       requester_id: req.body.requester_id,
       requester_name: req.body.requester_name,
@@ -1999,7 +2013,9 @@ app.post("/maintenance", requireOperator, async (req, res) => {
       asset_id: req.body.asset_id,
       user_email: req.session.cncUser.user_email,
     });
-    req.session.notice = { kind: "success", message: "Maintenance request submitted." };
+    req.session.notice = result.submitted
+      ? { kind: "success", message: `Maintenance request sent to SharePoint${result.sharepoint_item_id ? ` (#${result.sharepoint_item_id})` : ""}.` }
+      : { kind: "warning", message: "Maintenance request saved locally and waiting to send to SharePoint. Do not submit it again; the app will retry automatically." };
   } catch (error) {
     req.session.notice = { kind: "warning", message: error.message };
   }
@@ -2042,12 +2058,12 @@ app.post("/contact/it", requireOperator, async (req, res) => {
       user_name: req.session.cncUser.employee.full_name,
       machine_no: req.session.cncUser.machine_no,
       category: req.body.category,
+      department: req.session.cncUser.employee.department,
       issue: req.body.issue,
     });
-    req.session.notice = {
-      kind: "success",
-      message: result.queued ? "IT request queued locally. Add `CNC_TIME_IT_WEBHOOK_URL` to deliver automatically." : "IT request delivered.",
-    };
+    req.session.notice = result.delivered
+      ? { kind: "success", message: `IT request sent to SharePoint Help Desk${result.sharepoint_item_id ? ` (#${result.sharepoint_item_id})` : ""}.` }
+      : { kind: "warning", message: "IT request saved locally and waiting to send to SharePoint Help Desk. Do not submit it again; the app will retry automatically." };
   } catch (error) {
     req.session.notice = { kind: "warning", message: error.message };
   }
@@ -2116,3 +2132,5 @@ app.listen(port, () => {
   setInterval(() => runBackgroundSync("scheduled"), syncIntervalMs).unref();
 });
 
+
+enableTabletHttps(app,{name:"Time Entry",port:Number(process.env.CNC_TIME_HTTPS_PORT||3443)});

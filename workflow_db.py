@@ -6,6 +6,7 @@ import os
 import re
 from datetime import datetime, time
 from fractions import Fraction
+from decimal import Decimal, InvalidOperation
 
 from psycopg2.extras import RealDictCursor
 
@@ -34,7 +35,40 @@ from field_mappings import (
     RECIPE_NAME_FIELDS,
     RECIPE_VERSION_FIELDS,
 )
-from postgres_sync import get_db_connection
+from postgres_sync import get_db_connection as _open_workflow_connection
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+_borrowed_workflow_connection = ContextVar('borrowed_workflow_connection', default=None)
+
+class _BorrowedWorkflowConnection:
+    """Legacy helpers may commit/close; the outer tablet transaction owns both."""
+    def __init__(self, connection): self.connection=connection
+    def __getattr__(self, name): return getattr(self.connection, name)
+    def commit(self): pass
+    def close(self): pass
+
+def get_db_connection():
+    return _borrowed_workflow_connection.get() or _open_workflow_connection()
+
+@contextmanager
+def workflow_transaction():
+    borrowed=_borrowed_workflow_connection.get()
+    if borrowed is not None:
+        yield borrowed
+        return
+    connection=_open_workflow_connection()
+    token=_borrowed_workflow_connection.set(_BorrowedWorkflowConnection(connection))
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        _borrowed_workflow_connection.reset(token)
+        connection.close()
+
 from sharepoint_client import (
     build_headers,
     create_list_item,
@@ -1026,18 +1060,37 @@ def get_connection_types(production_number, branch=None):
 
 def _extract_inspection_entry_parts(operation_description):
     """Read the specification from an operation description or Digital IRR report name."""
-    text = str(operation_description or "").strip().replace("−", "-").replace("–", "-")
+    text = re.sub(r"\s+", " ", str(operation_description or "").strip().replace("−", "-").replace("–", "-"))
     size = re.search(r"Size:\s*([^,]+)", text, re.IGNORECASE)
     weight = re.search(r"Weight:\s*([^,]+)", text, re.IGNORECASE)
-    connection = re.search(r"Connection:\s*(.+?)(?:\s+(?:Pin|Box)\b|\s+as\s+Per\b|$)", text, re.IGNORECASE)
+    connection = re.search(r"Connection:\s*(.+?)(?:\s+(?:Pin|Box)\b|\s+(?:as\s+)?Per\b|\s*-?\s*Drawing\s*#|$)", text, re.IGNORECASE)
     connection_end = re.search(r"Connection:.*?\b(Pin|Box)\b", text, re.IGNORECASE)
-    end = connection_end or re.search(r"\bon\s+(Pin|Box)\s+End\b", text, re.IGNORECASE)
+    end = connection_end or re.search(r"\b(Pin|Box)\s+(?:Ends?|Connection)\b", text, re.IGNORECASE)
     drawing = re.search(r"Print\s*#?\s*(.+)$", text, re.IGNORECASE)
     parts = {"size": size.group(1).strip() if size else None,
              "weight": weight.group(1).strip() if weight else None,
              "connection": connection.group(1).strip() if connection else None,
              "end_type": end.group(1).upper() if end else None,
              "drawing": drawing.group(1).strip() if drawing else None}
+    # Current production descriptions omit field labels, e.g. THREAD BOX END
+    # CONNECTION FOR 2 7/8" 7.90# P-110 R2 LONG-UPSET BEN-HT6 PER BENOIT PRINT.
+    dimensions = list(re.finditer(r'(?<![\w./])((?:\d+\s+)?\d+/\d+|\d+(?:\.\d+)?)\s*["″]\s*(\d+(?:\.\d+)?)\s*#', text))
+    if len(dimensions) == 1 and end:
+        dimension = dimensions[0]
+        parts["size"] = parts["size"] or dimension.group(1) + '"'
+        parts["weight"] = parts["weight"] or dimension.group(2) + '#'
+        # Match an explicit connection designation, never steel grade or upset type.
+        suffix = re.split(r'\b(?:PER\s+(?:BENOIT\s+)?PRINT|DRAWING)\b', text[dimension.end():], maxsplit=1, flags=re.IGNORECASE)[0]
+        # A designation immediately followed by UPSET describes the tubing,
+        # e.g. BEN-MU UPSET, rather than its threaded connection (BEN-EUI).
+        designations = [
+            match.group(0) for match in re.finditer(
+                r'\b(?:BEN\s*-\s*HSF\s+II|(?:BEN|BTS)\s*-\s*[A-Z0-9]+(?:\s+(?:IGT|PR))?)\b', suffix, re.IGNORECASE
+            )
+            if not re.match(r'\s+UPSET\b', suffix[match.end():], re.IGNORECASE)
+        ]
+        if len(designations) == 1:
+            parts["connection"] = parts["connection"] or designations[0].strip()
     if parts["size"] and parts["weight"] and parts["connection"]:
         return parts
     # Existing recipe report names use e.g. 2.875 7.90# BTS-6 (PIN) INSPECTION REPORT.
@@ -2035,8 +2088,8 @@ def _prepare_local_recipe_payload(recipe_payload):
             if not tolerance_digits:
                 raise ValueError(f"Element {index} needs tolerance digits.")
             tolerance_value = int(tolerance_digits) / (10 ** tolerance_decimal_places)
-            min_value = nominal - tolerance_value
-            max_value = nominal + tolerance_value
+            min_value = float(Decimal(str(nominal)) - Decimal(str(tolerance_value)))
+            max_value = float(Decimal(str(nominal)) + Decimal(str(tolerance_value)))
             value_format = "decimal"
             dwg_dim = f"{nominal:.{tolerance_decimal_places}f} +/- .{'0' * max(tolerance_decimal_places - len(tolerance_digits), 0)}{tolerance_digits}"
         elif measurement_mode == "asymmetric_tolerance":
@@ -2047,8 +2100,8 @@ def _prepare_local_recipe_payload(recipe_payload):
             minus_tolerance, minus_tolerance_decimals = _parse_decimal_tail(minus_tolerance_text)
             if plus_tolerance < 0 or minus_tolerance < 0:
                 raise ValueError(f"Element {index} tolerance values must be zero or greater.")
-            min_value = nominal - minus_tolerance
-            max_value = nominal + plus_tolerance
+            min_value = float(Decimal(str(nominal)) - Decimal(str(minus_tolerance)))
+            max_value = float(Decimal(str(nominal)) + Decimal(str(plus_tolerance)))
             value_format = "decimal"
             nominal_decimals = _count_decimal_places(nominal)
             tolerance_decimals = max(plus_tolerance_decimals, minus_tolerance_decimals)
@@ -2306,12 +2359,21 @@ def evaluate_measurements(measurements, approval_rules=None):
     failed_count = 0
 
     def normalize_numeric_measurement(raw_value, measurement):
-        # Inspectors enter the complete value, including decimal point/sign.
-        # Never infer missing digits or add the input to the nominal dimension.
-        value = float(str(raw_value).strip())
-        if not math.isfinite(value):
+        # Explicit +/- text is a deviation from a configured nominal. Numeric
+        # values already evaluated by the app are actual values, preventing a
+        # second evaluation from applying an offset twice.
+        text = str(raw_value).strip().replace("−", "-")
+        nominal = measurement.get("nominal")
+        try:
+            value = Decimal(text)
+            if isinstance(raw_value, str) and text.startswith(("+", "-")) and nominal is not None and str(nominal).strip() != "":
+                value += Decimal(str(nominal))
+        except InvalidOperation as exc:
+            raise ValueError("Enter a finite full measurement or signed offset") from exc
+        numeric = float(value)
+        if not math.isfinite(numeric):
             raise ValueError("Measurement must be a finite number")
-        return value
+        return numeric
 
     for measurement in measurements:
         updated = dict(measurement)
@@ -2325,9 +2387,11 @@ def evaluate_measurements(measurements, approval_rules=None):
                 updated["measured_value"] = numeric_value
                 minimum = updated.get("min")
                 maximum = updated.get("max")
-                if minimum is not None and numeric_value < float(minimum):
+                # Legacy recipes can contain binary arithmetic noise at an inclusive limit.
+                # Keep 15 significant digits, matching the browser boundary check.
+                if minimum is not None and numeric_value < float(format(float(minimum), ".15g")):
                     auto_pass = False
-                if maximum is not None and numeric_value > float(maximum):
+                if maximum is not None and numeric_value > float(format(float(maximum), ".15g")):
                     auto_pass = False
             except (TypeError, ValueError):
                 auto_pass = False

@@ -21,17 +21,17 @@ test('mold routes guard identity, station, polling and preserve callback tokens'
   for(const url of ['/workflow/mold-approval','/workflow/mold-approval/status.json?id=7'])assert.equal((await fetch(base+url,{headers:{'x-anonymous':'1'}})).status,401);
   assert.equal((await fetch(base+'/workflow/mold-approval',{method:'POST',headers:{'x-no-station':'1'}})).status,403);
   assert.equal(calls.length,0);
-  const sent=await fetch(base+'/workflow/mold-approval',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({work_order:'WO',inspector_adp:'forged',session_id:999}),redirect:'manual'});
+  const sent=await fetch(base+'/workflow/mold-approval',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({work_order:'WO',operation_description:'BOX',inspector_adp:'forged',session_id:999}),redirect:'manual'});
   assert.equal(sent.status,302);assert.equal(sent.headers.get('location'),'/workflow/mold-approval?watch=7');
-  assert.deepEqual(calls[0].payload,{inspector_adp:'123',session_id:5,work_order:'WO'});
+  assert.deepEqual(calls[0].payload,{inspector_adp:'123',session_id:5,work_order:'WO',operation_description:'BOX'});
   const status=await fetch(base+'/workflow/mold-approval/status.json?id=7');assert.equal(status.headers.get('cache-control'),'no-store');assert.equal((await status.json()).status_label,'Do Not Run');
   const denied=await fetch(base+'/api/notifications/7/decision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:'bad',decision:'approved'})});assert.equal(denied.status,400);
  }finally{await new Promise(r=>server.close(r));}
 });
 test('mold form escapes values, shows queued/failed delivery and both Quality outcomes',()=>{
  for(const status of ['pending','approved_to_run','do_not_run']){
-  const html=renderMoldApproval({work_orders:['<WO>'],watch_id:7,requests:[{id:7,status,delivery_status:'failed',work_order:'<WO>',responder_name:'<script>',response_note:'<note>'}]},{location_name:'E-1'},null);
-  assert.ok(html.includes('&lt;WO&gt;'));assert.ok(!html.includes('<script>'));assert.ok(html.includes('Delivery failed'));
+  const html=renderMoldApproval({work_orders:['<WO>'],operations:[{production_number:'<WO>',operation_id:'0010',operation_description:'<BOX>'}],watch_id:7,requests:[{id:7,status,delivery_status:'failed',work_order:'<WO>',responder_name:'<script>',response_note:'<note>'}]},{location_name:'E-1'},null);
+  assert.ok(html.includes('name="operation_description" required'));assert.ok(html.includes('&lt;BOX&gt;'));assert.ok(html.includes('&lt;WO&gt;'));assert.ok(!html.includes('<script>'));assert.ok(html.includes('Delivery failed'));
  }
  assert.ok(!renderMoldApproval({work_orders:[],requests:[]},null,null).includes('type="submit"'));
 });

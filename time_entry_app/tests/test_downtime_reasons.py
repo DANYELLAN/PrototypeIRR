@@ -130,6 +130,8 @@ class DowntimeReasonTests(unittest.TestCase):
 
     @patch.object(backend, "list_pending_records", return_value=[{"id": 1, "record_type": "misc_time"}])
     @patch.object(backend, "ensure_db")
+    @patch.object(backend, "MAINTENANCE_SHAREPOINT_WRITES_ENABLED", False)
+    @patch.object(backend, "IT_SHAREPOINT_WRITES_ENABLED", False)
     def test_pending_write_sync_skips_when_sharepoint_writes_are_disabled(
         self, _mock_ensure_db, _mock_list_pending_records
     ):

@@ -37,7 +37,7 @@ Register-ScheduledTask `
     -Trigger $trigger `
     -Principal $principal `
     -Settings $settings `
-    -Description "Sends approved CNC labor to the Acumatica Test tenant in on-hold batches." `
+    -Description "Sends approved CNC labor to the configured Acumatica tenant in on-hold batches." `
     -Force `
     -ErrorAction Stop
 

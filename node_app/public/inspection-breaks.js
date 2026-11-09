@@ -12,6 +12,40 @@
   const cancel=document.getElementById('inspection-break-cancel');
   const error=document.getElementById('inspection-break-error');
   const dialogError=document.getElementById('inspection-break-dialog-error');
+  const lunchDialog=document.getElementById('lunch-inspection-dialog');
+  const placeActions=()=>{
+    const sheet=document.querySelector('.inspection-sheet-card');
+    if(!sheet)return;
+    // Retain the live controls and dialogs when an older server replaces only
+    // the worksheet. This keeps their handlers and unfinished lunch values.
+    const incoming=sheet.querySelector('#inspection-break-controls');
+    if(incoming && incoming!==controls){
+      const currentScope=controls.querySelector('#inspection-scope-action-form');
+      const nextScope=incoming.querySelector('#inspection-scope-action-form');
+      if(currentScope && nextScope)currentScope.innerHTML=nextScope.innerHTML;
+      incoming.remove();
+    }
+    for(const item of [dialog,lunchDialog]){
+      if(!item)continue;
+      const incomingDialog=sheet.querySelector('#'+item.id);
+      if(incomingDialog && incomingDialog!==item)incomingDialog.remove();
+    }
+    for(const title of [...sheet.children]){
+      if(title.matches('h3') && title.textContent.trim()==='Current Attempt')title.remove();
+    }
+    controls.classList.remove('card');
+    let heading=controls.querySelector('.inspection-attempt-heading');
+    if(!heading){
+      heading=document.createElement('h3');heading.className='section-title inspection-attempt-heading';
+      heading.append('Current Attempt — ',label);controls.prepend(heading);
+    }
+    const fragment=document.createDocumentFragment();
+    fragment.append(controls);
+    if(dialog)fragment.append(dialog);
+    if(lunchDialog)fragment.append(lunchDialog);
+    sheet.prepend(fragment);
+  };
+  placeActions();
   const syncWorksheet=()=>{
     for(const form of document.querySelectorAll('#inspection-complete-form, .inspection-scope-toggle-form, #inspection-selection-form')) {
       let version=form.querySelector('[name="_coverage_version"]');
@@ -54,7 +88,8 @@
   const transition=async(action,extra={})=>{
     if(busy)return;
     busy=true;error.textContent='';dialogError.textContent='';
-    controls.querySelectorAll('button').forEach(el=>el.disabled=true);
+    const disabledBefore = new Map([...controls.querySelectorAll('button')].map(el=>[el,el.disabled]));
+    disabledBefore.forEach((_,el)=>el.disabled=true);
     dialog.querySelectorAll('button').forEach(el=>el.disabled=true);
     // Freeze new edits while flushing the previous inspector's last draft and changing coverage.
     const workspace=document.getElementById('inspection-workspace');
@@ -65,7 +100,7 @@
       const data=await response.json();if(!response.ok)throw new Error(data.error||'Unable to change break status.');
       state=data;if(dialog.open)dialog.close();reliefForm.reset();render();
     } catch(err){error.textContent=err.message;dialogError.textContent=err.message;try{await refresh();}catch{}}
-    finally{busy=false;if(workspace)workspace.inert=false;controls.querySelectorAll('button').forEach(el=>el.disabled=false);dialog.querySelectorAll('button').forEach(el=>el.disabled=false);}
+    finally{busy=false;if(workspace)workspace.inert=false;disabledBefore.forEach((disabled,el)=>el.disabled=disabled);dialog.querySelectorAll('button').forEach(el=>el.disabled=false);}
   };
   button.addEventListener('click',()=>{if(state.mode)void transition('end');else {choices.hidden=false;reliefForm.hidden=true;dialogError.textContent='';dialog.showModal();}});
   end.addEventListener('click',()=>void transition('end'));
@@ -84,7 +119,7 @@
     form.dataset.reliefInspectors=JSON.stringify(people);
   });
   const workspace=document.getElementById('inspection-workspace');
-  if(workspace)new MutationObserver(syncWorksheet).observe(workspace.parentElement,{childList:true,subtree:false});
+  if(workspace)new MutationObserver(()=>{placeActions();syncWorksheet();}).observe(workspace.parentElement,{childList:true,subtree:false});
   render();
   setInterval(()=>{if(!document.hidden&&!busy)void refresh().catch(err=>{error.textContent=err.message;});},5000);
 })();

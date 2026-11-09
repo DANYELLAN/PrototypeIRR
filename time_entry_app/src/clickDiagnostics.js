@@ -43,9 +43,9 @@ export function createClickDiagnostics(directory) {
     record,
     async read() {
       await pending;
-      const parts = await Promise.all([1, 0].map((index) => readFile(index ? `${filename}.1` : filename, "utf8").catch(() => "")));
-      return parts.join("\n").split("\n").filter(Boolean).slice(-1000).flatMap((line) => {
-        try { return [JSON.parse(line)]; } catch { return []; }
+      const parts = await Promise.all([4, 3, 2, 1, 0].map((index) => readFile(index ? `${filename}.${index}` : filename, "utf8").catch(() => "")));
+      return parts.join("\n").split("\n").filter(Boolean).flatMap((line) => {
+        try { const event = JSON.parse(line); return event && typeof event === "object" && !Array.isArray(event) ? [event] : []; } catch { return []; }
       });
     },
     async ingest(req, res) {

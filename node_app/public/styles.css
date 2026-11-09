@@ -2666,3 +2666,35 @@ td {
 .inspection-break-dialog [hidden] { display: none !important; }
 .inspection-sheet-table .relief-pipe-column .pipe-history-connection-header { flex-direction: column; }
 .inspection-sheet-table .relief-pipe-column .pipe-history-connection-label { flex: none; width: 100%; }
+
+/* Align the three actions with the worksheet's full metadata width. */
+.inspection-break-controls { display:block; margin:0 0 12px; padding:0; }
+.inspection-attempt-heading { margin:0 0 12px; }
+.inspection-action-buttons { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); align-items:stretch; gap:8px; width:100%; }
+.inspection-action-buttons .inspection-scope-toggle-form { display:flex; width:100%; margin:0; padding:0; border:0; background:none; }
+.inspection-action-buttons .button { width:100%; min-width:0; min-height:44px; height:100%; margin:0; padding:10px 8px; white-space:normal; }
+.inspection-break-controls > #inspection-break-error { margin:8px 0 0; }
+@media print { .inspection-break-controls { display:none; } }
+
+.lunch-inspection-dialog { width:min(1100px,calc(100vw - 24px)); max-height:calc(100dvh - 24px); padding:18px; border:2px solid var(--brand,#a31521); border-radius:8px; background:var(--surface,#fff); color:var(--text,#222); overflow:auto; }
+.lunch-inspection-dialog::backdrop { background:rgba(0,0,0,.6); }
+.lunch-popup-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.lunch-popup-header h2 { margin:0; }
+#lunch-popup-error:empty { display:none; }
+#lunch-popup-error { color:#a31521; }
+.lunch-popup-identity { display:flex; flex-wrap:wrap; align-items:end; gap:12px; }
+.lunch-popup-identity label { display:grid; gap:6px; }
+.lunch-popup-table-wrap { overflow-x:auto; max-width:100%; margin:14px 0; }
+.lunch-popup-table { width:100%; min-width:620px; table-layout:fixed; border-collapse:collapse; }
+.lunch-popup-table th,.lunch-popup-table td { border:1px solid var(--border,#aaa); padding:9px; vertical-align:top; overflow-wrap:anywhere; white-space:normal; }
+.lunch-popup-table th:first-child { width:38px; }
+.lunch-popup-table th:nth-child(2) { width:24%; }
+.lunch-popup-table input,.lunch-popup-table select { width:100%; min-width:0; min-height:40px; }
+.lunch-popup-table .lunch-reference-value { background:var(--bg-soft,#f1f1f1); }
+.lunch-popup-save { display:grid; gap:12px; }
+.lunch-popup-save textarea { width:100%; }
+.lunch-popup-save > button { justify-self:start; }
+@media (max-width:700px) { .lunch-inspection-dialog { padding:12px; } }
+
+.measurement-actual { display:block; margin-top:5px; font-size:12px; font-weight:700; white-space:normal; }
+.measurement-actual[hidden] { display:none; }

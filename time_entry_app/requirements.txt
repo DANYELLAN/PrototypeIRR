@@ -2,3 +2,6 @@
 msal>=1.31,<2
 psycopg2-binary>=2.9,<3
 requests>=2.32,<3
+
+# IANA timezone rules on Windows for offline labor dates.
+tzdata>=2025.2

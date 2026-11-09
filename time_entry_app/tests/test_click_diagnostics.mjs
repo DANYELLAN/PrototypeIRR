@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import vm from "node:vm";
@@ -114,4 +114,15 @@ test("browser capture records disabled presses, validation, cancellation, keyboa
   documentHandlers.click({ target: button, detail: 0 });
   await new Promise(setImmediate);
   assert.notEqual(batches.at(-1).interaction, click.interaction);
+});
+
+test("date searches can read all retained archives beyond the newest 1000 events",async()=>{
+ const directory=await mkdtemp(path.join(os.tmpdir(),"cnc-date-test-"));
+ try{
+  await writeFile(path.join(directory,'clicks.jsonl.4'),JSON.stringify({id:'oldest',received_at:'2026-11-01T12:00:00Z'})+'\nnull\ninvalid-json\n');
+  await writeFile(path.join(directory,'clicks.jsonl.2'),JSON.stringify({id:'middle',received_at:'2026-11-03T12:00:00Z'})+'\n');
+  await writeFile(path.join(directory,'clicks.jsonl'),Array.from({length:1100},(_,id)=>JSON.stringify({id,received_at:'2026-11-05T12:00:00Z'})).join('\n'));
+  const rows=await createClickDiagnostics(directory).read();
+  assert.equal(rows.length,1102);assert.equal(rows[0].id,'oldest');assert.equal(rows[1].id,'middle');
+ }finally{await rm(directory,{recursive:true,force:true});}
 });
