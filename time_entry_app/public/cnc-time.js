@@ -276,12 +276,15 @@ document.addEventListener('submit',event=>{
  event.preventDefault();openReliefDialog(form,event.submitter);
 });
 
-if(document.querySelector('form[action="/time/stop"]')){
+if(document.querySelector('form[action="/time/stop"],form[data-setup-handoff]')){
  import('/public/lunch-reminder.js').then(({installLunchReminder,lunchForm})=>installLunchReminder({getActive:()=>{
   const form=lunchForm();if(!form)return null;
   const token=form.elements.entry_id?.value;if(!token)return null;
   const owner=document.getElementById('earlier-tablet-work')?.dataset.owner||token;
   let shift='40';try{shift=JSON.parse(owner)[2]||shift;}catch{}
-  return {form,token,owner,shift};
+  const missedLunch=document.querySelector('form[action="/time/active/log-lunch"]');
+  return {form,token,owner,shift,logLunch:missedLunch?day=>{
+   missedLunch.elements.lunch_day.value=day;missedLunch.requestSubmit();return new Promise(()=>{});
+  }:undefined};
  }})).catch(()=>{});
 }

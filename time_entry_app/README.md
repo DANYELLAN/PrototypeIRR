@@ -287,9 +287,12 @@ waiting to send. SharePoint currently limits the title and description to 255 ch
 IT Request submissions now target Benoit IT / IT Support Help Desk, replacing the
 legacy IT webhook/outbox path. `CNC_TIME_IT_SHAREPOINT_WRITES_ENABLED=true` enables
 this list independently of maintenance and the global SharePoint write setting.
-Requester name/email, department when available, category, full issue description,
+The form shows a read-only User Name from the ADP-authenticated employee; no
+station email is requested or required. Requester name, department when available, category, full issue description,
 and machine number are retained. New tickets use Status New and Location Ennis;
 Date of Issue uses Central time. Priority is left for IT to assign.
+Legacy queued requests retain any existing requester email; new form requests
+omit RequesterEmail rather than substituting a station address or a name.
 
 The local database retains requests before delivery. The existing background sync
 retries pending support requests, and the list's unique indexed `TimeEntryRequestKey`
@@ -346,3 +349,156 @@ Acumatica eligibility is based on the station, not the employee Machinist flag.
 Only CNC machines 1-6 (using the existing machine-to-area mapping) receive Acumatica
 labor payloads. The same rule applies to timer, manual, downtime and approval edits.
 Approval status and the Benoit cutover timestamp remain required for sending.
+# Timed Downtime
+
+For an active entry, Log Downtime now collects a reason and optional comments,
+then Start Downtime saves the start timestamp. A persistent modal shows elapsed
+downtime until End Downtime & Resume Production is pressed. Ending queues one
+Misc Time record for the existing supervisor approval flow and excludes that
+interval from production once. Separate historical/manual Misc Time entry is
+unchanged. Breaks, active-entry corrections and stopping an entry are blocked
+until its downtime ends.
+
+The regular screen stores sessions in SQLite (`timed_downtime_sessions`), and
+the tablet screen stores start/end events in its existing offline queue. Both
+survive reloads. Duplicate end requests cannot create a second approval. Duration
+is measured from timestamps, retained in seconds, and uses the app's existing
+whole-minute accounting for labor totals (sub-minute intervals are not rounded
+up). Offline asset release v28 includes the popup module; refresh connected
+tablets to install it. Never clear tablet storage while work is waiting to sync.
+
+# End Set-Up Handoff
+
+Running entries with detail Set-Up replace Stop And Submit with End Set-Up in
+the quantity row. The entered quantity is submitted on the Set-Up record and is
+not carried into the new entry. End Set-Up opens a
+confirmation dialog defaulted to Machining, with all normal detail choices
+available. Cancel leaves Set-Up running. Confirm submits Set-Up for the normal
+supervisor approval flow and starts a new entry for the same WO, operation,
+description, operator, station and shift, at one shared boundary timestamp.
+Existing breaks and downtime are deducted from Set-Up and not copied to the
+new entry. End any active break or downtime before using the handoff.
+
+The regular screen commits the approval, old-entry completion and new local
+start in one SQLite transaction, with a `setup_transitions` receipt preventing
+duplicates after retries. Its completion projection keeps the old Set-Up closed
+even when SharePoint updates are pending. The tablet path uses one atomic
+`end_setup` event in the existing offline queue. Refresh connected tablets to
+install offline asset release v30; do not clear storage while work is pending.
+
+# Detail-Specific Entry Completion
+
+All active CNC-style details, including Machining, Turn & Bore, Recut, Rebore
+and Change Over, use End Entry and a quantity popup with Confirm And Submit.
+Set-Up remains the exception: its inline quantity and End Set-Up/detail-type
+handoff are unchanged. Completion behavior follows the entry's detail type,
+not the employee's Machinist onboarding flag or the station's display name.
+
+Inspection, Sandblast, Drift and Stenciling use Enter Starting Pipe (or Change
+Starting Pipe after saving), then End Entry asks for the ending pipe. Quantity
+is calculated on the backend as `ending - starting + 1`, including both pipes.
+The starting pipe is tied to the entry/WO/operation and survives refreshes;
+editing the job invalidates the old starting selection. Empty, non-integer,
+reversed and excessive ranges are rejected before stopping the entry. The
+saved approval includes both pipe numbers for traceability.
+
+Tablet start/stop events retain pipe selections in the existing offline queue.
+Pre-update offline stop events that already contain a manual quantity still
+sync and are marked `legacy_pipe_quantity` in their approval payload. New pipe
+completion events always calculate from the saved start and supplied end.
+Offline asset release v31 includes these controls. Refresh while connected;
+never clear tablet storage while work is pending.
+
+# Comments In Recent Entries
+
+The Comments editor starts blank for entries whose legacy transaction description
+was automatically copied from the operation/part description. Existing genuine
+notes remain visible; no historical records are bulk-cleared. New Set-Up handoffs
+and manual/tablet entries no longer copy operation descriptions into Comments.
+
+Explicit edits, including clearing a comment or saving text identical to the
+operation description, are tracked in the local `entry_comment_overrides` table.
+An active entry's Recent Entries editor saves to the active Start/Stop record;
+submitted entries continue to use the existing correction flow. Saved comments
+carry into the completed approval, while a new entry begins with blank comments.
+
+# Active Time Corrections And Missed Lunch
+
+Edit Time on an active entry offers a Central Time start correction and Log Lunch
+(1 Hour). These adjust the existing running entry without creating another entry
+or approval. Start corrections retain the job and saved starting pipe. Missed lunch
+records the scheduled hour (11:30–12:30 day shift, 22:00–23:00 night shift), rejects
+overlapping deductions and prevents duplicate lunch deductions. The full scheduled
+hour must have elapsed within the entry. During an active day-shift lunch reminder,
+Log Lunch becomes available at 12:30 Central and keeps production running.
+
+Tablet adjustments persist in the offline event queue and replay with the original
+timer ID. Refresh connected tablets to install offline asset release v33; never
+clear storage while events are pending.
+
+Start corrections use a time-only input and preserve the existing Central date
+on the backend and during offline replay. Manual Time and Manual Downtime
+(previously Misc Time) are collapsed initially on connected and offline screens.
+The loading screen covers initial preparation and normal navigation or form
+submission, clears when ready or returning with Back, and leaves cancelled
+actions, downloads and offline form handling alone.
+
+Recent Entries opens Edit in a responsive modal with the existing correction
+fields and POST action. Cancel or Escape discards unsaved edits. The two-column
+tablet form becomes one column on phones, scrolls vertically within the viewport,
+and does not expand the recent-entry table. Offline asset release v34 includes
+the shared style and script update.
+
+Start-time correction uses a numeric keyboard instead of the native clock picker.
+Enter a familiar time such as 800 or 8:00 and select AM or PM. The existing time
+and period are preselected, and the Central date remains locked. Older queued
+24-hour corrections remain supported during offline replay. Offline asset release
+v36 includes this input change.
+
+# Acumatica Labor Before Downtime
+
+Exports process non-downtime labor before downtime within each labor-date/area
+batch. Downtime is sent only after the remote batch confirms a non-downtime line
+for the same work order, operation, CNC machine, employee and shift. If labor is
+unapproved, missing or failed, downtime remains pending with a waiting explanation
+and is reconsidered by the next normal manual or scheduled sync. Targeted retries
+also enforce this prerequisite without sending other approvals automatically.
+
+Released batches are not modified. A supplemental batch needs matching production
+labor before receiving downtime. Existing downtime line markers and paired-line
+calculations retain their duplicate protection and durations.
+
+Only stations mapped to CNC 1–6 are eligible for Acumatica labor export; eligibility
+does not depend on an employee's Machinist flag. The sender also rejects stale
+payloads whose machine conflicts with the entry station or contains non-CNC or
+mixed-machine transactions. Inspection, Sandblast, Drift and Stenciling stations
+remain excluded. The Python bridge and scheduled sync load these rules on their
+next invocation; a web server restart is unnecessary.
+
+# Tablet Network Load
+
+Dynamic HTML and JSON responses over 1 KB use gzip when the browser accepts it,
+while retaining the same decoded content. The offline service worker continues
+to cache static app files; compression does not cache entry data or delay saves.
+
+The connected Time Entry page now supplies its freshly fetched tablet preparation
+data as escaped, inert JSON. Offline preparation reuses this snapshot instead of
+making a second context API request and repeating the backend reads. Older pages
+without a snapshot retain the context API fallback. Pending offline events and
+drafts remain authoritative and are preserved.
+
+Offline release v37 includes the client update. A representative rendered fixture
+with 25 recent entries and 200 operations decreased from 673,728 to 22,840 transfer
+bytes (97%) under gzip. This measures payload size, not factory Wi-Fi speed or a
+full tablet load time; the actual gain depends on page data and signal quality.
+
+# Time Page Read Performance
+
+The Time Entry page and tablet context API fetch dashboard data, active tablet
+timer and daily review in one Python bridge invocation instead of three. The same
+read functions run in the same order, using the existing within-process list cache.
+No cross-request data cache, rendered layout or entry workflow was changed by this
+optimization. A fixture comparison checks byte-identical HTML, and an isolated
+launch benchmark measured median startup/read coordination of 0.38 seconds versus
+1.18 seconds before batching. This is not a full-page load measurement.
+

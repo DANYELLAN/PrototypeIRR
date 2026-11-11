@@ -16,7 +16,7 @@ test('running and paused timers retain full navigation and downtime while diagno
   const html=renderActiveTimerActions({...timer,status},context);
   assert.match(html,/>Log Downtime<\/summary>/);assert.match(html,/name="detail_type_ii" required/);
   assert.match(html,/Mechanical &lt;repair&gt;/);assert.match(html,/name="active_timer_id" value="test-timer"/);
-  assert.match(html,/Stop And Submit/);assert.match(html,/cnc-active-downtime/);
+  assert.match(html,/End Entry/);assert.match(html,/cnc-active-downtime/);
   assert.match(html,status==='Paused'?/Resume Production/:/Take Break/);
  }
 });
@@ -29,7 +29,7 @@ test('active downtime is pinned to current timer, deducted once and retained in 
  assert.equal(profile.timer.downtime_minutes,15);assert.equal(profile.events.length,1);assert.equal(profile.timer.status,'In Progress');
 });
 test('tablet context returns role-checked navigation from the same source as traditional pages',async()=>{
- const routes=new Map();registerTabletTime({get:(path,...handlers)=>routes.set(path,handlers),post:()=>{}},{hasRole:(_,role)=>role==='operator',callBridge:async action=>action==='get_dashboard_context'?{operations:[],details_step_two:[],downtime_reasons:[]}:null});
+ const routes=new Map();registerTabletTime({get:(path,...handlers)=>routes.set(path,handlers),post:()=>{}},{hasRole:(_,role)=>role==='operator',callBridge:async action=>{assert.equal(action,'get_time_page_context');return {context:{operations:[],details_step_two:[],downtime_reasons:[]},timer:null,review:{required:false}};}});
  const req={session:{cncUser:{employee:{emp_id:'1',full_name:'Test'},machine_no:'1',shift_id:'40'}}};let result;
  const res={json:value=>result=value,status(){return this;}};
  await routes.get('/api/tablet-time/context')[1](req,res);

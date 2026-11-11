@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from time_entry_app import local_store
-from time_entry_app.acumatica_client import entity_value, response_errors, wrapped
+from time_entry_app.acumatica_client import AcumaticaError, entity_value, response_errors, wrapped
 from time_entry_app.acumatica_sync import (
     _detail_payload,
     _entity_errors,
@@ -46,6 +46,10 @@ class FakeAcumaticaClient:
         }
 
     def put_batch(self, payload):
+        prior = self.batches.get(entity_value(payload, 'BatchNbr', ''), {}).get('Details', [])
+        if any(entity_value(detail, 'DetailType') == 'DOWN TIME' for detail in payload.get('Details', [])):
+            if not any(entity_value(detail, 'DetailType') != 'DOWN TIME' for detail in prior):
+                raise AcumaticaError('Production labor must exist before downtime.')
         type(self).put_calls += 1
         batch_nbr = entity_value(payload, "BatchNbr", "")
         if batch_nbr:
@@ -147,6 +151,96 @@ class AcumaticaSyncTests(unittest.TestCase):
         local_store.approve_approval_record(approval_id, reviewer={"emp_id": "100", "full_name": "Manager"})
         return approval_id
 
+    def approve_downtime(self, machine='1', employee_id='1005'):
+        approval_id = local_store.queue_approval('misc_time', approval_payload(machine, employee_id, detail_type='DT'), machine_no=machine, emp_id=employee_id)
+        local_store.approve_approval_record(approval_id, reviewer={'emp_id':'100','full_name':'Manager'})
+        return approval_id
+
+    def test_downtime_waits_then_sends_after_matching_labor_is_approved(self):
+        downtime_id = self.approve_downtime()
+        env = {'ACUMATICA_ENABLED':'true','ACUMATICA_CUTOVER_AT':'2026-01-01T00:00:00+00:00'}
+        with patch.dict(os.environ, env):
+            waiting = sync_approved_entries(client_factory=FakeAcumaticaClient)
+            self.assertEqual(waiting['waiting'],1)
+            self.assertEqual(waiting['failed'],0)
+            self.assertEqual(FakeAcumaticaClient.put_calls,0)
+            self.assertEqual(local_store.get_acumatica_sync_item(downtime_id)['status'],'pending')
+            self.approve('1','1005')
+            sent = sync_approved_entries(client_factory=FakeAcumaticaClient)
+        self.assertEqual(sent['sent'],2)
+        self.assertEqual(local_store.get_acumatica_sync_item(downtime_id)['status'],'sent')
+        details=next(iter(FakeAcumaticaClient.batches.values()))['Details']
+        self.assertEqual([entity_value(row,'DetailType') for row in details],['MACHINING','DOWN TIME','DOWN TIME'])
+
+    def test_unrelated_operator_or_machine_labor_does_not_release_downtime(self):
+        self.approve_downtime()
+        self.approve('1','999')
+        self.approve('2','1005')
+        env = {'ACUMATICA_ENABLED':'true','ACUMATICA_CUTOVER_AT':'2026-01-01T00:00:00+00:00'}
+        with patch.dict(os.environ, env):result=sync_approved_entries(client_factory=FakeAcumaticaClient)
+        self.assertEqual(result['sent'],2)
+        self.assertEqual(result['waiting'],1)
+        self.assertEqual(result['failed'],0)
+
+    def test_targeted_downtime_retry_uses_confirmed_labor_from_an_earlier_send(self):
+        self.approve('CNC 1','001005')
+        env = {'ACUMATICA_ENABLED':'true','ACUMATICA_CUTOVER_AT':'2026-01-01T00:00:00+00:00'}
+        with patch.dict(os.environ,env):
+            sync_approved_entries(client_factory=FakeAcumaticaClient)
+            downtime_id=self.approve_downtime()
+            sent=sync_approved_entries(client_factory=FakeAcumaticaClient,approval_id=downtime_id)
+            retry=sync_approved_entries(client_factory=FakeAcumaticaClient,approval_id=downtime_id)
+        self.assertEqual(sent['sent'],1)
+        self.assertEqual(sent['waiting'],0)
+        self.assertEqual(retry['sent'],0)
+        self.assertEqual(len(next(iter(FakeAcumaticaClient.batches.values()))['Details']),3)
+
+    def test_failed_production_keeps_downtime_pending_even_on_targeted_retry(self):
+        downtime_id=self.approve_downtime()
+        self.approve('1','1005')
+        class FailingLabor(FakeAcumaticaClient):
+            attempts=[]
+            def put_batch(self,payload):
+                self.attempts.extend(entity_value(row,'DetailType') for row in payload['Details'])
+                raise AcumaticaError('Production failed')
+        env = {'ACUMATICA_ENABLED':'true','ACUMATICA_CUTOVER_AT':'2026-01-01T00:00:00+00:00'}
+        with patch.dict(os.environ, env):
+            result=sync_approved_entries(client_factory=FailingLabor)
+            targeted=sync_approved_entries(client_factory=FailingLabor,approval_id=downtime_id)
+        self.assertEqual(result['failed'],1)
+        self.assertEqual(result['waiting'],1)
+        self.assertEqual(targeted['waiting'],1)
+        self.assertEqual(FailingLabor.attempts,['MACHINING'])
+
+    def test_downtime_cannot_create_a_supplemental_batch_without_new_labor(self):
+        self.approve('1','1005')
+        env = {'ACUMATICA_ENABLED':'true','ACUMATICA_CUTOVER_AT':'2026-01-01T00:00:00+00:00'}
+        with patch.dict(os.environ, env):
+            sync_approved_entries(client_factory=FakeAcumaticaClient)
+            next(iter(FakeAcumaticaClient.batches.values()))['Status']=wrapped('Released')
+            self.approve_downtime()
+            waiting=sync_approved_entries(client_factory=FakeAcumaticaClient)
+            self.assertEqual(waiting['waiting'],1)
+            self.assertEqual(len(FakeAcumaticaClient.batches),1)
+            self.approve('1','1005')
+            sent=sync_approved_entries(client_factory=FakeAcumaticaClient)
+        self.assertEqual(sent['sent'],2)
+        self.assertEqual(len(FakeAcumaticaClient.batches),2)
+
+    def test_stale_non_cnc_and_mixed_station_payloads_never_send(self):
+        for station,mixed in [('Line 1 - Inspection 1',False),('1',True)]:
+            payload=approval_payload('1','1005')
+            payload['fields']['MachineNo']=station
+            if mixed:
+                payload['acumatica_labor_transactions']=[payload['acumatica_labor_transaction'],dict(payload['acumatica_labor_transaction'],machine_no='Line 1 - Drift')]
+            record=local_store.queue_approval('manual_time',payload,machine_no=station,emp_id='1005')
+            local_store.approve_approval_record(record,reviewer={'emp_id':'100'})
+        env = {'ACUMATICA_ENABLED':'true','ACUMATICA_CUTOVER_AT':'2026-01-01T00:00:00+00:00'}
+        with patch.dict(os.environ,env):result=sync_approved_entries(client_factory=FakeAcumaticaClient)
+        self.assertEqual(result['sent'],0)
+        self.assertEqual(result['failed'],2)
+        self.assertEqual(FakeAcumaticaClient.put_calls,0)
+
     def test_groups_by_date_and_area_into_on_hold_batches(self):
         first_id = self.approve("1", "1005")
         second_id = self.approve("E-2", "845")
@@ -226,24 +320,27 @@ class AcumaticaSyncTests(unittest.TestCase):
             approval_id,
             reviewer={"emp_id": "100", "full_name": "Manager"},
         )
+        # Downtime was recorded first, but matching labor must reach Acumatica first.
+        self.approve('1','1005')
         sync_env = {"ACUMATICA_ENABLED": "true", "ACUMATICA_CUTOVER_AT": "2026-01-01T00:00:00+00:00"}
 
         with patch.dict(os.environ, sync_env):
             first = sync_approved_entries(client_factory=FakeAcumaticaClient)
 
         batch = next(iter(FakeAcumaticaClient.batches.values()))
-        self.assertEqual(first["sent"], 1)
-        self.assertEqual(len(batch["Details"]), 2)
-        self.assertEqual([entity_value(row, "Quantity") for row in batch["Details"]], [1.0, -1.0])
-        self.assertEqual([entity_value(row, "LaborTime") for row in batch["Details"]], [16, -1])
+        self.assertEqual(first["sent"], 2)
+        self.assertEqual(len(batch["Details"]), 3)
+        downtime = batch['Details'][1:]
+        self.assertEqual([entity_value(row, "Quantity") for row in downtime], [1.0, -1.0])
+        self.assertEqual([entity_value(row, "LaborTime") for row in downtime], [16, -1])
         self.assertTrue(all("ReasonCode" not in row for row in batch["Details"]))
-        self.assertEqual([entity_value(row, "TranDescription") for row in batch["Details"]], ["DT", "DT"])
+        self.assertEqual([entity_value(row, "TranDescription") for row in downtime], ["DT", "DT"])
 
         with patch.dict(os.environ, sync_env):
             retry = sync_approved_entries(client_factory=FakeAcumaticaClient)
 
         self.assertEqual(retry["sent"], 0)
-        self.assertEqual(len(batch["Details"]), 2)
+        self.assertEqual(len(batch["Details"]), 3)
 
     def test_released_batch_correction_is_not_written(self):
         approval_id = self.approve("3", "778")

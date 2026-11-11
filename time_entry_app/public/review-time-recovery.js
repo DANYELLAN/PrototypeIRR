@@ -23,9 +23,15 @@ try {
  let owner=await currentOwner();
  let profile=owner?await readProfile(owner):null;
  try {
-  const response=await fetch('/api/tablet-time/context',{cache:'no-store',signal:AbortSignal.timeout(10000)});
-  if(response.ok){
-   const context=await response.json();owner=ownerFor(context);
+  let context;
+  const prepared=document.getElementById('prepared-tablet-context');
+  if(prepared?.textContent){try{context=JSON.parse(prepared.textContent);}catch{}}
+  if(!context?.employee?.emp_id){
+   const response=await fetch('/api/tablet-time/context',{cache:'no-store',signal:AbortSignal.timeout(10000)});
+   if(response.ok)context=await response.json();
+  }
+  if(context?.employee?.emp_id){
+   owner=ownerFor(context);
    if(context.legacy_active?.timing)void import('./active-time-summary.js').then(module=>module.showActiveTimeSummary(context.legacy_active)).catch(()=>{});
    profile=await updateProfile(owner,current=>{
     const value=current||{owner,events:[],drafts:{},receipts:[],timer:null};

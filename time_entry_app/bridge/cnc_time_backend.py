@@ -60,6 +60,7 @@ from local_store import (
     upsert_machine_options,
 )
 from time_entry_app.acumatica_sync import get_approval_batch_status, sync_approved_entries, machine_area
+from time_entry_app.bridge.entry_comments import remember_comment, saved_comment
 from postgres_sync import get_db_connection, initialize_database, sync_list_to_postgres
 from sharepoint_api import sync_cnc_time_lists_to_postgres
 from sharepoint_client import (
@@ -910,7 +911,7 @@ def _time_entry_comment(detail_code, reason_code="", comments=None, fallback="")
         if reason_code and note:
             return f"{reason_code} - {note}"
         return reason_code or note
-    return note or str(fallback or "").strip()
+    return note
 
 
 def _break_counts_against_production(break_event):
@@ -1224,6 +1225,10 @@ def _local_startstop_entries(emp_id=None):
                     updated["status"] = str(updated_fields["Status"] or "").strip()
                 if "End" in updated_fields:
                     updated["end"] = updated_fields["End"]
+                if "Start" in updated_fields:
+                    updated["start"] = updated_fields["Start"]
+                if "LaborDate" in updated_fields:
+                    updated["labor_date"] = updated_fields["LaborDate"]
                 if "BreakMinutes" in updated_fields:
                     updated["break_minutes"] = _as_number(updated_fields["BreakMinutes"], updated["break_minutes"])
                 if "TotalMinutes" in updated_fields:
@@ -1515,6 +1520,8 @@ def get_dashboard_context(emp_id, user_email):
         if item["emp_id"] == str(emp_id)
     ]
     startstop_entries.extend(_local_startstop_entries(emp_id))
+    from time_entry_app.bridge.setup_transition import project_completed_setups
+    startstop_entries = project_completed_setups(startstop_entries)
     final_entries = [
         item
         for item in (_normalize_timeentry(entry) for entry in _read_list("timeentry", fetch_all=True))
@@ -1543,10 +1550,15 @@ def get_dashboard_context(emp_id, user_email):
     )
     active_break = get_active_break_event(active_entry["sp_id"]) if active_entry else None
     if active_entry:
+        from time_entry_app.bridge.entry_completion import starting_pipe
+        active_entry["starting_pipe"] = starting_pipe(active_entry)
+        from time_entry_app.bridge.timed_downtime import active_downtime
+        active_entry["active_downtime"] = active_downtime(active_entry["sp_id"])
         active_entry["timing"] = {
             "start": active_entry.get("start"),
             "break_minutes": active_entry.get("break_minutes", 0),
             "downtime_minutes": _active_downtime_minutes(active_entry),
+            "downtime_started_at": (active_entry.get("active_downtime") or {}).get("start"),
             "break_started_at": active_entry.get("lunch_start") if active_entry.get("status") == "Paused" else None,
             "break_deducts": _break_counts_against_production(active_break),
         }
@@ -1560,6 +1572,8 @@ def get_dashboard_context(emp_id, user_email):
         key=lambda row: (str(row.get("labor_date") or ""), int(row.get("id") or 0)),
         reverse=True,
     )[:40]
+    from time_entry_app.bridge.entry_comments import apply_comments
+    apply_comments(recent_entries)
 
     grouped_workorders = {}
     for item in work_orders:
@@ -1896,6 +1910,8 @@ def update_approval_time_entry(approval_id, fields_update=None, editor=None, rea
     revision = update_approval_with_revision(record["id"], payload, editor=editor, reason=reason)
     if not revision:
         raise ValueError("The selected approval record could not be updated.")
+    if "comments" in update:
+        remember_comment({'entry_list': 'timeentry', 'sp_id': f"approval:{record['id']}"}, update.get('comments'))
     result = {
         "updated": True,
         "pending_approval": record.get("approval_status") == "pending",
@@ -2001,6 +2017,8 @@ def start_time_entry(employee, shift_id, machine_no, production_number, operatio
 def _get_startstop_by_id(entry_id):
     normalized = [_normalize_startstop(item) for item in _read_list("startstop", fetch_all=True)]
     normalized.extend(_local_startstop_entries())
+    from time_entry_app.bridge.setup_transition import project_completed_setups
+    normalized = project_completed_setups(normalized)
     for item in normalized:
         if str(item["sp_id"]) == str(entry_id) or str(item["id"]) == str(entry_id):
             return item
@@ -2010,6 +2028,8 @@ def _get_startstop_by_id(entry_id):
 def _matching_active_direct_entry(employee, production_number, operation_id):
     entries = [_normalize_startstop(item) for item in _read_list("startstop", fetch_all=True)]
     entries.extend(_local_startstop_entries(employee.get("emp_id")))
+    from time_entry_app.bridge.setup_transition import project_completed_setups
+    entries = project_completed_setups(entries)
     matches = [entry for entry in entries
                if entry.get("status") in {"In Progress", "Paused"}
                and _normalize_identifier(entry.get("emp_id")) == _normalize_identifier(employee.get("emp_id"))
@@ -2080,6 +2100,10 @@ def edit_active_time_entry(
     comments=None,
 ):
     entry = _get_startstop_by_id(entry_id)
+    if entry.get("status") not in {"In Progress", "Paused"}:
+        raise ValueError("This entry has already been submitted. Refresh the active entry.")
+    from time_entry_app.bridge.timed_downtime import require_no_downtime
+    require_no_downtime(entry["sp_id"])
     fields = {}
     qty = _nonnegative_number(quantity, None)
     corrected_break_minutes = _nonnegative_number(break_minutes, None)
@@ -2106,21 +2130,26 @@ def edit_active_time_entry(
     if corrected_break_minutes is not None:
         fields["BreakMinutes"] = corrected_break_minutes
     note = str(comments or "").strip()
-    if note and "TranDescription" not in fields:
+    if comments is not None and "TranDescription" not in fields:
         fields["TranDescription"] = note
     if not fields:
         raise ValueError("Enter a correction to save.")
 
     item_id = entry["sp_id"]
+    comment_entry = {**entry, 'entry_list': 'startstop'}
     if str(item_id).startswith("approval:"):
         approval_id = int(_as_number(_approval_record_key(item_id), 0))
         if not patch_approval_record_fields(approval_id, fields):
             raise ValueError("The pending approval record could not be updated.")
+        remember_comment(comment_entry, comments)
         return {"corrected": True, "pending_approval": True}
 
     if str(item_id).startswith("local:"):
         local_id = int(_as_number(_local_record_key(item_id), 0))
         patch_pending_record_fields(local_id, fields)
+        from time_entry_app.bridge.active_timing import remember_local_correction
+        remember_local_correction(item_id, fields)
+        remember_comment(comment_entry, comments)
         return {"corrected": True, "offline_only": True, "updated_pending_record": True}
 
     queued_id = queue_record(
@@ -2131,6 +2160,7 @@ def edit_active_time_entry(
         employee_name=entry.get("operators_name"),
         source="offline-first",
     )
+    remember_comment(comment_entry, comments)
     try:
         _update_item("startstop", item_id, fields)
         mark_record_synced(queued_id)
@@ -2219,15 +2249,18 @@ def correct_time_entry(
         raise ValueError("Enter a correction to save.")
 
     item_id = entry["sp_id"]
+    comment_entry = {**entry, 'entry_list': 'timeentry'}
     if str(item_id).startswith("approval:"):
         approval_id = int(_as_number(_approval_record_key(item_id), 0))
         if not patch_approval_record_fields(approval_id, fields):
             raise ValueError("The pending approval record could not be updated.")
+        remember_comment(comment_entry, comments)
         return {"corrected": True, "pending_approval": True}
 
     if str(item_id).startswith("local:"):
         local_id = int(_as_number(_local_record_key(item_id), 0))
         patch_pending_record_fields(local_id, fields)
+        remember_comment(comment_entry, comments)
         return {"corrected": True, "offline_only": True, "updated_pending_record": True}
 
     queued_id = queue_record(
@@ -2238,6 +2271,7 @@ def correct_time_entry(
         employee_name=entry.get("operators_name"),
         source="offline-first",
     )
+    remember_comment(comment_entry, comments)
     try:
         _patch_synced_item_fields("timeentry", item_id, fields)
     except Exception:
@@ -2258,6 +2292,10 @@ def delete_time_entry(entry_id, entry_list="timeentry"):
     item_id = str(entry_id or "").strip()
     if not item_id:
         raise ValueError("The requested time entry could not be found.")
+
+    if list_key == "startstop":
+        from time_entry_app.bridge.timed_downtime import require_no_downtime
+        require_no_downtime(item_id)
 
     if item_id.startswith("local:"):
         local_id = int(_as_number(_local_record_key(item_id), 0))
@@ -2298,6 +2336,10 @@ def _require_break_owner(entry, original_adp):
 
 def pause_for_lunch(entry_id, break_type=None, comments=None, relief_adp=None, original_adp=None):
     entry = _get_startstop_by_id(entry_id)
+    if entry.get("status") not in {"In Progress", "Paused"}:
+        raise ValueError("This entry has already been submitted. Refresh the active entry.")
+    from time_entry_app.bridge.timed_downtime import require_no_downtime
+    require_no_downtime(entry["sp_id"])
     _require_break_owner(entry,original_adp)
     if entry.get("status") == "Paused":
         raise ValueError("This entry is already paused.")
@@ -2373,8 +2415,17 @@ def resume_from_lunch(entry_id, original_adp=None):
         return {"resumed": False, "queued": True, "offline_only": True}
 
 
-def stop_time_entry(entry_id, quantity=None):
+def stop_time_entry(entry_id, quantity=None, ending_pipe=None, original_adp=None, machine_no=None):
     entry = _get_startstop_by_id(entry_id)
+    _require_break_owner(entry, original_adp)
+    if machine_no is not None and str(entry.get('machine_no')) != str(machine_no):
+        raise ValueError('This entry belongs to another station.')
+    if entry.get("status") not in {"In Progress", "Paused"}:
+        raise ValueError("This entry has already been submitted. Refresh the active entry.")
+    from time_entry_app.bridge.timed_downtime import require_no_downtime
+    require_no_downtime(entry["sp_id"])
+    from time_entry_app.bridge.entry_completion import completion_quantity
+    qty, pipe_range = completion_quantity(entry, quantity, ending_pipe)
     start_dt = datetime.fromisoformat(str(entry["start"]).replace("Z", "+00:00"))
     end_dt = _utc_now()
     break_minutes = entry["break_minutes"]
@@ -2387,7 +2438,6 @@ def stop_time_entry(entry_id, quantity=None):
         finish_break_event(entry["sp_id"], ended_at=end_dt.isoformat(), duration_minutes=current_break_minutes)
     downtime_minutes = _active_downtime_minutes(entry)
     worked_minutes = max(int((end_dt - start_dt).total_seconds() // 60) - int(break_minutes) - downtime_minutes, 0)
-    qty = _as_number(quantity, 1)
     average = round(qty / (worked_minutes / 60), 2) if worked_minutes > 0 else 0
 
     updated_fields = {
@@ -2441,7 +2491,7 @@ def stop_time_entry(entry_id, quantity=None):
         "LunchStart": entry["lunch_start"],
         "LunchStop": entry["lunch_stop"],
         "End": end_dt.isoformat(),
-        "TranDescription": entry.get("tran_description") or entry["operation_description"] or entry["description"],
+        "TranDescription": saved_comment({**entry, 'entry_list': 'startstop'}),
         "Year": datetime.now().year,
         "StartStopID": int(_as_number(entry["id"], 0)),
     }
@@ -2450,6 +2500,8 @@ def stop_time_entry(entry_id, quantity=None):
         "entry_id": entry_id, "fields": final_fields, "employee": employee_for_acumatica,
         "active_downtime_minutes": downtime_minutes,
     }
+    if pipe_range:
+        approval_payload['pipe_range'] = pipe_range
     _attach_acumatica_payload(approval_payload, employee_for_acumatica, final_fields)
     ensure_db()
     approval_id = queue_approval(
@@ -2459,6 +2511,7 @@ def stop_time_entry(entry_id, quantity=None):
         emp_id=entry.get("emp_id"),
         employee_name=entry.get("operators_name"),
     )
+    remember_comment({'entry_list': 'timeentry', 'sp_id': f'approval:{approval_id}'}, final_fields['TranDescription'])
     return {"submitted": False, "pending_approval": True, "approval_id": approval_id, "worked_minutes": worked_minutes}
 
 
@@ -2571,7 +2624,7 @@ def submit_manual_time(
         "TotalMinutes": total_minutes,
         "Quantity": qty,
         "Average": average,
-        "TranDescription": comments or operation["operation_description"] or operation["description"],
+        "TranDescription": str(comments or "").strip(),
         "Year": datetime.now().year,
     }
     approval_payload = {"employee": employee, "fields": fields}
@@ -2998,8 +3051,8 @@ def _it_request_fields(user_email, user_name, machine_no, category, issue, depar
     name = str(user_name or "").strip()
     category = str(category or "").strip()
     issue = str(issue or "").strip()
-    if not email or not name or not category or not issue:
-        raise ValueError("Enter your email, technical category and issue description.")
+    if not name or not category or not issue:
+        raise ValueError("Requester name, technical category and issue description are required.")
     if any(len(value) > 255 for value in [email, name, category]):
         raise ValueError("Requester name, email and category must be 255 characters or fewer.")
     machine = str(machine_no or "").strip()
@@ -3007,13 +3060,14 @@ def _it_request_fields(user_email, user_name, machine_no, category, issue, depar
     fields = {
         "Title": (f"{category} - Machine {machine}" if machine else category)[:255],
         "RequesterName": name,
-        "RequesterEmail": email,
         "Status": "New",
         "Location": "Ennis",
         "DateofIssue": when.astimezone(ZoneInfo("America/Chicago")).date().isoformat(),
         "IssueSubjec": category,
         "IssueDescription": f"Machine: {machine or 'Not specified'}\nCategory: {category}\n\n{issue}",
     }
+    if email:
+        fields["RequesterEmail"] = email
     if department:
         fields["Department"] = str(department).strip()[:255]
     return fields

@@ -69,6 +69,27 @@ def main():
     action = payload.get("action")
 
     try:
+        if action == "get_time_page_context":
+            from time_entry_app.bridge.tablet_time import active_timer
+            session = payload.get("session") or {}
+            context = get_dashboard_context(session['employee']['emp_id'], session.get('user_email', ''))
+            timer = active_timer(session)
+            review = get_daily_time_review(session['employee'], payload.get('labor_date'))
+            return _result({'context': context, 'timer': timer, 'review': review})
+        if action == "adjust_active_timing":
+            from time_entry_app.bridge.active_timing import adjust_active
+            return _result(adjust_active(payload.get("session") or {}, payload.get("entry_id"), payload.get("kind"), payload.get("start_time"), payload.get("lunch_day"), payload.get("start_period")))
+        if action == "save_starting_pipe":
+            from time_entry_app.bridge.entry_completion import save_starting_pipe
+            return _result(save_starting_pipe(payload.get("session") or {}, payload.get("entry_id"), payload.get("starting_pipe")))
+        if action == "end_setup":
+            from time_entry_app.bridge.setup_transition import end_setup
+            return _result(end_setup(payload.get("session") or {}, payload.get("entry_id"), payload.get("detail_type"), payload.get("quantity")))
+        if action in {"start_timed_downtime", "end_timed_downtime"}:
+            from time_entry_app.bridge.timed_downtime import start_downtime, end_downtime
+            session = payload.get("session") or {}
+            return _result(start_downtime(session, payload.get("entry_id"), payload.get("reason"), payload.get("comments"))
+                           if action == "start_timed_downtime" else end_downtime(session, payload.get("downtime_id")))
         if action in {"tablet_time_active", "tablet_time_event"}:
             from time_entry_app.bridge.tablet_time import active_timer, apply_event
             session = payload.get("session") or {}
@@ -154,7 +175,7 @@ def main():
         if action == "resume_from_lunch":
             return _result(resume_from_lunch(payload.get("entry_id"),payload.get("original_adp")))
         if action == "stop_time_entry":
-            return _result(stop_time_entry(payload.get("entry_id"), payload.get("quantity")))
+            return _result(stop_time_entry(payload.get("entry_id"), payload.get("quantity"), payload.get("ending_pipe"), payload.get("original_adp"), payload.get("machine_no")))
         if action == "edit_active_time_entry":
             return _result(
                 edit_active_time_entry(

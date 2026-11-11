@@ -35,13 +35,51 @@ export function eventId(){
 export function applyLocal(profile,event){
  const {kind,data,at}=event;
  const timer=profile.timer;
+ if(timer?.downtime && data.timer_id===timer.id && kind!=='downtime_end')throw new Error('End downtime before changing or stopping production.');
  if(kind==='start'){
   if(timer)throw new Error('A timer is already running on this tablet.');
   if(profile.context.legacy_active)throw new Error('Stop the earlier timer in the original time screen first.');
   profile.timer={id:data.timer_id,start:at,status:'In Progress',break_minutes:0,downtime_minutes:0,breaks:[],
    fields:{ProductionNo:data.production_number,OperationID:data.operation_id,DetailsType:data.detail_type}};
+ }else if(['correct_start','log_lunch'].includes(kind)){
+  if(!timer||timer.id!==data.timer_id)throw new Error('This timer changed. Reopen Edit Time.');
+  applyTimingAdjustment(timer,kind,data,at,profile.context.shift_id||profile.shift_id);
+ }else if(kind==='starting_pipe'){
+  if(!timer||timer.id!==data.timer_id)throw new Error('This timer changed. Reopen its controls.');
+  if(completionMode(timer.fields.DetailsType)!=='pipes')throw new Error('This detail type does not use pipe ranges.');
+  timer.starting_pipe=pipeNumber(data.starting_pipe);
+ }else if(kind==='end_setup'){
+  if(!timer||timer.id!==data.timer_id)throw new Error('This timer changed. Reopen End Set-Up.');
+  if(timer.status!=='In Progress'||!isSetup(timer.fields.DetailsType))throw new Error('End Set-Up is available only for a running Set-Up entry.');
+  if(!profile.context.details.some(item=>item.title===data.detail_type))throw new Error('Select a valid detail type.');
+  const quantity=Number(data.quantity??0);
+  if((data.quantity!=null&&String(data.quantity).trim()==='')||!Number.isInteger(quantity)||quantity<0||quantity>1000000)throw new Error('Enter a whole Set-Up quantity between 0 and 1000000.');
+  if(!data.next_timer_id||data.next_timer_id===timer.id)throw new Error('The next timer ID is invalid.');
+  if(!Number.isFinite(Date.parse(at))||Date.parse(at)<Date.parse(timer.start))throw new Error('Check the tablet clock before ending Set-Up.');
+  profile.timer={id:data.next_timer_id,start:at,status:'In Progress',break_minutes:0,downtime_minutes:0,breaks:[],
+   fields:{...timer.fields,DetailsType:data.detail_type}};
+ }else if(['downtime_start','downtime_end'].includes(kind)){
+  if(!timer || timer.id!==data.timer_id)throw new Error('This timer changed. Reopen Log Downtime for the current entry.');
+  if(kind==='downtime_start'){
+   if(timer.status!=='In Progress')throw new Error('Resume production before starting downtime.');
+   const reason=profile.context.downtime_reasons.find(item=>item.code===data.detail_type_ii);
+   if(!reason)throw new Error('Select a valid downtime reason.');
+   timer.downtime={id:event.id,start:at,reason:reason.code,reason_label:reason.label,comments:data.comments||'',production_number:timer.fields.ProductionNo,operation_id:timer.fields.OperationID};
+  }else{
+   if(!timer.downtime || timer.downtime.id!==data.downtime_id)throw new Error('This downtime session changed. Reopen its controls.');
+   const seconds=(Date.parse(at)-Date.parse(timer.downtime.start))/1000;
+   if(!Number.isFinite(seconds)||seconds<0)throw new Error('Check the tablet clock before ending downtime.');
+   const minutes=Math.floor(seconds/60);
+   timer.downtime_minutes+=minutes;
+   (timer.downtimes ||= []).push({...timer.downtime,end:at,minutes,seconds});
+   delete timer.downtime;
+  }
  }else if(['pause','relief_arrived','resume','stop'].includes(kind)){
   if(!timer || timer.id!==data.timer_id)throw new Error('This timer changed. Refresh its controls before continuing.');
+  if(kind==='stop'){
+   if(completionMode(timer.fields.DetailsType)==='pipes'&&(data.completion_version||timer.starting_pipe!=null||data.ending_pipe!=null))pipeQuantity(timer.starting_pipe,data.ending_pipe);
+   else enteredQuantity(data.quantity??0);
+  }
   if(kind==='pause'){
    if(timer.status!=='In Progress')throw new Error('This timer is already paused.');
    if(!['Lunch','No Relief','With Relief'].includes(data.break_type))throw new Error('Select a valid break type.');
@@ -76,3 +114,6 @@ function validateRelief(profile,data){
  if(!/^\d+$/.test(adp))throw new Error('Enter the relief operator ADP number.');
  if(adp.replace(/^0+/,'')===String(profile.context.employee?.emp_id||'').replace(/^0+/,''))throw new Error('The relief operator must be different from the original operator.');
 }
+import {isSetup} from './setup-handoff.js';
+import {completionMode,pipeNumber,pipeQuantity,enteredQuantity} from './entry-completion.js';
+import {applyTimingAdjustment} from './active-timing.js';

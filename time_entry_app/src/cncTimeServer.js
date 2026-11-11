@@ -1,7 +1,12 @@
 import {timeNavigation} from "../public/time-entry-ui.js";
+import {isSetup,defaultNextDetail} from "../public/setup-handoff.js";
+import {renderEntryCompletion} from "../public/entry-completion.js";
+import {entryComment} from "../public/entry-comments.js";
+import {renderActiveTiming} from "../public/active-timing.js";
 import "./environment.js";
 import {enableTabletHttps} from "../../shared/appTransport.js";
-import {registerTabletTime} from "./tabletTime.js";
+import {registerTabletTime,preparedTabletMarkup} from "./tabletTime.js";
+import {responseCompression} from "./responseCompression.js";
 import { randomBytes } from "node:crypto";
 import express from "express";
 import session from "express-session";
@@ -23,6 +28,7 @@ const liveViewPollMs = Number(process.env.CNC_TIME_LIVEVIEW_POLL_MS || 30 * 1000
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+app.use(responseCompression);
 app.use(
   session({
     secret: process.env.SESSION_SECRET || randomBytes(32).toString("hex"),
@@ -322,8 +328,12 @@ function layout({ title, body, sessionData, notice, active = "" }) {
       <link rel="stylesheet" href="/public/cnc-time.css" />
       <script defer src="/public/click-diagnostics.js?v=1"></script>
       <script defer src="/public/cnc-time.js?v=6"></script>
+      <script defer src="/public/loading.js"></script>
+      <script defer src="/public/recent-entry-editor.js"></script>
+      <noscript><style>#app-loading{display:none}</style></noscript>
     </head>
     <body>
+      <div id="app-loading" class="cnc-loading" role="status" aria-live="polite"><div class="cnc-loading-card"><span class="cnc-loading-spinner" aria-hidden="true"></span><strong data-loading-message>Loading Time Entry…</strong><span>Please wait a moment.</span><button type="button" class="cnc-button ghost">Back to page</button></div></div>
       <div class="benoit-app-shell">
         <header class="benoit-topbar">
           <div class="brand-block">
@@ -464,10 +474,12 @@ function timeTable(rows, editable = false, editContext = {}) {
             ${
               editable && row.editable !== false
                 ? `<td>
-                    <details class="correction-details">
-                      <summary>Edit</summary>
+                    <button type="button" class="cnc-button ghost small" data-edit-entry>Edit</button>
+                    <dialog class="cnc-relief-dialog cnc-correction-dialog" aria-label="Edit time entry">
+                      <div class="relief-dialog-header"><p class="relief-eyebrow">Recent Entries</p><h2>Edit time entry</h2><p>WO ${escapeHtml(row.production_number || "")} · ${escapeHtml(row.labor_date || "")} · ${escapeHtml(row.details_type || "")}</p></div>
                       <form method="post" action="/time/correct" class="correction-form">
                         <input type="hidden" name="entry_id" value="${escapeHtml(row.sp_id || row.id)}" />
+                        <input type="hidden" name="entry_list" value="${escapeHtml(row.entry_list || "timeentry")}" />
                         <label><span>WO</span><select name="production_number">${optionList(editContext.workOrders, row.production_number)}</select></label>
                         <label class="wide"><span>Operation</span><select name="operation_id" class="operation-select">${operationOptionList(
                           editContext.operations,
@@ -480,10 +492,10 @@ function timeTable(rows, editable = false, editContext = {}) {
                         <label><span>Break Min</span><input name="break_minutes" type="number" min="0" step="1" value="${escapeHtml(row.break_minutes || 0)}" /></label>
                         <label><span>Total Hours</span><input name="total_hours" type="number" min="0" max="24" step="1" value="${escapeHtml(Math.floor(Number(row.total_minutes || 0) / 60))}" /></label>
                         <label><span>Total Min</span><input name="total_minutes_remainder" type="number" min="0" max="59" step="1" value="${escapeHtml(Number(row.total_minutes || 0) % 60)}" /></label>
-                        <label class="wide"><span>Comments</span><input name="comments" value="${escapeHtml(row.tran_description || "")}" /></label>
-                        <button class="cnc-button ghost" type="submit">Save</button>
+                        <label class="wide"><span>Comments</span><input name="comments" value="${escapeHtml(entryComment(row))}" /></label>
+                        <div class="cnc-correction-actions"><button class="cnc-button ghost" type="button" data-edit-cancel>Cancel</button><button class="cnc-button" type="submit">Save Changes</button></div>
                       </form>
-                    </details>
+                    </dialog>
                     <form method="post" action="/time/delete" class="delete-entry-form" onsubmit="return confirm('Delete this time entry?');">
                       <input type="hidden" name="entry_id" value="${escapeHtml(row.sp_id || row.id)}" />
                       <input type="hidden" name="entry_list" value="${escapeHtml(row.entry_list || "timeentry")}" />
@@ -751,7 +763,7 @@ function recordTypeLabel(type) {
   const labels = {
     stop_time_entry: "Completed Job",
     manual_time: "Manual Time",
-    misc_time: "Misc Time",
+    misc_time: "Manual Downtime",
   };
   return labels[type] || String(type || "Time Entry").replace(/_/g, " ");
 }
@@ -1376,13 +1388,8 @@ app.get("/dashboard/live-machine.json", requireOperator, async (req, res) => {
 
 app.get("/time", requireOperator, async (req, res, next) => {
   try {
-    const context = await dashboardContext(req);
     const sessionData = req.session.cncUser;
-    const earlierTabletTimer = await callCncBridge('tablet_time_active',{session:sessionData});
-    const dailyReview = await callCncBridge("get_daily_time_review", {
-      employee: sessionData.employee,
-      labor_date: req.session.dailyReviewDate,
-    });
+    const {context,timer:earlierTabletTimer,review:dailyReview} = await callCncBridge("get_time_page_context", {session:sessionData,labor_date:req.session.dailyReviewDate});
     const workOrderOptions = context.work_orders
       .map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)
       .join("");
@@ -1409,6 +1416,7 @@ app.get("/time", requireOperator, async (req, res, next) => {
         active: "time",
         body: `${dailyTimeReviewMarkup(dailyReview, { editing: req.session.dailyReviewEditing, error: req.session.dailyReviewError })}
         <section class="cnc-card" id="earlier-tablet-work" data-owner="${escapeHtml(JSON.stringify([String(sessionData.employee.emp_id).replace(/^0+/, '') || '0', String(sessionData.machine_no), String(sessionData.shift_id)]))}" data-server-timer="${earlierTabletTimer ? 'yes' : 'no'}" ${earlierTabletTimer ? '' : 'hidden'}><h3>Earlier tablet work</h3><p id="offline-work-status">Saved offline work is syncing. Any running timer continues below.</p><div id="offline-timer-container"></div></section>
+        ${preparedTabletMarkup(sessionData,context,earlierTabletTimer,dailyReview,hasRole)}
         <script type="module" src="/public/review-time-recovery.js"></script>
         <section class="cnc-hero compact">
           <div>
@@ -1435,35 +1443,14 @@ app.get("/time", requireOperator, async (req, res, next) => {
                         : ""
                     }
                     <div class="cnc-inline-actions active-action-row">
-                      <details class="cnc-active-downtime">
-                        <summary>Edit Time</summary>
-                        <form method="post" action="/time/active/edit" class="cnc-form two-col">
-                          <input type="hidden" name="entry_id" value="${escapeHtml(context.active_entry.sp_id)}" />
-                          <label><span>WO</span><select name="production_number">${optionList(context.work_orders, context.active_entry.production_number)}</select></label>
-                          <label><span>Operation</span><select name="operation_id" class="operation-select">${operationOptionList(
-                            context.operations,
-                            context.active_entry.production_number,
-                            context.active_entry.operation_id,
-                          )}</select></label>
-                          <label><span>Detail</span><select name="detail_type">${detailOptionList(
-                            context.details_step_two,
-                            context.active_entry.details_type === "DT" ? "Downtime" : context.active_entry.details_type,
-                          )}</select></label>
-                          <label><span>Break Minutes</span><input name="break_minutes" type="number" min="0" step="1" value="${escapeHtml(context.active_entry.break_minutes || 0)}" /></label>
-                          <label class="full"><span>Correction Note</span><input name="comments" placeholder="Forgot lunch, wrong quantity, etc." /></label>
-                          <button class="cnc-button ghost" type="submit">Save Correction</button>
-                        </form>
-                      </details>
+                      ${renderActiveTiming({id:context.active_entry.sp_id,start:context.active_entry.start,status:context.active_entry.status,downtime:context.active_entry.active_downtime})}
                       <details class="cnc-active-downtime">
                         <summary>Log Downtime</summary>
-                        <form method="post" action="/time/misc" class="cnc-form two-col">
-                          <input type="hidden" name="production_number" value="${escapeHtml(context.active_entry.production_number || "")}" />
-                          <input type="hidden" name="operation_id" value="${escapeHtml(context.active_entry.operation_id || "")}" />
+                        <form method="post" action="/time/downtime/start" class="cnc-form two-col">
+                          <input type="hidden" name="entry_id" value="${escapeHtml(context.active_entry.sp_id)}" />
                           <label class="full"><span>Downtime Reason</span><select name="detail_type_ii" required>${downtimeReasonOptions}</select></label>
-                          <label><span>Hours</span><input name="hours" type="number" min="0" max="16" value="0" required /></label>
-                          <label><span>Minutes</span><input name="minutes" type="number" min="0" max="55" step="5" value="5" required /></label>
                           <label class="full"><span>Comments</span><textarea name="comments" rows="2"></textarea></label>
-                          <button class="cnc-button ghost" type="submit">Submit Downtime</button>
+                          <button class="cnc-button ghost" type="submit" ${context.active_entry.status !== "In Progress" || context.active_entry.active_downtime ? "disabled" : ""}>Start Downtime</button>
                         </form>
                       </details>
                       ${
@@ -1497,12 +1484,21 @@ app.get("/time", requireOperator, async (req, res, next) => {
                           : ""
                       }
                     </div>
-                    <form method="post" action="/time/stop" class="cnc-inline-stop-form stop-submit-row">
+                    ${isSetup(context.active_entry.details_type) ? `<form method="post" action="/time/end-setup" data-setup-handoff data-production-number="${escapeHtml(context.active_entry.production_number)}" data-operation-id="${escapeHtml(context.active_entry.operation_id)}" data-setup-details="${escapeHtml(JSON.stringify(context.details_step_two))}" class="cnc-inline-stop-form stop-submit-row">
                       <input type="hidden" name="entry_id" value="${escapeHtml(context.active_entry.sp_id)}" />
+                      ${isSetup(context.active_entry.details_type) ? `<input type="hidden" name="detail_type" value="${escapeHtml(defaultNextDetail(context.details_step_two))}">` : ""}
                       <label><span>Quantity</span><input name="quantity" type="number" min="0" step="1" value="${escapeHtml(context.active_entry.quantity || 1)}" required /></label>
-                      <button class="cnc-button danger" type="submit">Stop And Submit</button>
-                    </form>
-                  </div>`
+                      <button class="cnc-button danger" type="submit" ${isSetup(context.active_entry.details_type) && (context.active_entry.status !== "In Progress" || context.active_entry.active_downtime) ? "disabled" : ""}>${isSetup(context.active_entry.details_type) ? "End Set-Up" : "Stop And Submit"}</button>
+                    </form>` : renderEntryCompletion({id:context.active_entry.sp_id,detail_type:context.active_entry.details_type,starting_pipe:context.active_entry.starting_pipe,production_number:context.active_entry.production_number,operation_id:context.active_entry.operation_id,downtime:context.active_entry.active_downtime})}
+                    ${!isSetup(context.active_entry.details_type) ? '<script type="module" src="/public/entry-completion.js"></script>' : ""}
+                    ${isSetup(context.active_entry.details_type) ? '<script type="module" src="/public/setup-handoff.js"></script>' : ""}
+                  </div>
+                  ${context.active_entry.active_downtime ? `<div data-timed-downtime-state="${escapeHtml(JSON.stringify({
+                    id: context.active_entry.active_downtime.id, start: context.active_entry.active_downtime.start,
+                    reason: context.active_entry.active_downtime.reason, comments: context.active_entry.active_downtime.comments,
+                    reason_label: context.active_entry.active_downtime.reason_label,
+                    production_number: context.active_entry.production_number, operation_id: context.active_entry.operation_id,
+                  }))}"><form method="post" action="/time/downtime/end"><input type="hidden" name="downtime_id" value="${escapeHtml(context.active_entry.active_downtime.id)}" /><button class="cnc-button" type="submit">End Downtime &amp; Resume Production</button></form></div><script type="module" src="/public/timed-downtime.js"></script>` : ""}`
                 : "<p class='cnc-empty'>No active entry. Use the start form to begin a direct labor record.</p>"
             }
           </article>
@@ -1517,8 +1513,8 @@ app.get("/time", requireOperator, async (req, res, next) => {
           </article>
         </section>
         <section class="cnc-grid two">
-          <article class="cnc-card">
-            <div class="cnc-section-header"><h3>Misc Time</h3></div>
+          <details class="cnc-card cnc-manual-section">
+            <summary>Manual Downtime</summary>
             <form method="post" action="/time/misc" class="cnc-form two-col">
               <label><span>Production Order</span><select name="production_number" required>${workOrderOptions}</select></label>
               <label><span>Operation</span><select name="operation_id" required class="operation-select">${operationOptions}</select></label>
@@ -1526,11 +1522,11 @@ app.get("/time", requireOperator, async (req, res, next) => {
               <label><span>Hours</span><input name="hours" type="number" min="0" max="16" value="0" required /></label>
               <label><span>Minutes</span><input name="minutes" type="number" min="0" max="55" step="5" value="0" required /></label>
               <label class="full"><span>Comments</span><textarea name="comments" rows="3"></textarea></label>
-              <button class="cnc-button" type="submit">Submit Misc Time</button>
+              <button class="cnc-button" type="submit">Submit Manual Downtime</button>
             </form>
-          </article>
-          <article class="cnc-card">
-            <div class="cnc-section-header"><h3>Manual Time</h3></div>
+          </details>
+          <details class="cnc-card cnc-manual-section">
+            <summary>Manual Time</summary>
             <form method="post" action="/time/manual" class="cnc-form two-col">
               <label><span>Production Order</span><select name="production_number" required>${workOrderOptions}</select></label>
               <label><span>Operation</span><select name="operation_id" required class="operation-select">${operationOptions}</select></label>
@@ -1541,7 +1537,7 @@ app.get("/time", requireOperator, async (req, res, next) => {
               <label class="full"><span>Comments</span><textarea name="comments" rows="3"></textarea></label>
               <button class="cnc-button" type="submit">Submit Manual Time</button>
             </form>
-          </article>
+          </details>
         </section>
         <section class="cnc-card" id="recent-entries">
           <div class="cnc-section-header"><h3>${req.session.dailyReviewEditing ? "Entries for Review" : "Recent Entries"}</h3></div>
@@ -1620,6 +1616,15 @@ app.post("/time/start", requireOperator, async (req, res) => {
   res.redirect("/time");
 });
 
+app.post("/time/end-setup", requireOperator, async (req, res) => {
+  try {
+    if(await callCncBridge('tablet_time_active',{session:req.session.cncUser})) throw new Error('A tablet timer is already running. Refresh Time Entry before continuing.');
+    const result = await callCncBridge("end_setup", {session:req.session.cncUser,entry_id:req.body.entry_id,detail_type:req.body.detail_type,quantity:req.body.quantity});
+    req.session.notice = {kind:"success",message:`Set-Up submitted for supervisor approval. ${result.detail_type} started for the same work order and operation.`};
+  } catch(error) {req.session.notice = {kind:"warning",message:error.message};}
+  res.redirect("/time");
+});
+
 app.post("/time/pause", requireOperator, async (req, res) => {
   try {
     await callCncBridge("pause_for_lunch", {
@@ -1660,6 +1665,9 @@ app.post("/time/stop", requireOperator, async (req, res) => {
     const result = await callCncBridge("stop_time_entry", {
       entry_id: req.body.entry_id,
       quantity: req.body.quantity,
+      ending_pipe: req.body.ending_pipe,
+      original_adp: req.session.cncUser.employee.emp_id,
+      machine_no: req.session.cncUser.machine_no,
     });
     await setDailyReviewTarget(req, result);
     req.session.notice = { kind: "success", message: "Active time entry sent for supervisor approval." };
@@ -1669,15 +1677,22 @@ app.post("/time/stop", requireOperator, async (req, res) => {
   res.redirect("/time");
 });
 
+app.post("/time/starting-pipe", requireOperator, async (req,res)=>{
+  try {
+    await callCncBridge("save_starting_pipe",{session:req.session.cncUser,entry_id:req.body.entry_id,starting_pipe:req.body.starting_pipe});
+    req.session.notice={kind:"success",message:"Starting pipe saved for this entry."};
+  }catch(error){req.session.notice={kind:"warning",message:error.message};}
+  res.redirect("/time");
+});
+
 app.post("/time/active/edit", requireOperator, async (req, res) => {
   try {
-    await callCncBridge("edit_active_time_entry", {
+    await callCncBridge("adjust_active_timing", {
+      session: req.session.cncUser,
       entry_id: req.body.entry_id,
-      production_number: req.body.production_number,
-      operation_id: req.body.operation_id,
-      detail_type: req.body.detail_type,
-      break_minutes: req.body.break_minutes,
-      comments: req.body.comments,
+      kind: "correct_start",
+      start_time: req.body.start_time,
+      start_period: req.body.start_period,
     });
     req.session.notice = { kind: "success", message: "Active entry correction saved." };
   } catch (error) {
@@ -1686,9 +1701,17 @@ app.post("/time/active/edit", requireOperator, async (req, res) => {
   res.redirect("/time");
 });
 
+app.post("/time/active/log-lunch", requireOperator, async (req,res)=>{
+  try {
+    const result=await callCncBridge("adjust_active_timing",{session:req.session.cncUser,entry_id:req.body.entry_id,kind:"log_lunch",lunch_day:req.body.lunch_day});
+    req.session.notice={kind:"success",message:result.already_logged?"Lunch was already logged. No extra time was deducted.":"One-hour lunch logged. The current entry is still running."};
+  }catch(error){req.session.notice={kind:"warning",message:error.message};}
+  res.redirect("/time");
+});
+
 app.post("/time/correct", requireOperator, async (req, res) => {
   try {
-    await callCncBridge("correct_time_entry", {
+    await callCncBridge(req.body.entry_list === "startstop" ? "edit_active_time_entry" : "correct_time_entry", {
       entry_id: req.body.entry_id,
       production_number: req.body.production_number,
       operation_id: req.body.operation_id,
@@ -1720,6 +1743,23 @@ app.post("/time/delete", requireOperator, async (req, res) => {
     req.session.notice = { kind: "warning", message: error.message };
   }
   res.redirect("/time");
+});
+
+app.post("/time/downtime/start", requireOperator, async (req, res) => {
+  try {
+    await callCncBridge("start_timed_downtime", {session:req.session.cncUser,entry_id:req.body.entry_id,reason:req.body.detail_type_ii,comments:req.body.comments});
+    req.session.notice = {kind:"info",message:"Downtime is being logged. Production time is paused."};
+  } catch(error) { req.session.notice = {kind:"warning",message:error.message}; }
+  res.redirect("/time?traditional=1");
+});
+
+app.post("/time/downtime/end", requireOperator, async (req, res) => {
+  try {
+    const result = await callCncBridge("end_timed_downtime", {session:req.session.cncUser,downtime_id:req.body.downtime_id});
+    await setDailyReviewTarget(req, result);
+    req.session.notice = {kind:"success",message:"Downtime submitted for supervisor approval. Production time resumed."};
+  } catch(error) { req.session.notice = {kind:"warning",message:error.message}; }
+  res.redirect("/time?traditional=1");
 });
 
 app.post("/time/misc", requireOperator, async (req, res) => {
@@ -2038,7 +2078,7 @@ app.get("/contact/it", requireOperator, async (req, res, next) => {
         <section class="cnc-card">
           <form method="post" action="/contact/it" class="cnc-form">
             <label><span>Technical Category</span><select name="category" required>${categoryOptions}</select></label>
-            <label><span>User Email</span><input name="user_email" type="email" value="${escapeHtml(req.session.cncUser.user_email)}" required /></label>
+            <label><span>User Name</span><input name="user_name" value="${escapeHtml(req.session.cncUser.employee.full_name)}" readonly /></label>
             <label><span>Issue</span><textarea name="issue" rows="6" placeholder="Describe the problem here." required></textarea></label>
             <button class="cnc-button" type="submit">Send Request</button>
           </form>
@@ -2054,7 +2094,7 @@ app.get("/contact/it", requireOperator, async (req, res, next) => {
 app.post("/contact/it", requireOperator, async (req, res) => {
   try {
     const result = await callCncBridge("send_it_request", {
-      user_email: req.body.user_email,
+      user_email: "",
       user_name: req.session.cncUser.employee.full_name,
       machine_no: req.session.cncUser.machine_no,
       category: req.body.category,

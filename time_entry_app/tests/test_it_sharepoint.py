@@ -51,8 +51,23 @@ class ITSharePointTests(unittest.TestCase):
         with patch.object(b,'_find_it_request',side_effect=[None,{'id':'25'}]),patch.object(b,'_create_item',side_effect=TimeoutError('response lost')):
             self.assertEqual(b._deliver_it_request({},'key')['id'],'25')
     def test_invalid_request_is_not_queued(self):
-        with self.assertRaises(ValueError):b.send_it_request('','Operator','5','Software','Issue')
+        with self.assertRaises(ValueError):b.send_it_request('','','5','Software','Issue')
         self.assertEqual(store.list_pending_records(),[])
+    def test_adp_signed_in_operator_does_not_need_station_email(self):
+        with patch.object(b,'_find_it_request',return_value=None),patch.object(b,'_create_item',return_value={'id':'26'}) as create:
+            result=b.send_it_request('','Test Operator','Line 1 - Drift','Software','Screen is frozen','Quality')
+        self.assertTrue(result['delivered'])
+        fields=create.call_args.args[1]
+        self.assertEqual(fields['RequesterName'],'Test Operator')
+        self.assertNotIn('RequesterEmail',fields)
+        self.assertIn('Line 1 - Drift',fields['IssueDescription'])
+    def test_station_without_email_keeps_request_for_retry_when_delivery_is_unavailable(self):
+        with patch.object(b,'_deliver_it_request',side_effect=RuntimeError('offline')):
+            result=b.send_it_request(None,'Operator','Line 2 - Inspection 1','Hardware','Help','Quality')
+        self.assertTrue(result['queued'])
+        pending=store.list_pending_records()
+        self.assertEqual(len(pending),1)
+        self.assertNotIn('RequesterEmail',json.loads(pending[0]['payload'])['fields'])
     def test_legacy_import_is_repeatable_and_keeps_original_file(self):
         path=Path(self.temp.name)/'outbox.jsonl'
         it={'kind':'it_support','queued_at':'2026-11-05T12:00:00Z','payload':{'user_email':'test@example.com','user_name':'Operator','machine_no':'CNC 5','category':'Software','issue':'Help'}}

@@ -220,7 +220,38 @@ def _record_group(record):
         return None
     labor_date = normalize_labor_date((_payload(record).get("fields") or {}).get("LaborDate"))
     area = machine_area(transactions[0].get("machine_no"))
+    station = (_payload(record).get('fields') or {}).get('MachineNo') or record.get('machine_no')
+    if station and normalize_machine(station) != normalize_machine(transactions[0].get('machine_no')):
+        raise ValueError('The Acumatica payload does not match the entry station. Review the entry before sending.')
+    for transaction in transactions:
+        machine_area(transaction.get('machine_no'))
+        if normalize_machine(transaction.get('machine_no')) != normalize_machine(transactions[0].get('machine_no')):
+            raise ValueError('All Acumatica transactions must belong to the same CNC machine.')
     return labor_date, area
+
+
+def _is_downtime(record):
+    return any(normalize_detail_type(item.get('detail_type')) == 'DOWN TIME' for item in _transactions(record))
+
+
+def _labor_key(machine, order_type, production, operation, employee, shift):
+    return (normalize_machine(machine), str(order_type or 'EN').strip().upper(),
+            str(production or '').strip().upper(), str(operation or '').strip().lstrip('0') or '0',
+            str(employee or '').strip().lstrip('0') or '0', normalize_shift(shift))
+
+
+def _has_production_labor(entity, record):
+    """Require confirmed non-downtime labor for this job, operator and CNC station."""
+    existing = set()
+    for detail in _entity_details(entity):
+        kind = normalize_detail_type(entity_value(detail, 'DetailType', ''))
+        if not kind or kind == 'DOWN TIME' or _entity_errors(detail):
+            continue
+        existing.add(_labor_key(*(entity_value(detail, key, '') for key in
+            ('Machine', 'OrderType', 'ProductionNbr', 'OperationNbr', 'EmployeeID', 'Shift'))))
+    return all(_labor_key(*(transaction.get(key) for key in
+        ('machine_no', 'order_type', 'production_number', 'operation_id', 'employee_id', 'shift'))) in existing
+        for transaction in _transactions(record))
 
 
 def _prepare_record_for_sync(client, record):
@@ -362,7 +393,7 @@ def sync_approved_entries(trigger_name="manual", actor=None, client_factory=Acum
     if run_id is None:
         return {"status": "already_running", "sent": 0, "skipped": 0, "failed": 0}
 
-    summary = {"status": "disabled", "sent": 0, "skipped": 0, "failed": 0, "batches": []}
+    summary = {"status": "disabled", "sent": 0, "skipped": 0, "failed": 0, "waiting": 0, "batches": []}
     if not acumatica_enabled():
         finish_acumatica_sync_run(run_id, "disabled", summary)
         return summary
@@ -416,7 +447,7 @@ def sync_approved_entries(trigger_name="manual", actor=None, client_factory=Acum
                     except AcumaticaError:
                         remote_entity = None
 
-                for record in records:
+                for record in sorted(records, key=_is_downtime):
                     description = batch_description(area, labor_date)
                     is_supplemental = False
                     existing_sync = get_acumatica_sync_item(record["id"])
@@ -460,6 +491,16 @@ def sync_approved_entries(trigger_name="manual", actor=None, client_factory=Acum
                         target_entity = remote_entity
 
                     try:
+                        if _is_downtime(record):
+                            if target_batch and target_entity is None:
+                                target_entity = client.get_batch(target_batch['batch_nbr'])
+                            if not _has_production_labor(target_entity or {}, record):
+                                upsert_acumatica_sync_item(record['id'], record.get('revision_no') or 1, 'pending',
+                                    batch_nbr=(target_batch or {}).get('batch_nbr'),
+                                    error='Waiting for production labor for the same work order, operation, CNC machine, employee and shift in this labor-date batch.')
+                                summary['waiting'] += 1
+                                summary['skipped'] += 1
+                                continue
                         record = _prepare_record_for_sync(client, record)
                         target_entity, changed = _put_record(
                             client,
@@ -471,6 +512,8 @@ def sync_approved_entries(trigger_name="manual", actor=None, client_factory=Acum
                         )
                         if not target_batch:
                             batch = find_latest_acumatica_batch(labor_date, area)
+                            remote_entity = target_entity
+                        elif batch and batch['batch_nbr'] == target_batch['batch_nbr']:
                             remote_entity = target_entity
                         summary["sent"] += int(changed)
                         summary["skipped"] += int(not changed)

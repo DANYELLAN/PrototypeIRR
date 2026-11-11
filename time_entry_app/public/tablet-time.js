@@ -1,5 +1,8 @@
 import {installLunchReminder,lunchForm} from './lunch-reminder.js';
-import {totalsMarkup} from './active-time-summary.js';
+import {totalsMarkup,timeTotals} from './active-time-summary.js';
+import {createDowntimeDialog} from './timed-downtime.js';
+import {createSetupDialog,isSetup} from './setup-handoff.js';
+import {createEntryCompletionDialog,completionMode} from './entry-completion.js';
 import {createReviewReturn} from "./time-view-return.js";
 const embedded=new URLSearchParams(location.search).get('embedded')==='1';
 if(embedded)document.body.classList.add('tablet-time-embedded');
@@ -8,6 +11,17 @@ import {ownerFor,currentOwner,readProfile,updateProfile,eventId,applyLocal} from
 const $=id=>document.getElementById(id);
 const escape=value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
 let owner,profile,connected=false,syncing=false,working=false,booting=false,timerControlsKey='',reliefRequest=null,reliefBusy=false;
+const downtimeDialog=createDowntimeDialog(async downtime=>{
+ if(!await save('downtime_end',{timer_id:profile?.timer?.id,downtime_id:downtime.id}))throw new Error('Downtime is still being logged. Try ending it again.');
+});
+const setupDialog=createSetupDialog(async(state,detail)=>{
+ if(profile?.timer?.id!==state.timer_id)throw new Error('This timer changed. Reopen End Set-Up.');
+ if(!await save('end_setup',{timer_id:state.timer_id,detail_type:detail,quantity:state.quantity,next_timer_id:eventId()}))throw new Error('Set-Up was not ended. Check the message and try again.');
+});
+const completionDialog=createEntryCompletionDialog(async(state,values)=>{
+ if(profile?.timer?.id!==state.timer_id)throw new Error('This timer changed. Reopen its controls.');
+ if(!await save(state.kind,{timer_id:state.timer_id,completion_version:1,...values}))throw new Error('The entry was not saved. Check the message and try again.');
+});
 const message=text=>{$('feedback').textContent=text;};
 const request=async(url,options={})=>fetch(url,{...options,cache:'no-store',signal:AbortSignal.timeout(15000)});
 let navigationStorage;
@@ -45,14 +59,15 @@ function forms(){
 function timerRender(){
  const timer=profile?.timer;
  $('active').hidden=!timer;$('start-card').hidden=Boolean(timer||profile?.context.legacy_active);$('legacy').hidden=!profile?.context.legacy_active;
- if(!timer){timerControlsKey='';return;}
+ if(!timer){timerControlsKey='';downtimeDialog.hide();return;}
+ if(timer.downtime)downtimeDialog.show(timer.downtime);else downtimeDialog.hide();
  $('timer-name').textContent=timer.fields.ProductionNo;
  const operation=profile.context.operations.find(item=>item.production_number===timer.fields.ProductionNo && item.operation_id===timer.fields.OperationID);
  $('timer-description').textContent=operation?.operation_description || operation?.description || timer.fields.TranDescription || `Operation ${timer.fields.OperationID}`;
  const currentBreak=timer.status==='Paused'?timer.breaks.at(-1)?.type:'';
  $('timer-chips').innerHTML=`<span class="cnc-chip">${escape(currentBreak==='With Relief'?'Production continuing — relieved break':timer.status)}</span><span class="cnc-chip secondary">${escape(timer.fields.DetailsType)}</span>${currentBreak?`<span class="cnc-chip secondary">${escape(currentBreak)}</span>`:''}`;
  if(currentBreak==='With Relief')$('timer-chips').innerHTML+=`<span class="cnc-chip secondary">Relief: ${escape(timer.breaks.at(-1).relief_name || 'Pending verification')} · ADP ${escape(timer.breaks.at(-1).relief_adp || '')}</span>`;
- const controlsKey=timer.id+':'+timer.status+':'+currentBreak;
+ const controlsKey=timer.id+':'+timer.status+':'+currentBreak+':'+(timer.downtime?.id||'')+':'+(timer.starting_pipe??'')+':'+timer.start+':'+timer.break_minutes;
  if(timerControlsKey===controlsKey){clock();return;}
  timerControlsKey=controlsKey;
  $('timer-actions').innerHTML=renderActiveTimerActions(timer,profile.context);
@@ -60,9 +75,9 @@ function timerRender(){
 }
 function clock(){
  const timer=profile?.timer;if(!timer)return;
- const currentBreak=timer.status==='Paused' && ['Lunch','No Relief'].includes(timer.breaks.at(-1)?.type)?Math.max(0,Math.floor((Date.now()-Date.parse(timer.breaks.at(-1).start))/60000)):0;
- const minutes=Math.max(0,Math.floor((Date.now()-Date.parse(timer.start))/60000)-timer.break_minutes-timer.downtime_minutes-currentBreak);
- $('timer-clock').innerHTML=totalsMarkup({production:minutes,breaks:timer.break_minutes+currentBreak,downtime:timer.downtime_minutes});
+ $('timer-clock').innerHTML=totalsMarkup(timeTotals({...timer,downtime_started_at:timer.downtime?.start,
+  break_started_at:timer.status==='Paused'?timer.breaks.at(-1)?.start:null,
+  break_deducts:timer.status==='Paused' && ['Lunch','No Relief'].includes(timer.breaks.at(-1)?.type)}));
 }
 function render(){
  if(embedded)setTimeout(()=>window.parent.postMessage({type:'tablet-time-state',hasWork:Boolean(profile?.timer||profile?.events?.length),ready:Boolean(profile),height:document.body.scrollHeight},location.origin),0);
@@ -117,10 +132,10 @@ async function sync(){
 async function save(kind,data){
  if(working)return;working=true;
  try{
-  if(kind==='misc' && data.active_timer_id)data=activeDowntimeData(profile.timer,data);
+  if(['misc','downtime_start'].includes(kind) && data.active_timer_id)data=activeDowntimeData(profile.timer,data);
   const event={id:eventId(),kind,at:new Date().toISOString(),data};
   if(kind==='start')data.timer_id=eventId();
-  if(['pause','relief_arrived','resume','stop'].includes(kind)){
+  if(['pause','relief_arrived','resume','stop','downtime_end','end_setup','starting_pipe','correct_start','log_lunch'].includes(kind)){
    if(data.timer_id && data.timer_id!==profile.timer?.id)throw new Error('This timer changed. Reopen the break controls.');
    data.timer_id=profile.timer?.id;
   }
@@ -130,13 +145,23 @@ async function save(kind,data){
   }
   profile=await updateProfile(owner,current=>applyLocal(current,event));
   if(kind==='misc' && data.active_timer_id)document.getElementById('active-downtime')?.reset();
-  message(kind==='resume'?'Break ended. Original operator continuing work.':kind==='relief_arrived'?'Relief recorded. Production time is continuing.':'Saved on this tablet.');forms();render();void sync();return true;
+  message(kind==='downtime_end'?'Downtime saved for upload and supervisor approval. Production time resumed.':kind==='resume'?'Break ended. Original operator continuing work.':kind==='relief_arrived'?'Relief recorded. Production time is continuing.':'Saved on this tablet.');forms();render();void sync();return true;
  }catch(error){message(`Could not save: ${error.message}. Keep this screen open and try again.`);return false;}finally{working=false;}
 }
 document.addEventListener('submit',event=>{
  const form=event.target;const kind=form.dataset.action||(['start','manual','misc'].includes(form.id)?form.id:null);
  if(!kind)return;event.preventDefault();if(!form.reportValidity())return;
  const data=Object.fromEntries(new FormData(form));
+ if(['starting_pipe','stop'].includes(kind)&&form.matches('[data-entry-starting-pipe],[data-entry-completion]')){
+  const timer=profile?.timer;
+  if(!timer||timer.id!==data.timer_id){message('This timer changed. Reopen its controls.');return;}
+  completionDialog.show({kind,timer_id:timer.id,mode:completionMode(timer.fields.DetailsType),starting_pipe:timer.starting_pipe,production_number:timer.fields.ProductionNo,operation_id:timer.fields.OperationID});return;
+ }
+ if(kind==='end_setup'){
+  const timer=profile?.timer;
+  if(!timer||!isSetup(timer.fields.DetailsType)||timer.status!=='In Progress'||timer.downtime){message('Resume Set-Up and end any downtime before continuing.');return;}
+  setupDialog.show({timer_id:timer.id,production_number:timer.fields.ProductionNo,operation_id:timer.fields.OperationID,quantity:data.quantity},profile.context.details);return;
+ }
  if(kind==='relief_arrived' || (kind==='pause' && data.break_type==='With Relief')){
   reliefRequest={kind,data:{...data,timer_id:profile.timer?.id}};
   $('relief-adp-form').reset();$('relief-adp-error').textContent='';
@@ -210,8 +235,12 @@ if('serviceWorker' in navigator && window.isSecureContext){
 try{owner=await currentOwner();if(owner)profile=await readProfile(owner);if(profile)forms();render();await prepare();await sync();}
 catch(error){message(`Tablet storage is unavailable: ${error.message}. Do not close this page until your work is saved.`);$('setup').hidden=false;}
 window.tabletTimeReady=true;
+window.appLoading?.hide();
 
 installLunchReminder({getActive:()=>{
- if(!profile?.timer||profile.timer.status!=='In Progress'||working||reliefBusy)return null;
- const form=lunchForm();return form?{form,token:profile.timer.id,owner,shift:profile.context.shift_id}:null;
+ if(!profile?.timer||profile.timer.downtime||profile.timer.status!=='In Progress'||working||reliefBusy)return null;
+ const form=lunchForm();return form?{form,token:profile.timer.id,owner,shift:profile.context.shift_id,logLunch:async day=>{
+  const timer=profile?.timer;if(!timer)throw new Error('This entry changed. Reopen its controls.');
+  if(!await save('log_lunch',{timer_id:timer.id,lunch_day:day}))throw new Error('Lunch was not logged. Check the message and try again.');
+ }}:null;
 }});

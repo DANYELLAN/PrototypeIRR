@@ -2,20 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
+import {preparedTabletMarkup} from '../src/tabletTime.js';
 const source=await readFile(new URL('../src/cncTimeServer.js',import.meta.url),'utf8');
 const route=source.slice(source.indexOf('app.get("/time",'),source.indexOf('\nasync function setDailyReviewTarget',source.indexOf('app.get("/time",')));
 async function render(query={},earlier=null){
  let handler,result;const actions=[];
  vm.runInNewContext(route,{app:{get:(_path,_guard,fn)=>handler=fn},requireOperator:()=>{},
   dashboardContext:async()=>({work_orders:[],operations:[],details_step_two:[],downtime_reasons:[],recent_entries:[],active_entry:null}),
-  callCncBridge:async(action)=>{actions.push(action);return action==='tablet_time_active'?earlier:{required:false,entries:[]};},
-  dailyTimeReviewMarkup:()=>'',escapeHtml:value=>String(value??''),layout:config=>config,timeTable:()=>'<table>Review entries</table>'});
+  callCncBridge:async(action)=>{actions.push(action);assert.equal(action,'get_time_page_context');return {context:{work_orders:[],operations:[],details_step_two:[],downtime_reasons:[],recent_entries:[],active_entry:null},timer:earlier,review:{required:false,entries:[]}};},
+  preparedTabletMarkup,hasRole:()=>false,dailyTimeReviewMarkup:()=>'',escapeHtml:value=>String(value??''),layout:config=>config,timeTable:()=>'<table>Review entries</table>'});
  await handler({query,session:{cncUser:{employee:{emp_id:'1'}},notice:null}},{send:value=>result=value,redirect:()=>assert.fail('Time Entry must not switch views')},error=>{throw error;});
  return {result,actions};
 }
 test('default and historical URLs render the same full Time Entry view without a tablet redirect',async()=>{
  for(const query of [{},{traditional:'1'}]){
-  const {result}=await render(query);
+  const {result,actions}=await render(query);
+  assert.deepEqual(actions,['get_time_page_context']);
   assert.equal(result.active,'time');assert.match(result.body,/action="\/time\/start"/);
   assert.match(result.body,/action="\/time\/manual"/);assert.match(result.body,/action="\/time\/misc"/);
   assert.match(result.body,/Recent Entries/);assert.match(result.body,/Review entries/);
@@ -59,4 +61,25 @@ test('normal connected view prepares offline context without overwriting queued 
   document:{getElementById:id=>id==='earlier-tablet-work'?notice:{append:()=>{}},querySelectorAll:()=>[],createElement:()=>({style:{}})}});
  assert.equal(stored.timer.id,'offline-timer');assert.equal(stored.events[0].id,'waiting');assert.equal(stored.drafts.manual.minutes,5);
  assert.equal(stored.context,context);assert.equal(notice.hidden,false);
+});
+
+test('embedded page data avoids another context request while retaining queued work',async()=>{
+ const script=(await readFile(new URL('../public/review-time-recovery.js',import.meta.url),'utf8')).replace(/^import[^\n]+\n/,'');
+ const context={employee:{emp_id:'10'},machine_no:'CNC 1',shift_id:'40',timer:null};
+ const owner=ownerFor(context);let stored={owner,timer:{id:'offline-timer'},events:[{id:'waiting'}],drafts:{manual:{minutes:5}},receipts:[]};
+ const notice={dataset:{serverTimer:'no',owner},hidden:true};let fetches=0;
+ await vm.runInNewContext(`(async()=>{${script}})()`,{ownerFor,currentOwner:async()=>owner,readProfile:async()=>stored,
+  updateProfile:async(key,change)=>{assert.equal(key,owner);stored=change(stored);return stored;},
+  window:{addEventListener:()=>{}},fetch:async()=>{fetches++;throw new Error('No duplicate context request expected');},AbortSignal,
+  document:{getElementById:id=>id==='earlier-tablet-work'?notice:id==='prepared-tablet-context'?{textContent:JSON.stringify(context)}:{append:()=>{}},querySelectorAll:()=>[],createElement:()=>({style:{}})}});
+ assert.equal(fetches,0);assert.equal(stored.timer.id,'offline-timer');assert.equal(stored.events[0].id,'waiting');assert.equal(stored.drafts.manual.minutes,5);
+ assert.equal(stored.context.employee.emp_id,'10');assert.equal(notice.hidden,false);
+});
+
+test('prepared context is inert JSON and escapes markup from work-order descriptions',()=>{
+ const markup=preparedTabletMarkup({employee:{emp_id:'1'},machine_no:'CNC 1'},
+  {operations:[{description:'</script><script>alert(1)</script>'}],details_step_two:[],downtime_reasons:[]},null,{required:false},()=>false);
+ assert.equal((markup.match(/<script/g)||[]).length,1);
+ const data=JSON.parse(markup.slice(markup.indexOf('>')+1,markup.lastIndexOf('</script>')));
+ assert.equal(data.operations[0].description,'</script><script>alert(1)</script>');
 });

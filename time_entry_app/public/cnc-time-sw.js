@@ -1,6 +1,12 @@
-const CACHE='benoit-time-offline-v27';
+const CACHE='benoit-time-offline-v37';
 const SHELL='/public/tablet-time.html';
 const ASSETS=[SHELL,'/public/review-time-recovery.js','/public/tablet-time.js','/public/time-entry-ui.js','/public/time-view-return.js','/public/lunch-reminder.js','/public/active-time-summary.js','/public/tablet-session-lock.js','/public/tablet-time-store.js','/public/tablet-time.css','/public/cnc-time.css','/public/cnc-time.js?v=6','/public/click-diagnostics.js?v=1','/public/BenoitIconRegistered-Red.png','/public/BenoitLogoRegistered-Red.png'];
+ASSETS.push('/public/timed-downtime.js');
+ASSETS.push('/public/setup-handoff.js');
+ASSETS.push('/public/entry-completion.js');
+ASSETS.push('/public/active-timing.js');
+ASSETS.push('/public/loading.js');
+ASSETS.push('/public/recent-entry-editor.js');
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith('cnc-time-')||key.startsWith('benoit-time-offline-')&&key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim())));
 self.addEventListener('fetch',event=>{
