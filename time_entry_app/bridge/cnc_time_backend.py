@@ -52,6 +52,7 @@ from local_store import (
     patch_pending_record_fields,
     queue_approval,
     queue_record,
+    queue_timer_stop,
     resolve_assistance_request,
     save_session,
     start_break_event,
@@ -1520,8 +1521,8 @@ def get_dashboard_context(emp_id, user_email):
         if item["emp_id"] == str(emp_id)
     ]
     startstop_entries.extend(_local_startstop_entries(emp_id))
-    from time_entry_app.bridge.setup_transition import project_completed_setups
-    startstop_entries = project_completed_setups(startstop_entries)
+    from time_entry_app.bridge.setup_transition import project_startstop_entries
+    startstop_entries = project_startstop_entries(startstop_entries)
     final_entries = [
         item
         for item in (_normalize_timeentry(entry) for entry in _read_list("timeentry", fetch_all=True))
@@ -2017,8 +2018,8 @@ def start_time_entry(employee, shift_id, machine_no, production_number, operatio
 def _get_startstop_by_id(entry_id):
     normalized = [_normalize_startstop(item) for item in _read_list("startstop", fetch_all=True)]
     normalized.extend(_local_startstop_entries())
-    from time_entry_app.bridge.setup_transition import project_completed_setups
-    normalized = project_completed_setups(normalized)
+    from time_entry_app.bridge.setup_transition import project_startstop_entries
+    normalized = project_startstop_entries(normalized)
     for item in normalized:
         if str(item["sp_id"]) == str(entry_id) or str(item["id"]) == str(entry_id):
             return item
@@ -2028,8 +2029,8 @@ def _get_startstop_by_id(entry_id):
 def _matching_active_direct_entry(employee, production_number, operation_id):
     entries = [_normalize_startstop(item) for item in _read_list("startstop", fetch_all=True)]
     entries.extend(_local_startstop_entries(employee.get("emp_id")))
-    from time_entry_app.bridge.setup_transition import project_completed_setups
-    entries = project_completed_setups(entries)
+    from time_entry_app.bridge.setup_transition import project_startstop_entries
+    entries = project_startstop_entries(entries)
     matches = [entry for entry in entries
                if entry.get("status") in {"In Progress", "Paused"}
                and _normalize_identifier(entry.get("emp_id")) == _normalize_identifier(employee.get("emp_id"))
@@ -2415,11 +2416,9 @@ def resume_from_lunch(entry_id, original_adp=None):
         return {"resumed": False, "queued": True, "offline_only": True}
 
 
-def stop_time_entry(entry_id, quantity=None, ending_pipe=None, original_adp=None, machine_no=None):
+def stop_time_entry(entry_id, quantity=None, ending_pipe=None, original_adp=None):
     entry = _get_startstop_by_id(entry_id)
     _require_break_owner(entry, original_adp)
-    if machine_no is not None and str(entry.get('machine_no')) != str(machine_no):
-        raise ValueError('This entry belongs to another station.')
     if entry.get("status") not in {"In Progress", "Paused"}:
         raise ValueError("This entry has already been submitted. Refresh the active entry.")
     from time_entry_app.bridge.timed_downtime import require_no_downtime
@@ -2429,13 +2428,13 @@ def stop_time_entry(entry_id, quantity=None, ending_pipe=None, original_adp=None
     start_dt = datetime.fromisoformat(str(entry["start"]).replace("Z", "+00:00"))
     end_dt = _utc_now()
     break_minutes = entry["break_minutes"]
+    current_break_minutes = None
     if entry["lunch_start"] and not entry["lunch_stop"]:
         lunch_start_dt = datetime.fromisoformat(str(entry["lunch_start"]).replace("Z", "+00:00"))
         active_break = get_active_break_event(entry["sp_id"])
         current_break_minutes = max(int((end_dt - lunch_start_dt).total_seconds() // 60), 0)
         if _break_counts_against_production(active_break):
             break_minutes += current_break_minutes
-        finish_break_event(entry["sp_id"], ended_at=end_dt.isoformat(), duration_minutes=current_break_minutes)
     downtime_minutes = _active_downtime_minutes(entry)
     worked_minutes = max(int((end_dt - start_dt).total_seconds() // 60) - int(break_minutes) - downtime_minutes, 0)
     average = round(qty / (worked_minutes / 60), 2) if worked_minutes > 0 else 0
@@ -2451,20 +2450,6 @@ def stop_time_entry(entry_id, quantity=None, ending_pipe=None, original_adp=None
         "Average": average,
     }
     item_id = entry["sp_id"]
-    complete_queued_id = queue_record(
-        "complete_startstop",
-        {"entry_id": item_id, "item_id": item_id, "fields": updated_fields},
-        machine_no=entry.get("machine_no"),
-        emp_id=entry.get("emp_id"),
-        employee_name=entry.get("operators_name"),
-        source="offline-first",
-    )
-    try:
-        _update_item("startstop", item_id, updated_fields)
-        mark_record_synced(complete_queued_id)
-    except Exception:
-        pass
-
     final_fields = {
         "Title": entry["production_number"],
         "LaborDate": entry["labor_date"],
@@ -2497,20 +2482,18 @@ def stop_time_entry(entry_id, quantity=None, ending_pipe=None, original_adp=None
     }
     employee_for_acumatica = lookup_employee_by_adp(entry.get("emp_id")) or {}
     approval_payload = {
-        "entry_id": entry_id, "fields": final_fields, "employee": employee_for_acumatica,
+        "entry_id": item_id, "fields": final_fields, "employee": employee_for_acumatica,
         "active_downtime_minutes": downtime_minutes,
     }
     if pipe_range:
         approval_payload['pipe_range'] = pipe_range
     _attach_acumatica_payload(approval_payload, employee_for_acumatica, final_fields)
-    ensure_db()
-    approval_id = queue_approval(
-        "stop_time_entry",
-        approval_payload,
-        machine_no=entry.get("machine_no"),
-        emp_id=entry.get("emp_id"),
-        employee_name=entry.get("operators_name"),
-    )
+    complete_queued_id, approval_id = queue_timer_stop(entry, updated_fields, approval_payload, current_break_minutes)
+    try:
+        _update_item("startstop", item_id, updated_fields)
+        mark_record_synced(complete_queued_id)
+    except Exception:
+        pass
     remember_comment({'entry_list': 'timeentry', 'sp_id': f'approval:{approval_id}'}, final_fields['TranDescription'])
     return {"submitted": False, "pending_approval": True, "approval_id": approval_id, "worked_minutes": worked_minutes}
 

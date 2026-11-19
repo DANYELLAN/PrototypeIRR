@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent / "data" / "cnc_time_local.db"
+DB_PATH = Path(os.getenv("CNC_TIME_LOCAL_DB_PATH") or Path(__file__).resolve().parent / "data" / "cnc_time_local.db")
 LOCAL_MACHINE_CONFIG = Path(__file__).resolve().parent / "config" / "machines.json"
 
 
@@ -617,6 +617,53 @@ def queue_approval(record_type, payload, machine_no=None, emp_id=None, employee_
     conn.commit()
     conn.close()
     return record_id
+
+
+def require_unqueued_stop(conn, entry_id):
+    existing = conn.execute(
+        """SELECT 1 FROM time_entries
+           WHERE record_type = 'complete_startstop'
+             AND CAST(json_extract(payload, '$.entry_id') AS TEXT) = ?
+           LIMIT 1""",
+        (str(entry_id),),
+    ).fetchone()
+    if existing:
+        raise ValueError("This entry has already been submitted. Refresh the active entry.")
+
+
+def queue_timer_stop(entry, completed_fields, approval, open_break_minutes):
+    ensure_db()
+    conn = _connect()
+    try:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            entry_id = str(entry["sp_id"])
+            require_unqueued_stop(conn, entry_id)
+            identity = (entry.get("machine_no"), entry.get("emp_id"), entry.get("operators_name"))
+            timestamp = _utc_now_iso()
+            completion = {"entry_id": entry_id, "item_id": entry_id, "fields": completed_fields}
+            queued_id = conn.execute(
+                """INSERT INTO time_entries
+                   (record_type, machine_no, emp_id, employee_name, payload, created_at, sync_status, source)
+                   VALUES ('complete_startstop', ?, ?, ?, ?, ?, 'pending', 'offline-first')""",
+                (*identity, json.dumps(completion, default=str), timestamp),
+            ).lastrowid
+            approval_id = conn.execute(
+                """INSERT INTO approval_queue
+                   (record_type, machine_no, emp_id, employee_name, payload, approval_status, submitted_at)
+                   VALUES ('stop_time_entry', ?, ?, ?, ?, 'pending', ?)""",
+                (*identity, json.dumps(approval, default=str), timestamp),
+            ).lastrowid
+            if open_break_minutes is not None:
+                conn.execute(
+                    """UPDATE break_events SET ended_at = ?, duration_minutes = ?
+                       WHERE id = (SELECT id FROM break_events WHERE entry_id = ? AND ended_at IS NULL
+                                   ORDER BY started_at DESC LIMIT 1)""",
+                    (completed_fields["End"], open_break_minutes, entry_id),
+                )
+        return queued_id, approval_id
+    finally:
+        conn.close()
 
 
 def list_employee_approvals(emp_id):

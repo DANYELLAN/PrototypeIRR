@@ -16,6 +16,15 @@ export function registerTabletInspection(app,{callBridge,connectionLabel,nextPip
   try{res.json({...await callBridge('tablet_inspection_prepare',{params:params(req)}),machine_name:req.session.sessionRecord.location_name||'',active_pipe:Boolean(req.session.activeInspection)});}catch(error){res.status(409).json({error:error.message});}
  });
  app.get('/api/tablet-inspection/health',guard,(req,res)=>res.json({connected:true}));
+ app.post('/api/tablet-inspection/draft',guard,async(req,res)=>{
+  const context=params(req);
+  if(req.body.owner!==ownerFor(context))return res.status(409).json({error:'Reselect the original work order and station before publishing this draft.'});
+  try{
+   const result=await callBridge('tablet_inspection_draft',{params:context,event:req.body.event});
+   req.session.activeInspection=result.attempt;req.session.selection.pipeNumber=result.pipe_number;
+   res.json({saved:true});
+  }catch(error){res.status(409).json({error:error.message});}
+ });
  app.post('/api/tablet-inspection/pipes',guard,async(req,res)=>{
   const context=params(req);
   if(req.body.owner!==ownerFor(context))return res.status(409).json({error:'Reselect the original work order and station to sync this worksheet. Saved measurements have been kept.'});

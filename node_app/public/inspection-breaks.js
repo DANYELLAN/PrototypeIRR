@@ -9,6 +9,7 @@
   const choices=document.getElementById('inspection-break-choices');
   const reliefForm=document.getElementById('inspection-relief-form');
   const end=document.getElementById('inspection-break-end');
+  const arrived=document.getElementById('inspection-relief-arrived');
   const cancel=document.getElementById('inspection-break-cancel');
   const error=document.getElementById('inspection-break-error');
   const dialogError=document.getElementById('inspection-break-dialog-error');
@@ -73,6 +74,7 @@
     choices.hidden=Boolean(state.mode);
     reliefForm.hidden=true;
     end.hidden=state.mode!=='without_relief';
+    arrived.hidden=state.mode!=='without_relief';
     cancel.hidden=Boolean(state.mode);
     description.textContent=state.mode==='without_relief'?'Inspection is paused. Click End Break when you return.':'Will another inspector cover this break?';
     syncWorksheet();
@@ -103,6 +105,7 @@
     finally{busy=false;if(workspace)workspace.inert=false;disabledBefore.forEach((disabled,el)=>el.disabled=disabled);dialog.querySelectorAll('button').forEach(el=>el.disabled=false);}
   };
   button.addEventListener('click',()=>{if(state.mode)void transition('end');else {choices.hidden=false;reliefForm.hidden=true;dialogError.textContent='';dialog.showModal();}});
+  arrived.addEventListener('click',()=>{reliefForm.hidden=false;reliefForm.elements.relief_adp.focus();});
   end.addEventListener('click',()=>void transition('end'));
   cancel.addEventListener('click',()=>dialog.close());
   dialog.addEventListener('cancel',event=>{if(state.mode==='without_relief'||busy)event.preventDefault();});

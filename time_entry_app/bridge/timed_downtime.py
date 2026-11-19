@@ -75,8 +75,8 @@ def end_downtime(session, downtime_id):
     try:
         connection.execute('BEGIN IMMEDIATE')
         row = connection.execute('SELECT * FROM timed_downtime_sessions WHERE id=?', (str(downtime_id),)).fetchone()
-        if not row or row['emp_id'] != str(session['employee']['emp_id']).lstrip('0') or row['machine_no'] != str(session['machine_no']):
-            raise ValueError('This downtime session does not belong to your operator and station.')
+        if not row or row['emp_id'] != str(session['employee']['emp_id']).lstrip('0'):
+            raise ValueError('This downtime session belongs to another operator or no longer exists.')
         if row['ended_at']:
             return {'approval_id': row['approval_id'], 'already_submitted': True}
         state = json.loads(row['state'])

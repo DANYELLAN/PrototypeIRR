@@ -116,6 +116,7 @@ def save_live_inspection_draft(attempt_id, session_id, inspector_adp, measuremen
         raise ValueError("Invalid live inspection measurements")
     evaluated = db.evaluate_measurements(measurements)["measurements"]
     for original, row in zip(measurements, evaluated):
+        row["entered_value"] = original.get("measured_value")
         if row.get("capture_type") != "boolean" and str(original.get("measured_value") if original.get("measured_value") is not None else "").strip() == "":
             row["pass_fail"] = "Pending"
     connection = db.get_db_connection()
@@ -131,6 +132,10 @@ def save_live_inspection_draft(attempt_id, session_id, inspector_adp, measuremen
                 VALUES (%s,%s,%s) ON CONFLICT (attempt_id) DO UPDATE SET measurements=EXCLUDED.measurements,
                 client_sequence=EXCLUDED.client_sequence, updated_at=NOW()
                 WHERE inspection_live_drafts.client_sequence <= EXCLUDED.client_sequence""", (attempt_id, Json(evaluated), int(client_sequence)))
+            if cursor.rowcount:
+                readings = {str(row['element_sequence']): str(row.get('measured_value') if row.get('measured_value') is not None else '') for row in measurements}
+                cursor.execute("""INSERT INTO irr_inspection_monitor_drafts(attempt_id, session_id, readings)
+                    VALUES (%s,%s,%s) ON CONFLICT(attempt_id) DO UPDATE SET readings=EXCLUDED.readings, updated_at=NOW()""", (attempt_id, session_id, Json(readings)))
             # Record only accepted edits; opening the auto-loaded blank pipe does not count as relief work.
             if cursor.rowcount and (str(edited_sequence) in {str(item.get("element_sequence")) for item in measurements} or any(str(item.get("measured_value") if item.get("measured_value") is not None else "").strip() not in {"", "No"} for item in measurements)):
                 record_relief(cursor, attempt_id, context)

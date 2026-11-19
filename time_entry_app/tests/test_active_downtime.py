@@ -90,11 +90,11 @@ class ActiveDowntimeTests(unittest.TestCase):
         self.queue_downtime(45)
         with patch.object(backend, "_get_startstop_by_id", return_value=self.entry), patch.object(
             backend, "_utc_now", return_value=datetime(2026, 10, 6, 16, tzinfo=timezone.utc)
-        ), patch.object(backend, "queue_record", return_value=1), patch.object(backend, "_update_item"), patch.object(
+        ), patch.object(backend, "_update_item"), patch.object(
             backend, "mark_record_synced"
         ), patch.object(backend, "lookup_employee_by_adp", return_value={"machinist": True}), patch.object(
-            backend, "ensure_db"
-        ), patch.object(backend, "queue_approval", side_effect=local_store.queue_approval):
+            backend, "queue_timer_stop", side_effect=local_store.queue_timer_stop
+        ):
             result = backend.stop_time_entry("local:10", quantity=10)
         payload = json.loads(local_store.get_approval_record(result["approval_id"])["payload"])
         self.assertEqual(result["worked_minutes"], 405)

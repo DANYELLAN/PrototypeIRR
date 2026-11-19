@@ -36,7 +36,7 @@ class SetupTransitionTests(unittest.TestCase):
         finally:conn.close()
 
     def test_confirm_atomically_submits_setup_and_starts_same_work_order_and_description(self):
-        result=setup.end_setup(self.session,'TEST-SETUP','Machining','7')
+        result=setup.end_setup({**self.session, 'machine_no': 'OTHER'},'TEST-SETUP','Machining','7')
         self.assertEqual(setup.end_setup(self.session,'TEST-SETUP','Machining','7'),result)
         rows=self.rows('approval_queue');self.assertEqual(len(rows),1)
         old=json.loads(rows[0]['payload'])['fields']
@@ -49,9 +49,10 @@ class SetupTransitionTests(unittest.TestCase):
         self.assertEqual(new['DetailsType'],'Machining');self.assertEqual(new['BreakMinutes'],0)
         for key in ('ProductionNo','OperationID','Description','OperationDescription','Shift','MachineNo'):
             self.assertEqual(old[key],new[key])
+        self.assertEqual(new['MachineNo'], self.entry['machine_no'])
         self.assertEqual(new['Quantity'],0)
         self.assertEqual(new['TranDescription'],'')
-        self.assertEqual(setup.project_completed_setups([self.entry])[0]['status'],'Submitted')
+        self.assertEqual(setup.project_startstop_entries([self.entry])[0]['status'],'Submitted')
         self.assertEqual(result['next_entry_id'],f"local:{pending[1]['id']}")
         with patch.object(setup.backend,'_read_list',return_value=[]):
             current=setup.backend._local_startstop_entries('747')
@@ -68,9 +69,9 @@ class SetupTransitionTests(unittest.TestCase):
         self.assertEqual(self.rows('approval_queue'),[])
         self.assertEqual(self.rows('time_entries'),[])
 
-    def test_invalid_detail_break_wrong_owner_and_station_do_not_write(self):
+    def test_invalid_detail_break_and_wrong_owner_do_not_write(self):
         with self.assertRaises(ValueError):setup.end_setup(self.session,'TEST-SETUP','FORGED')
-        for key,value in [('status','Paused'),('details_type','Machining'),('emp_id','99'),('machine_no','OTHER')]:
+        for key,value in [('status','Paused'),('details_type','Machining'),('emp_id','99')]:
             prior=self.entry[key];self.entry[key]=value
             with self.subTest(key=key),self.assertRaises(ValueError):setup.end_setup(self.session,'TEST-SETUP','Machining')
             self.entry[key]=prior

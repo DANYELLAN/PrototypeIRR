@@ -80,6 +80,10 @@ from sharepoint_client import (
 )
 
 
+from ncr_workflow import SCHEMA_SQL as NCR_SCHEMA_SQL, validate_capture
+from lunch_workflow import LUNCH_SCHEMA_SQL
+from admin_inspections import LIVE_SCHEMA_SQL
+
 WORKFLOW_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS app_locations (
     id SERIAL PRIMARY KEY,
@@ -440,6 +444,9 @@ DEFAULT_GAUGE_OPTIONS = [
     "Lead Gauge",
 ]
 ENTRY_OPTION_TYPES = {"size", "weight", "connection"}
+
+
+WORKFLOW_SCHEMA_SQL += NCR_SCHEMA_SQL + LUNCH_SCHEMA_SQL + LIVE_SCHEMA_SQL + "\nALTER TABLE inspection_attempts ADD COLUMN IF NOT EXISTS relief_for_inspector_name TEXT;"
 
 
 def initialize_workflow_schema():
@@ -2359,14 +2366,14 @@ def evaluate_measurements(measurements, approval_rules=None):
     failed_count = 0
 
     def normalize_numeric_measurement(raw_value, measurement):
-        # Explicit +/- text is a deviation from a configured nominal. Numeric
+        # Explicit +/- or zero text is a deviation from a configured nominal. Numeric
         # values already evaluated by the app are actual values, preventing a
         # second evaluation from applying an offset twice.
         text = str(raw_value).strip().replace("−", "-")
         nominal = measurement.get("nominal")
         try:
             value = Decimal(text)
-            if isinstance(raw_value, str) and text.startswith(("+", "-")) and nominal is not None and str(nominal).strip() != "":
+            if isinstance(raw_value, str) and (text.startswith(("+", "-")) or value.is_zero()) and nominal is not None and str(nominal).strip() != "":
                 value += Decimal(str(nominal))
         except InvalidOperation as exc:
             raise ValueError("Enter a finite full measurement or signed offset") from exc
@@ -2704,7 +2711,8 @@ def get_ncr_reports(branch=None, status=None):
         f"""
         SELECT nr.id, nr.attempt_id, nr.pipe_unit_id, nr.status, nr.disposition,
                nr.tier_code, nr.nonconformance, nr.immediate_containment,
-               nr.opened_at, nr.closed_at,
+               nr.opened_at, nr.closed_at, nr.review_status, nr.reviewed_by, nr.reviewed_at,
+               nr.sharepoint_item_id, nr.sharepoint_ncr_number,
                pu.production_number, pu.operation_description, pu.pipe_number, pu.branch
         FROM ncr_reports nr
         JOIN pipe_units pu ON pu.id = nr.pipe_unit_id
@@ -3168,6 +3176,7 @@ def complete_inspection_attempt(
     }
     pipe_status = pipe_status_map[disposition]
     attempt_status = attempt_status_map[disposition]
+    captured_ncr = validate_capture(ncr_data) if disposition == "rework" and (ncr_data or {}).get("ncr_date") else None
     combined_notes = (notes or "").strip()
     approval_reason_text = (manager_reason or "").strip()
     if requires_manager_approval and approval_reason_text:
@@ -3299,6 +3308,25 @@ def complete_inspection_attempt(
                             (ncr_data or {}).get("immediate_containment"),
                         ),
                     )
+
+            if any_failures and captured_ncr is not None:
+                cursor.execute("""
+                    SELECT pu.production_number, pu.pipe_number, pu.operation_description,
+                           ia.inspector_name, ia.cnc_operator_name, sess.shift, sess.location_name
+                    FROM inspection_attempts ia JOIN pipe_units pu ON pu.id = ia.pipe_unit_id
+                    LEFT JOIN inspector_sessions sess ON sess.id = ia.session_id
+                    WHERE ia.id = %s AND pu.id = %s
+                """, (attempt_id, pipe_unit_id))
+                context_row = cursor.fetchone()
+                if not context_row:
+                    raise ValueError("The inspection context for this NCR could not be found.")
+                captured_ncr["context"] = dict(zip(
+                    ("work_order", "pipe_number", "connection", "inspector", "operator", "shift", "machine"), context_row
+                ))
+                cursor.execute("""
+                    UPDATE ncr_reports SET capture_data = %s, tier_code = %s
+                    WHERE attempt_id = %s AND pipe_unit_id = %s
+                """, (json.dumps(captured_ncr), captured_ncr["tier2_id"] or captured_ncr["tier1_id"], attempt_id, pipe_unit_id))
 
             if pipe_status in {"completed", "scrapped"}:
                 cursor.execute(

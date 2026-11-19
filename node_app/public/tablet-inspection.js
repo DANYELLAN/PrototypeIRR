@@ -1,6 +1,7 @@
 import {currentOwner,readProfile,updateProfile,eventId} from './inspection-store.js';
 import {inspectionPlan,nextPipe} from './inspection-plan.js';
 const $=id=>document.getElementById(id),escape=value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
+let draftTimer;
 let owner,profile,connected=false,syncing=false,working=false,preparing=false,renderedPipe,renderedScope;
 const message=text=>{$('feedback').textContent=text;};
 const request=(url,options={})=>fetch(url,{...options,cache:'no-store',signal:AbortSignal.timeout(15000)});
@@ -88,7 +89,15 @@ async function sync(){
    if(result.id!==event.id)throw new Error('Receipt did not match the saved pipe.');
    profile=await updateProfile(owner,current=>{current.events=current.events.filter(item=>item.id!==event.id);if(!current.receipts.some(item=>item.id===event.id))current.receipts.push(result);current.receipts=current.receipts.slice(-200);return current;});connected=true;
   }
- }catch{connected=false;}finally{syncing=false;render();}
+ }catch{connected=false;}finally{syncing=false;render();void publishDraft();}
+}
+async function publishDraft(){
+ if(!profile||!connected||profile.events.length||!Object.values(profile.values).some(Boolean))return;
+ const event={pipe_number:profile.pipe_number,scope:profile.scope,values:{...profile.values},recipe_hash:profile.context.recipe_hash,coverage_version:profile.context.coverage_version,client_sequence:Date.now()};
+ try{
+  const response=await request('/api/tablet-inspection/draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({owner,event})});
+  if(!response.ok){const result=await response.json();message(`Draft remains saved on this tablet: ${result.error}`);}
+ }catch{connected=false;status();}
 }
 async function draft(){
  const values={};for(const field of document.querySelectorAll('[data-sequence]'))values[field.dataset.sequence]=field.value;
@@ -106,6 +115,7 @@ async function draft(){
  });
  if(stale)throw new Error('Another tab loaded a different pipe. Your draft copy was kept in the recovery download; reload before continuing.');
  validation();
+ clearTimeout(draftTimer);draftTimer=setTimeout(()=>void publishDraft(),600);
 }
 for(const name of ['input','change'])$('measurements').addEventListener(name,()=>{void draft().catch(error=>message(`Measurement could not be saved: ${error.message}. Keep this screen open.`));});
 $('measurements').addEventListener('submit',async event=>{

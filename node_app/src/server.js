@@ -1,6 +1,11 @@
+import {registerTimeEntrySignIn, endTimeEntrySignIn} from "./timeEntrySignIn.js";
+import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { ncrCatalog, renderNcrFields, submittedNcr } from "./ncrForms.js";
+import { registerAdminInspections } from "./adminInspections.js";
+import { registerLunchWorkflow } from "./lunchWorkflow.js";
 import {enableTabletHttps} from "../../shared/appTransport.js";
 import {registerTabletInspection} from "./tabletInspection.js";
-import { registerLunchPopupRoutes } from "./lunchPopup.js";
 import { registerMoldApprovalRoutes } from "./moldApproval.js";
 import { registerBreakReportRoutes, renderAdminTabs } from "./breakReport.js";
 import { registerInspectionBreakRoutes, renderBreakControls } from "./inspectionBreaks.js";
@@ -18,12 +23,14 @@ import { callBridge } from "./pythonBridge.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const INSPECTION_RELEASE = Object.freeze(JSON.parse(readFileSync(path.resolve(__dirname,"../config/inspection-release.json"),"utf8")));
 const WORKORDER_SYNC_ENABLED = process.env.WORKORDER_SYNC_ENABLED !== "false";
 const WORKORDER_SYNC_INTERVAL_HOURS = Number(process.env.WORKORDER_SYNC_INTERVAL_HOURS || 6);
 const WORKORDER_SYNC_RUN_ON_START = process.env.WORKORDER_SYNC_RUN_ON_START !== "false";
 let workOrderSyncInProgress = false;
 
 const app = express();
+app.get("/api/app-version", (_req,res)=>res.set("Cache-Control","no-store").json(INSPECTION_RELEASE));
 const requireHistoryEditor = createHistoryEditGuard(callBridge);
 app.use(express.urlencoded({ extended: true, limit: "12mb" }));
 app.use(express.json({ limit: "12mb" }));
@@ -41,6 +48,8 @@ app.get('/inspection-sw.js',(req,res)=>{
   res.sendFile(path.resolve(__dirname,'..','public','inspection-sw.js'));
 });
 registerTabletInspection(app,{callBridge,connectionLabel:buildInspectionConnectionLabel,nextPipeNumber:incrementPipeNumber});
+registerTimeEntrySignIn(app,{callBridge,renderPage:(req,content)=>layout({title:"Choose Machinist",sidebar:"",content,theme:req.session.themeMode})});
+app.get("/public/ncr-options.json", (_req,res)=>res.json(ncrCatalog));
 app.use("/public", express.static(path.resolve(__dirname, "..", "public")));
 
 function escapeHtml(value) {
@@ -239,7 +248,7 @@ function renderScopeBadge(scope) {
   return `<span class="${className}">${escapeHtml(label)}</span>`;
 }
 
-function renderTable(rows) {
+function renderTable(rows, { renderCell } = {}) {
   if (!rows?.length) return "<p>No records found.</p>";
   const headers = Object.keys(rows[0]);
   return `
@@ -250,7 +259,7 @@ function renderTable(rows) {
           ${rows
             .map(
               (row) =>
-                `<tr>${headers.map((h) => `<td>${escapeHtml(formatCellValue(h, row[h]))}</td>`).join("")}</tr>`,
+                `<tr>${headers.map((h) => `<td>${renderCell?.(h, row) ?? escapeHtml(formatCellValue(h, row[h]))}</td>`).join("")}</tr>`,
             )
             .join("")}
         </tbody>
@@ -400,6 +409,7 @@ function renderWorkflowNav(activePath, req = null) {
     { href: "/workflow/mold-approval", label: "Mold Approval" },
     ...(canViewPipeReport(req?.session?.inspector) ? [{ href: "/workflow/lunch/history", label: "Lunch Inspections History" }] : []),
     { href: "/workflow/history", label: "Pipe History" },
+    ...(canAccessAdmin ? [{ href: "/admin/inspections", label: "Inspection Monitoring" }] : []),
     { href: "/workflow/ncr", label: "NCR Queue" },
     ...(canAccessAdmin ? [{ href: "/admin", label: "Admin Tools" }] : []),
   ];
@@ -452,19 +462,19 @@ function renderMeasurementMeta(element) {
   return meta.map((item) => `<span class="pill">${escapeHtml(item)}</span>`).join("");
 }
 
-function renderInspectionInputControl(element) {
+function renderInspectionInputControl(element, draft = "") {
   if (element.capture_type === "boolean") {
     return `<label class="measurement-checkbox-row inspection-table-checkbox">
       <input type="checkbox" class="measurement-input measurement-checkbox" data-capture-type="boolean"
-        data-full-target="element_full_${element.element_sequence}" />
+        data-full-target="element_full_${element.element_sequence}" ${draft === "Yes" ? "checked" : ""} />
       <span>Pass (unchecked = Fail)</span>
-      <input type="hidden" id="element_full_${element.element_sequence}" name="element_${element.element_sequence}" value="No" />
+      <input type="hidden" id="element_full_${element.element_sequence}" name="element_${element.element_sequence}" value="${draft === "Yes" ? "Yes" : "No"}" />
     </label>`;
   }
-  return `<input class="measurement-input inspection-table-input" data-capture-type="numeric" data-nominal="${escapeHtml(element.nominal ?? "")}" data-min="${escapeHtml(element.min ?? "")}" data-max="${escapeHtml(element.max ?? "")}" data-measurement-offset placeholder="Full value or +/- offset" value="" name="element_${element.element_sequence}" inputmode="decimal" autocomplete="off" required />`;
+  return `<input class="measurement-input inspection-table-input" data-capture-type="numeric" data-nominal="${escapeHtml(element.nominal ?? "")}" data-min="${escapeHtml(element.min ?? "")}" data-max="${escapeHtml(element.max ?? "")}" data-measurement-offset placeholder="Full value or +/- offset" value="${escapeHtml(draft)}" name="element_${element.element_sequence}" inputmode="decimal" autocomplete="off" required />`;
 }
 
-function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, selection, sessionRecord, inspectorName, historyColumns = [], canEditHistory = false, breakVersion = 0, breakState = null }) {
+function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, selection, sessionRecord, inspectorName, historyColumns = [], ncrDraft = {}, measurementDraft = {}, canEditHistory = false, breakVersion = 0, breakState = null, breakCsrf = "" }) {
   const plan = activeInspection?.inspection_plan || [];
   const planMap = new Map(plan.map((element) => [Number(element.element_sequence), element]));
   const rows = recipeDefinition?.elements?.length ? recipeDefinition.elements : plan;
@@ -489,7 +499,7 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
 
   return `
     <section class="card nested-card inspection-sheet-card">
-      ${renderBreakControls(breakState || {version:breakVersion,original_name:inspectorName,acting_name:inspectorName}, activeInspection)}
+      ${renderBreakControls(breakState || {version:breakVersion,original_name:inspectorName,acting_name:inspectorName}, activeInspection, breakCsrf)}
       <p>${
         activeInspection
           ? `Attempt #${escapeHtml(activeInspection.attempt_no)} | ${activeInspection.is_rework ? "Re-work" : "First inspection"} | ${renderScopeBadge(activeInspection.inspection_scope)}`
@@ -528,6 +538,7 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
             <div><strong>Connection Type:</strong> ${escapeHtml(buildInspectionConnectionLabel(selection))}</div>
           </div>
         </div>
+        <div class="actions"><a class="button secondary" href="/public/tablet-inspection.html">Open Offline Tablet Worksheet</a></div>
         <div class="table-wrap inspection-sheet-wrap">
           <table class="inspection-sheet-table">
             <thead>
@@ -583,7 +594,7 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
                     <td class="inspection-measure-cell">
                       ${
                         planned
-                          ? renderInspectionInputControl(planned)
+                          ? renderInspectionInputControl(planned, measurementDraft[`element_${row.element_sequence}`])
                           : activeInspection
                             ? `<span class="inspection-sheet-not-due">${escapeHtml(row.frequency === "rotating" ? "Rotating" : "")}</span>`
                             : hasPendingNextPipe
@@ -622,7 +633,7 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
                       <label for="failure-action-select"><strong>Fail Disposition</strong></label>
                       <select id="failure-action-select" name="failure_action">
                         <option value=""></option>
-                        <option value="rework">Re-work</option>
+                        <option value="rework" ${ncrDraft._rework ? "selected" : ""}>Re-work</option>
                         <option value="manager_approved">Pass with Approval</option>
                       </select>
                     </div>
@@ -649,9 +660,13 @@ function renderCurrentAttemptWorksheet({ activeInspection, recipeDefinition, sel
           </div>
         </div>
         <div id="failure-fields" class="failure-fields hidden">
-          <div class="field"><label>Tier Code</label><input name="tier_code" /></div>
-          <div class="field"><label>Nonconformance</label><textarea name="nonconformance"></textarea></div>
-          <div class="field"><label>Immediate Containment</label><textarea name="immediate_containment"></textarea></div>
+          ${renderNcrFields({
+            end_type: String(selection.endType || "").toUpperCase() === "BOX" ? "Box" : "Pin",
+            ...ncrDraft,
+          }, { capture: true, context: {
+            work_order: selection.productionNumber, pipe_number: currentPipeNumber, inspector: inspectorName,
+            shift: sessionRecord?.shift, operator: sessionRecord?.cnc_operator_name, submitted_by: inspectorName,
+          } })}
         </div>
         <div class="field">
           <label>Relief / Coverage Notes</label>
@@ -1024,9 +1039,14 @@ function layout({ title, sidebar, content, theme = "Light" }) {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escapeHtml(title)}</title>
-      <script type="module" src="/public/tablet-session-lock.js"></script>
-    <link rel="stylesheet" href="/public/styles.css" />
-    <script src="/public/measurement-values.js?v=1"></script>
+      <script type="module" src="/public/tablet-session-lock.js?v=20261117-signin"></script>
+    <link rel="stylesheet" href="/public/styles.css?v=20261117-signin" />
+    <script src="/public/measurement-values.js?v=2"></script>
+    <script src="/public/ncr.js" defer></script>
+    <script src="/public/loading.js" defer></script>
+    <script src="/public/lunch.js" defer></script>
+    <script src="/public/adminInspections.js" defer></script>
+    <script type="module" src="/public/measurementKeypad.js"></script>
     <script defer src="/public/live-inspection.js?v=2"></script>
     </head>
     <body data-theme="${theme === "Dark" ? "dark" : "light"}">
@@ -1041,7 +1061,13 @@ function layout({ title, sidebar, content, theme = "Light" }) {
           </div>
           <div class="topbar-product">Quality Operations</div>
         </header>
-        <div class="app-shell">
+        <dialog id="inspection-loading" class="inspection-loading" aria-label="Please wait" open>
+        <div class="inspection-loading-status" role="status" aria-live="polite">
+          <span class="inspection-loading-spinner" aria-hidden="true"></span>
+          <strong data-loading-label>Loading...</strong>
+        </div>
+      </dialog>
+      <div class="app-shell">
         <aside class="sidebar">
           <button type="button" class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">«</button>
           <div class="sidebar-inner">${sidebar}</div>
@@ -1180,6 +1206,12 @@ function layout({ title, sidebar, content, theme = "Light" }) {
             }
           };
           const initializeInspectionWorkspace = (root = document) => {
+          window.initializeLunchInspection?.(root);
+          window.initializeMeasurementKeypad?.(root);
+          if (root === document) {
+            const action = new URLSearchParams(location.search).get("tabletAction");
+            if(action) setTimeout(()=>document.getElementById(action === "lunch" ? "lunch-inspection-button" : "inspection-break-button")?.click(),200);
+          }
           const inspectionSheetWrap = root.querySelector(".inspection-sheet-wrap");
           if (inspectionSheetWrap) {
             requestAnimationFrame(() => {
@@ -1557,7 +1589,10 @@ function layout({ title, sidebar, content, theme = "Light" }) {
             }
 
             if (failureFields) {
-              failureFields.classList.toggle("hidden", !allFilled || !anyFail);
+              const captureNcr = allFilled && anyFail && failureActionSelect?.value === "rework";
+              failureFields.classList.toggle("hidden", !captureNcr);
+              const ncrFields = failureFields.querySelector("[data-ncr-fields]");
+              if (ncrFields) ncrFields.disabled = !captureNcr;
             }
 
             if (failureControls) {
@@ -1789,17 +1824,20 @@ registerBreakReportRoutes(app, callBridge, (req, content) => layout({
 }));
 
 registerInspectionBreakRoutes(app, callBridge);
-registerLunchPopupRoutes(app, callBridge, buildInspectionConnectionLabel);
+registerAdminInspections(app, callBridge, (req, content) => layout({ title: "Inspection Monitoring", sidebar: baseSidebar(req), content: `${renderWorkflowHeader(req)}${content}`, theme: req.session.themeMode }), {registerDraft:false});
 
 registerMoldApprovalRoutes(app, callBridge, (req, content) => layout({
   title: "Mold Approval", sidebar: baseSidebar(req), theme: req.session.themeMode,
   content: `${renderWorkflowHeader(req)}${renderWorkflowNav("/workflow/mold-approval", req)}${content}`,
 }));
 
+app.get('/workflow/lunch', (req,res)=>res.redirect('/workflow/inspection?tabletAction=lunch'));
 registerLunchInspectionRoutes(app, callBridge, (req, content) => layout({
   title: "Lunch Inspections", sidebar: baseSidebar(req), theme: req.session.themeMode,
   content: `${renderWorkflowHeader(req)}${renderWorkflowNav("/workflow/lunch", req)}${content}`,
 }));
+registerLunchWorkflow(app, callBridge, buildInspectionConnectionLabel);
+
 
 registerPipeReportRoutes(app, callBridge, (req, content) => layout({
   title: "Live Pipe Report", sidebar: baseSidebar(req), theme: req.session.themeMode,
@@ -1844,13 +1882,14 @@ async function publishAndCloseSession(sessionRecord) {
 
 app.post("/logout", async (req, res, next) => {
   try {
+    const signInUrl = await endTimeEntrySignIn(req);
     const { publishedCount } = await publishAndCloseSession(req.session.sessionRecord);
     const message =
       publishedCount > 0
         ? `Logout complete. ${publishedCount} pipe record${publishedCount === 1 ? "" : "s"} published to Pipe History.`
         : "Logout complete. No completed or re-work pipe records were ready to publish to Pipe History.";
     req.session.destroy(() =>
-      res.redirect(`/?shiftEnded=1&notice=${encodeURIComponent(message)}&kind=success`),
+      res.redirect(signInUrl || `/?shiftEnded=1&notice=${encodeURIComponent(message)}&kind=success`),
     );
   } catch (error) {
     next(error);
@@ -1860,13 +1899,14 @@ app.post("/logout", async (req, res, next) => {
 app.post("/workflow/end-shift", async (req, res, next) => {
   try {
     if (!req.session.inspector || !req.session.sessionRecord?.id) return res.redirect("/");
+    const signInUrl = await endTimeEntrySignIn(req);
     const { publishedCount } = await publishAndCloseSession(req.session.sessionRecord);
     const message =
       publishedCount > 0
         ? `End shift complete. ${publishedCount} pipe record${publishedCount === 1 ? "" : "s"} published to Pipe History.`
         : "End shift complete. No completed or re-work pipe records were ready to publish to Pipe History.";
     req.session.destroy(() =>
-      res.redirect(`/?shiftEnded=1&notice=${encodeURIComponent(message)}&kind=success`),
+      res.redirect(signInUrl || `/?shiftEnded=1&notice=${encodeURIComponent(message)}&kind=success`),
     );
   } catch (error) {
     next(error);
@@ -2109,6 +2149,7 @@ app.post("/workflow/refresh-workorders", async (req, res, next) => {
 app.get("/workflow/inspection", async (req, res, next) => {
   try {
     if (!req.session.inspector || !req.session.sessionRecord) return res.redirect("/");
+    req.session.breakCsrf ||= randomUUID();
     const inspector = req.session.inspector;
     const previousSelection = req.session.selection || {};
     const workOrders = await callBridge("get_open_work_orders", { branch: inspector.branch });
@@ -2122,7 +2163,7 @@ app.get("/workflow/inspection", async (req, res, next) => {
     const lookupDescription = buildInspectionConnectionLabel(selection);
     const hasWorkOrderDetails = [selection.sizeLabel, selection.weightLabel, selection.connectionLabel, selection.endType].every(Boolean);
     const recipeCandidates = hasWorkOrderDetails
-      ? await callBridge("find_recipe_candidates", { operation_description: resolved.usesManualDetails ? lookupDescription : selection.operationDescription, branch: inspector.branch })
+      ? await callBridge("find_recipe_candidates", { operation_description: resolved.usesManualDetails ? lookupDescription + (selection.operationDescription.match(/Print\s*#?\s*(.+)$/i)?.[1] ? ' Print # ' + selection.operationDescription.match(/Print\s*#?\s*(.+)$/i)[1] : '') : selection.operationDescription, branch: inspector.branch })
       : [];
     selection.recipeName = chooseInspectionRecipe(recipeCandidates, selection.recipeName);
     req.session.selection = selection;
@@ -2163,11 +2204,12 @@ app.get("/workflow/inspection", async (req, res, next) => {
       return true;
     });
     const historyColumns = [];
+    const historyDetails = historySourceRows.length ? await callBridge("get_pipe_history_details", {pipe_unit_ids:historySourceRows.map(row=>row.id)}) : {attempts_by_pipe:{},measurements_by_attempt:{}};
     for (const pipeRow of historySourceRows) {
-      const attempts = await callBridge("get_pipe_attempt_history", { pipe_unit_id: pipeRow.id });
+      const attempts = historyDetails.attempts_by_pipe[String(pipeRow.id)] || [];
       const latestAttempt = attempts[0];
       if (!latestAttempt) continue;
-      const measurements = await callBridge("get_attempt_measurements", { attempt_id: latestAttempt.id });
+      const measurements = historyDetails.measurements_by_attempt[String(latestAttempt.id)] || [];
       historyColumns.push({
         pipeUnitId: pipeRow.id,
         pipe_number: pipeRow.pipe_number,
@@ -2183,7 +2225,7 @@ app.get("/workflow/inspection", async (req, res, next) => {
       ${renderWorkflowHeader(req)}
       ${renderNotice(req.session.notice)}
       ${renderWorkflowNav("/workflow/inspection", req)}
-      ${!showWorksheet ? renderBreakControls(req.breakState || {version:0,original_name:inspector.name,acting_name:inspector.name}, activeInspection) : ""}
+      ${!showWorksheet ? renderBreakControls(req.breakState || {version:0,original_name:inspector.name,acting_name:inspector.name}, activeInspection, req.session.breakCsrf) : ""}
       <details class="card inspection-entry-panel"${showWorksheet ? "" : " open"}>
         <summary class="section-title">Inspection Entry</summary>
         ${selection.recipeName ? `<a class="button secondary" href="/public/tablet-inspection.html">Open Tablet Worksheet / Prepare Offline</a>` : ""}
@@ -2193,16 +2235,16 @@ app.get("/workflow/inspection", async (req, res, next) => {
           <div class="field"><label>Production Number / WO</label><select name="productionNumber" onchange="this.form.operationDescription.value=''; this.form.recipeName.value=''; this.form.submit();">${renderOptions(productionNumbers, selection.productionNumber, (item) => item, (item) => item)}</select></div>
           <div class="field"><label>Description</label><select name="operationDescription" required onchange="this.form.recipeName.value=''; this.form.submit();"><option value="">Select the WO description</option>${renderOptions(resolved.descriptions, selection.operationDescription, (item) => item.operation_description, (item) => `${item.operation_id ? item.operation_id + ' - ' : ''}${item.operation_description}`)}</select></div>
           <div class="inspection-entry-inline-row">
-            <div class="field"><label>Size</label><input name="sizeLabel" value="${escapeHtml(selection.sizeLabel)}" ${resolved.missingFields.includes("sizeLabel") && selection.operationDescription ? 'placeholder="Enter missing value"' : "readonly"} /></div>
-            <div class="field"><label>Weight</label><input name="weightLabel" value="${escapeHtml(selection.weightLabel)}" ${resolved.missingFields.includes("weightLabel") && selection.operationDescription ? 'placeholder="Enter missing value"' : "readonly"} /></div>
-            <div class="field"><label>Connection</label>${resolved.missingFields.includes("connectionLabel") && selection.operationDescription ? `<select name="connectionLabel"><option value="">Select Connection</option>${renderOptions(INSPECTION_CONNECTION_TYPES, selection.connectionLabel, (item) => item, (item) => item)}</select>` : `<input name="connectionLabel" value="${escapeHtml(selection.connectionLabel)}" readonly />`}</div>
-            <div class="field"><label>Box / Pin</label>${resolved.missingFields.includes("endType") && selection.operationDescription ? `<select name="endType"><option value="">Select Box / Pin</option>${renderOptions(["BOX","PIN"], selection.endType, (item) => item, (item) => item)}</select>` : `<input name="endType" value="${escapeHtml(selection.endType)}" readonly />`}</div>
+            <div class="field"><label>Size</label><input name="sizeLabel" value="${escapeHtml(selection.sizeLabel)}" ${selection.operationDescription ? "" : "readonly"} /></div>
+            <div class="field"><label>Weight</label><input name="weightLabel" value="${escapeHtml(selection.weightLabel)}" ${selection.operationDescription ? "" : "readonly"} /></div>
+            <div class="field"><label>Connection</label>${selection.operationDescription ? `<select name="connectionLabel"><option value="">Select Connection</option>${renderOptions(INSPECTION_CONNECTION_TYPES, selection.connectionLabel, (item) => item, (item) => item)}</select>` : `<input name="connectionLabel" value="${escapeHtml(selection.connectionLabel)}" readonly />`}</div>
+            <div class="field"><label>Box / Pin</label>${selection.operationDescription ? `<select name="endType"><option value="">Select Box / Pin</option>${renderOptions(["BOX","PIN"], selection.endType, (item) => item, (item) => item)}</select>` : `<input name="endType" value="${escapeHtml(selection.endType)}" readonly />`}</div>
           </div>
           ${!selection.operationDescription ? `<p>Select a description to fill the inspection details from the work order.</p>` : !hasWorkOrderDetails ? `<p>Enter the missing details, then select Find Matching IRR.</p>` : !recipeCandidates.length ? `<p>No matching Digital IRR was found for this description. Have Quality check the recipe setup before starting.</p>` : !selection.recipeName ? `<p>More than one Digital IRR matches these specifications. Select the correct Digital IRR below.</p>` : ""}
           <div class="field"><label>Digital IRR</label><select name="recipeName" required onchange="this.form.submit();"><option value="">${recipeCandidates.length ? 'Select matching Digital IRR' : 'No matching Digital IRR'}</option>${renderOptions(recipeCandidates, selection.recipeName, (item) => item.recipe_name, (item) => item.display_name || item.recipe_name)}</select></div>
           <div class="field"><label>Inspection Scope</label><select name="inspectionScope"><option value="standard" ${selection.inspectionScope === "full" ? "" : "selected"}>Standard Inspection</option><option value="full" ${selection.inspectionScope === "full" ? "selected" : ""}>Full Inspection</option></select></div>
           <div class="actions">
-            ${selection.operationDescription && resolved.missingFields.length ? `<button class="button" type="submit" formnovalidate>Find Matching IRR</button>` : ""}
+            ${selection.operationDescription ? `<button class="button" type="submit" formnovalidate>Find Matching IRR</button>` : ""}
             <button class="button workflow-action-button" type="submit" formaction="/workflow/start" formmethod="post" ${selection.recipeName && hasWorkOrderDetails ? "" : "disabled"}>Start Inspection</button>
           </div>
         </form>
@@ -2257,6 +2299,9 @@ app.get("/workflow/inspection", async (req, res, next) => {
           breakVersion: req.breakState?.version || 0,
           breakState: req.breakState,
           historyColumns,
+          breakCsrf: req.session.breakCsrf,
+          ncrDraft: req.session.ncrDraft?.attemptId === activeInspection?.attempt_id ? req.session.ncrDraft.values : {},
+          measurementDraft: req.session.ncrDraft?.attemptId === activeInspection?.attempt_id ? req.session.ncrDraft.measurements : {},
           canEditHistory: canEditInspectionHistory(req.session.inspector),
         }) : ""}
         ${history.length ? `<h3 class="section-title">Pipe History</h3>${renderTable(history)}` : ""}
@@ -2886,10 +2931,22 @@ app.get("/workflow/ncr", async (req, res, next) => {
     if (!hasInspectionSession && !isAdmin) return res.redirect("/");
     req.session.canAccessAdmin = Boolean(isAdmin);
     const ncrBranch = isAdmin ? null : inspector.branch;
-    const ncrRows = await callBridge("get_ncr_reports", {
+    const branchNcrRows = await callBridge("get_ncr_reports", {
       branch: ncrBranch,
       status: req.query.ncrStatus || null,
     });
+    const selectedWo = String(
+      Object.hasOwn(req.query, "ncrWo") ? req.query.ncrWo : req.session.selection?.productionNumber || ""
+    ).trim();
+    const workOrderOptions = [...new Set([
+      ...branchNcrRows.map((item) => String(item.production_number || "").trim()),
+      selectedWo,
+    ].filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const selectedNcrRows = selectedWo
+      ? branchNcrRows.filter((item) => String(item.production_number || "").trim() === selectedWo)
+      : branchNcrRows;
+    const ncrRows = selectedNcrRows.filter((row) => !req.query.reviewStatus || row.review_status === req.query.reviewStatus);
+    const canReview = Boolean(isAdmin);
     const content = `
       ${renderWorkflowHeader(req)}
       ${renderNotice(req.session.notice)}
@@ -2900,17 +2957,132 @@ app.get("/workflow/ncr", async (req, res, next) => {
       </section>
       <section class="table-card">
         <form method="get" action="/workflow/ncr" class="form-grid">
+          <div class="field"><label>Production Number / WO</label><select name="ncrWo" onchange="this.form.submit()"><option value="">All WOs</option>${renderOptions(workOrderOptions, selectedWo, (item) => item, (item) => item)}</select></div>
           <div class="field"><label>NCR Status</label><select name="ncrStatus"><option value=""></option><option value="open" ${req.query.ncrStatus === "open" ? "selected" : ""}>open</option><option value="closed" ${req.query.ncrStatus === "closed" ? "selected" : ""}>closed</option></select></div>
           <div class="actions"><button class="button" type="submit">Filter NCRs</button></div>
+          <div class="field"><label>Review Status</label><select name="reviewStatus"><option value="">All</option><option value="pending_review" ${req.query.reviewStatus === "pending_review" ? "selected" : ""}>Pending Review</option><option value="reviewed" ${req.query.reviewStatus === "reviewed" ? "selected" : ""}>Reviewed</option><option value="sent" ${req.query.reviewStatus === "sent" ? "selected" : ""}>Sent to SharePoint</option></select></div>
         </form>
-        ${renderTable(ncrRows)}
       </section>
+      ${renderNcrWorkorders(ncrRows, { canReview })}
     `;
     req.session.notice = null;
     res.send(layout({ title: "NCR Queue", sidebar: baseSidebar(req), content, theme: req.session.themeMode }));
   } catch (error) {
     next(error);
   }
+});
+
+async function requireNcrManager(req, res, sending = false) {
+  if (!req.session.inspector?.adp_number) { res.redirect("/"); return false; }
+  const employee = await callBridge("get_employee_by_adp", { adp_number: req.session.inspector.adp_number });
+  if (!(await callBridge(sending ? "is_manager_or_supervisor" : "is_admin_user", { employee }))) {
+    res.status(403).send(sending ? "Only managers and supervisors can send NCRs." : "Only admins can review NCRs.");
+    return false;
+  }
+  req.ncrReviewer = employee;
+  return true;
+}
+
+app.get("/workflow/ncr/:ncrId/review", async (req, res, next) => {
+  try {
+    if (!(await requireNcrManager(req, res))) return;
+    const canSend = await callBridge("is_manager_or_supervisor", { employee: req.ncrReviewer });
+    const row = await callBridge("get_ncr_detail", { ncr_id: req.params.ncrId });
+    const saved = row.capture_data || {};
+    const draft = req.session.ncrReviewDraft?.id === String(row.id) ? req.session.ncrReviewDraft : null;
+    const data = draft?.values || {
+      ...saved, ncr_date: saved.ncr_date || String(row.opened_at).slice(0, 10),
+      nonconformance: saved.nonconformance || row.nonconformance || "",
+      immediate_containment: saved.immediate_containment || row.immediate_containment || "",
+    };
+    req.session.ncrCsrf ||= randomUUID();
+    const content = `${renderWorkflowHeader(req)}${renderNotice(req.session.notice)}${renderWorkflowNav("/workflow/ncr", req)}
+      <section class="table-card">
+        <h2 class="section-title">NCR ${escapeHtml(row.id)} Review</h2>
+        <p><strong>WO:</strong> ${escapeHtml(row.production_number)} &middot; <strong>Pipe:</strong> ${escapeHtml(row.pipe_number)} &middot; <strong>Status:</strong> ${escapeHtml(row.status)} &middot; <strong>Review:</strong> ${escapeHtml(row.review_status)}</p>
+        <p><strong>Inspector:</strong> ${escapeHtml(row.inspector_name)} &middot; <strong>Operator:</strong> ${escapeHtml(row.cnc_operator_name)} &middot; <strong>Shift:</strong> ${escapeHtml(row.shift)} &middot; <strong>Machine:</strong> ${escapeHtml(row.location_name)}</p>
+        <a href="/workflow/history?historyPipeUnit=${encodeURIComponent(row.pipe_unit_id)}#pipe-history-${encodeURIComponent(row.pipe_unit_id)}">View Pipe History</a>
+      </section>
+      <section class="table-card">
+        <form method="post" action="/workflow/ncr/${encodeURIComponent(row.id)}/review" data-ncr-review-form>
+          <fieldset ${["pending_review", "reviewed"].includes(row.review_status) ? "" : "disabled"}>
+          <input type="hidden" name="csrf" value="${escapeHtml(req.session.ncrCsrf)}" />
+          <input type="hidden" name="version" value="${escapeHtml(row.review_version)}" />
+          ${renderNcrFields(data, {number: row.sharepoint_ncr_number, status: row.status, context: {
+            work_order: row.production_number, pipe_number: row.pipe_number,
+            inspector: row.inspector_name, operator: row.cnc_operator_name, shift: row.shift,
+            submitted_by: req.session.inspector.name,
+          } })}
+          <div class="field"><label for="ncr-disposition">SharePoint Disposition</label><select id="ncr-disposition" name="ncr_sharepoint_disposition">${renderOptions(ncrCatalog.choices.Disposition.choices, data.sharepoint_disposition || "Rework", (item) => item, (item) => item)}</select></div>
+          <div class="field"><label for="review-notes">Review Notes</label><textarea id="review-notes" name="review_notes">${escapeHtml(draft?.notes ?? row.review_notes ?? "")}</textarea></div>
+          <div class="actions"><button class="button secondary" name="action" value="save">Save Changes</button><button class="button" name="action" value="approve">Verify NCR</button><a class="button secondary" href="/workflow/ncr">Back to Queue</a></div>
+          </fieldset>
+        </form>
+        ${(saved.attachments || []).map((file, index) => `<p><a style="text-decoration:underline" href="/workflow/ncr/${encodeURIComponent(row.id)}/attachments/${index}">${escapeHtml(file.name)}</a></p>`).join("")}
+      </section>
+      <section class="table-card"><h3>SharePoint Submission</h3>
+        ${row.sharepoint_ncr_number && row.review_status === "sent"
+          ? `<p><a style="text-decoration:underline" href="https://benoitinc.sharepoint.com/sites/QMS1061/Lists/Ennis%20NCR/DispForm.aspx?ID=${encodeURIComponent(row.sharepoint_item_id)}">${escapeHtml(row.sharepoint_ncr_number)}</a></p>`
+          : `<p>${row.review_status === "reviewed" ? "Verified and ready for manager submission." : ["submitting", "submission_unknown", "attachments_pending"].includes(row.review_status) ? "The last submission needs reconciliation before any further send." : "Not submitted. Verify the NCR before sending."}</p>
+             ${row.sharepoint_ncr_number ? `<p>SharePoint NCR: ${escapeHtml(row.sharepoint_ncr_number)}</p>` : ""}
+             ${canSend ? `<form method="post" action="/workflow/ncr/${encodeURIComponent(row.id)}/send" onsubmit="return confirm('Send this verified NCR to SharePoint?');">
+               <input type="hidden" name="csrf" value="${escapeHtml(req.session.ncrCsrf)}" />
+               <input type="hidden" name="version" value="${escapeHtml(row.review_version)}" />
+               <button class="button" data-ncr-send ${["reviewed", "submitting", "submission_unknown", "attachments_pending"].includes(row.review_status) ? "" : "disabled"}>${row.review_status === "attachments_pending" ? "Retry Attachments" : ["submitting", "submission_unknown"].includes(row.review_status) ? "Check Submission" : "Send to SharePoint"}</button>
+             </form>` : `<p>SharePoint submission requires a manager or supervisor.</p>`}`}
+        ${row.submission_error ? `<p role="alert">${escapeHtml(row.submission_error)}</p>` : ""}
+        <p role="status" data-ncr-unsaved></p>
+      </section>`;
+    req.session.notice = null;
+    res.send(layout({title: "NCR Review", sidebar: baseSidebar(req), content, theme: req.session.themeMode}));
+  } catch (error) { next(error); }
+});
+
+app.post("/workflow/ncr/:ncrId/review", async (req, res, next) => {
+  try {
+    if (!(await requireNcrManager(req, res))) return;
+    if (!req.session.ncrCsrf || req.body.csrf !== req.session.ncrCsrf) return res.status(403).send("Reload the review form before saving.");
+    try {
+      const values = submittedNcr(req.body);
+      req.session.ncrReviewDraft = {id: req.params.ncrId, values, notes: req.body.review_notes};
+      await callBridge("save_ncr_review", { ncr_id: req.params.ncrId, values,
+        actor_adp: req.session.inspector.adp_number, expected_version: req.body.version,
+        approve: req.body.action === "approve", review_notes: String(req.body.review_notes || "").trim() });
+      req.session.ncrReviewDraft = null;
+      req.session.notice = {kind: "success", message: req.body.action === "approve" ? "NCR verified. It remains local and has not been sent to SharePoint." : "NCR changes saved. Admin verification is required before sending."};
+    } catch (error) {
+      req.session.notice = {kind: "warning", message: error.message};
+    }
+    res.redirect(`/workflow/ncr/${encodeURIComponent(req.params.ncrId)}/review`);
+  } catch (error) { next(error); }
+});
+
+app.post("/workflow/ncr/:ncrId/send", async (req, res, next) => {
+  try {
+    if (!(await requireNcrManager(req, res, true))) return;
+    if (!req.session.ncrCsrf || req.body.csrf !== req.session.ncrCsrf) return res.status(403).send("Reload the review form before sending.");
+    try {
+      const result = await callBridge("submit_ncr", {ncr_id: req.params.ncrId, actor_adp: req.session.inspector.adp_number, expected_version: req.body.version});
+      req.session.notice = {kind: "success", message: `SharePoint submission confirmed: ${result.number}.`};
+    } catch (error) {
+      req.session.notice = {kind: "warning", message: error.message};
+    }
+    res.redirect(`/workflow/ncr/${encodeURIComponent(req.params.ncrId)}/review`);
+  } catch (error) { next(error); }
+});
+
+app.get("/workflow/ncr/:ncrId/attachments/:index", async (req, res, next) => {
+  try {
+    if (!(await requireNcrManager(req, res))) return;
+    const row = await callBridge("get_ncr_detail", {ncr_id: req.params.ncrId});
+    if (!/^\d+$/.test(req.params.index)) return res.status(404).send("Attachment not found.");
+    const file = row.capture_data?.attachments?.[Number(req.params.index)];
+    if (!file) return res.status(404).send("Attachment not found.");
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`);
+    res.send(Buffer.from(file.content, "base64"));
+  } catch (error) { next(error); }
 });
 
 app.post("/workflow/start", async (req, res, next) => {
@@ -2946,7 +3118,7 @@ app.post("/workflow/start", async (req, res, next) => {
       return res.redirect("/workflow/inspection");
     }
     const recipeCandidates = await callBridge("find_recipe_candidates", {
-      operation_description: resolved.usesManualDetails ? lookupDescription : selection.operationDescription,
+      operation_description: resolved.usesManualDetails ? lookupDescription + (selection.operationDescription.match(/Print\s*#?\s*(.+)$/i)?.[1] ? ' Print # ' + selection.operationDescription.match(/Print\s*#?\s*(.+)$/i)[1] : '') : selection.operationDescription,
       branch: inspector.branch,
     });
     const recipeName = chooseInspectionRecipe(recipeCandidates, selection.recipeName);
@@ -2993,7 +3165,7 @@ app.post("/workflow/start", async (req, res, next) => {
           ? `Started re-work inspection for pipe ${selection.pipeNumber}.`
           : `Inspection started for pipe ${selection.pipeNumber}.`,
     };
-    res.redirect("/public/tablet-inspection.html");
+    res.redirect("/workflow/inspection");
   } catch (error) {
     next(error);
   }
@@ -3094,6 +3266,17 @@ app.post("/workflow/complete", async (req, res, next) => {
       }
       disposition = failureAction;
     }
+    let capturedNcr = null;
+    if (disposition === "rework") {
+      try {
+        const values = submittedNcr(req.body);
+        req.session.ncrDraft = { attemptId: active.attempt_id, values: { ...values, _rework: true }, measurements: Object.fromEntries(Object.entries(req.body).filter(([key]) => key.startsWith("element_"))) };
+        capturedNcr = await callBridge("validate_ncr_capture", { values });
+      } catch (error) {
+        req.session.notice = { kind: "warning", popup: true, message: error.message || "Complete the NCR details before saving rework." };
+        return res.redirect("/workflow/inspection");
+      }
+    }
     const attemptNotes = String(req.body.notes || "").trim();
     const reliefNote = String(req.body.relief_note || "").trim();
     const combinedNotes = [reliefNote ? `Relief / Coverage Notes: ${reliefNote}` : "", attemptNotes]
@@ -3109,14 +3292,11 @@ app.post("/workflow/complete", async (req, res, next) => {
         manager_name: req.body.manager_name || "",
         manager_reason: req.body.manager_reason || "",
         coverage_version: req.breakState?.version,
-        ncr_data: {
-          tier_code: req.body.tier_code || "",
-          nonconformance: req.body.nonconformance || "",
-          immediate_containment: req.body.immediate_containment || "",
-        },
+        ncr_data: capturedNcr || {},
       },
     });
     req.session.activeInspection = null;
+    req.session.ncrDraft = null;
     req.session.showInspectionSheet = true;
     req.session.notice = {
       kind: result.pipe_status === "rework" ? "warning" : "success",
@@ -3188,6 +3368,7 @@ app.get("/admin", async (req, res, next) => {
         <div class="actions">
           <a class="button" href="/workflow/history?historyView=all">View All Pipe History</a>
           <a class="button secondary" href="/workflow/ncr">View All NCRs</a>
+          <a class="button secondary" href="/admin/inspections">Inspection Monitoring</a>
         </div>
       </section>
       ${

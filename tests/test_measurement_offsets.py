@@ -12,10 +12,33 @@ class MeasurementOffsetTests(unittest.TestCase):
                 self.assertEqual(result['measurements'][0]['measured_value'],actual)
                 self.assertFalse(result['has_failures'])
     def test_offset_outside_tolerance_and_invalid_inputs_fail(self):
-        for entered in ['-.004','+.006','+','-','NaN','Infinity','abc']:
+        for entered in ['-.004','.006','+.006','+','-','.','NaN','Infinity','abc']:
             with self.subTest(entered=entered):self.assertTrue(evaluate_measurements([self.row(entered)])['has_failures'])
+    def test_unsigned_zero_means_nominal_including_lunch(self):
+        for entered in ['0', '.000', '0.000', ' 0 ', '+0', '-0']:
+            with self.subTest(entered=entered):
+                result=evaluate_measurements([self.row(entered)])
+                self.assertEqual(result['measurements'][0]['measured_value'],2.881)
+                self.assertFalse(result['has_failures'])
+                self.assertEqual(evaluate_measurements(result['measurements'])['measurements'][0]['measured_value'],2.881)
+                lunch=evaluate_full([self.row('')],{'1':entered},require_explicit_visual=True)
+                self.assertEqual(lunch['measurements'][0]['measured_value'],2.881)
+                self.assertFalse(lunch['has_failures'])
+    def test_zero_without_nominal_and_normalized_numeric_zero_remain_actual_zero(self):
+        for nominal in [None, '']:
+            self.assertEqual(evaluate_measurements([self.row('.000',nominal)])['measurements'][0]['measured_value'],0)
+        self.assertEqual(evaluate_measurements([self.row(0)])['measurements'][0]['measured_value'],0)
+        first=evaluate_measurements([self.row('-2.881')])['measurements']
+        self.assertEqual(evaluate_measurements(first)['measurements'][0]['measured_value'],0)
+    def test_range_offsets_require_an_explicit_sign(self):
+        for entered, actual, passes in [('+.002',2.883,True),('-.002',2.879,True),('+.005',2.886,True),('+.006',2.887,False),('.002',.002,False),('.005',.005,False)]:
+            with self.subTest(entered=entered):
+                row={**self.row(entered),'min':2.876,'max':2.886}
+                result=evaluate_measurements([row])
+                self.assertEqual(result['measurements'][0]['measured_value'],actual)
+                self.assertEqual(not result['has_failures'],passes)
     def test_legacy_float_limits_are_inclusive_without_accepting_outside_values(self):
-        for entered, passes in [('+.005',True),('2.886',True),('-.003',True),('2.878',True),('+.005001',False),('-.003001',False),('.005',False)]:
+        for entered, passes in [('+.005',True),('2.886',True),('-.003',True),('2.878',True),('+.005001',False),('-.003001',False),('.005',False),('.005001',False)]:
             with self.subTest(entered=entered):
                 row={**self.row(entered),'min':2.8779999999999997,'max':2.8859999999999997}
                 result=evaluate_measurements([row])
@@ -32,12 +55,15 @@ class MeasurementOffsetTests(unittest.TestCase):
                 row=_prepare_local_recipe_payload(payload)['processed_rows'][0]
                 self.assertEqual((row['min_value'],row['max_value']),expected)
     def test_normalized_actual_values_are_never_offset_twice(self):
+        first=evaluate_measurements([self.row('+.002',.1)])['measurements']
+        self.assertEqual(evaluate_measurements(first)['measurements'][0]['measured_value'],.102)
         first=evaluate_measurements([self.row('-.002')])['measurements']
         self.assertEqual(evaluate_measurements(first)['measurements'][0]['measured_value'],2.879)
         first=evaluate_measurements([{**self.row('-2',1),'min':-2,'max':2}])['measurements']
         self.assertEqual(evaluate_measurements(first)['measurements'][0]['measured_value'],-1)
     def test_signed_values_without_a_nominal_remain_full_values(self):
         self.assertEqual(evaluate_measurements([self.row('-.002',None)])['measurements'][0]['measured_value'],-.002)
+        self.assertEqual(evaluate_measurements([self.row('.002',None)])['measurements'][0]['measured_value'],.002)
     def test_lunch_uses_the_same_nominal_calculation(self):
         plan=[self.row('')]
         result=evaluate_full(plan,{'1':'-.002'},require_explicit_visual=True)

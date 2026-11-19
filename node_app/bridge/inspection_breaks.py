@@ -57,11 +57,22 @@ def start_inspection_break(session_id, mode, relief_adp=None, expected_version=0
     try:
         with connection.cursor() as cursor:
             context = _context(cursor, session_id, lock=True)
-            validate_context(context, expected_version)
-            if context["break_id"]:
+            if int(expected_version) != context['version']:
+                raise ValueError("Break coverage changed. Review the current inspector before continuing.")
+            arriving = context['mode'] == 'without_relief' and mode == 'with_relief'
+            if context['break_id'] and not arriving:
                 raise ValueError("A break is already active. Click End Break first.")
+            if employee:
+                cursor.execute("SELECT branch FROM inspector_sessions WHERE id=%s", (int(session_id),))
+                branch = cursor.fetchone()[0]
+                if employee.get('branch') != branch:
+                    raise ValueError("The relief person must belong to the same branch.")
             if employee and str(employee["adp_number"]) == str(context["original_adp"]):
                 raise ValueError("The relief inspector must have a different ADP number from the original inspector.")
+            if arriving:
+                # End the unattended phase and open a new relief phase. A new ID
+                # advances the coverage version and rejects stale tablet submissions.
+                cursor.execute("UPDATE inspection_breaks SET ended_at=NOW() WHERE id=%s AND ended_at IS NULL", (context['break_id'],))
             cursor.execute("INSERT INTO inspection_breaks(session_id,mode,relief_adp,relief_name,relief_item_id) VALUES (%s,%s,%s,%s,%s)",
                            (int(session_id), mode, str(employee["adp_number"]) if employee else None, employee["name"] if employee else None, db._coerce_bigint(employee.get("item_id")) if employee else None))
             result = _context(cursor, session_id)

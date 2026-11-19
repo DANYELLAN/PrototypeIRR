@@ -63,8 +63,6 @@ def starting_pipe(entry):
 def save_starting_pipe(session, entry_id, number):
     entry = backend._get_startstop_by_id(entry_id)
     backend._require_break_owner(entry, session['employee']['emp_id'])
-    if str(entry.get('machine_no')) != str(session['machine_no']):
-        raise ValueError('This entry belongs to another station.')
     if entry.get('status') not in {'In Progress', 'Paused'} or completion_mode(entry['details_type']) != 'pipes':
         raise ValueError('Starting pipes apply only to active Inspection, Sandblast, Drift or Stenciling entries.')
     number = pipe_number(number)

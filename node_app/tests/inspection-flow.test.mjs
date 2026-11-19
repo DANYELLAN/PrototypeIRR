@@ -1,3 +1,4 @@
+import {renderNcrFields, submittedNcr} from "../src/ncrForms.js";
 import {renderBreakControls} from "../src/inspectionBreaks.js";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -12,7 +13,7 @@ function functionSource(name) {
   const end = source.indexOf("\nfunction ", start + 1);
   return source.slice(start, end);
 }
-const context = vm.createContext({reliefColumnClass,reliefColumnLabel,renderBreakControls});
+const context = vm.createContext({renderNcrFields,reliefColumnClass,reliefColumnLabel,renderBreakControls});
 vm.runInContext(["escapeHtml", "renderPopupNoticeModal", "incrementPipeNumber", "buildInspectionConnectionLabel", "renderScopeBadge", "formatDateValue", "formatDigitalIrrName", "formatPipeStatusResult", "renderInspectionInputControl", "renderCurrentAttemptWorksheet", "layout"].map(functionSource).join("\n"), context);
 
 const numeric = { element_sequence: 1, element_description: "Diameter", capture_type: "numeric", nominal: 1.234, min: 1.23, max: 1.24, dwg_dim: "1.234", frequency: "every_pipe" };
@@ -54,7 +55,7 @@ function completeHandler(bridge) {
   let handler;
   const route = source.slice(source.indexOf('app.post("/workflow/complete",'), source.indexOf('\napp.get("/admin",', source.indexOf('app.post("/workflow/complete",')));
   vm.runInNewContext(route, { app: { post: (_, fn) => { handler = fn; } }, callBridge: bridge,
-    submittedMeasurementValue, loadNextInspection, incrementPipeNumber: context.incrementPipeNumber,
+    submittedNcr, submittedMeasurementValue, loadNextInspection, incrementPipeNumber: context.incrementPipeNumber,
     buildInspectionConnectionLabel: context.buildInspectionConnectionLabel });
   return handler;
 }
@@ -65,6 +66,7 @@ for (const disposition of ["pass", "rework", "manager_approved"]) {
     const calls = [];
     const handler = completeHandler(async (action, payload) => {
       calls.push({ action, payload });
+      if (action === "validate_ncr_capture") return payload.values;
       if (action === "evaluate_measurements") return { has_failures: disposition !== "pass", measurements: payload.measurements };
       if (action === "complete_inspection_attempt") return { pipe_status: disposition === "rework" ? "rework" : "completed" };
       if (action === "get_recipe_elements") return recipe;
@@ -74,7 +76,7 @@ for (const disposition of ["pass", "rework", "manager_approved"]) {
     let redirect;
     await handler({ session: current, body: { attempt_id: "1", element_1: "1.234", element_2: disposition === "pass" ? "Yes" : "",
       failure_action: disposition, manager_name: "Manager", manager_reason: "Reviewed" } }, { redirect: (url) => { redirect = url; } }, (err) => { throw err; });
-    assert.deepEqual(calls.map((call) => call.action), ["evaluate_measurements", "complete_inspection_attempt", "get_recipe_elements", "create_inspection_attempt"]);
+    assert.deepEqual(calls.map((call) => call.action), ["evaluate_measurements", ...(disposition === "rework" ? ["validate_ncr_capture"] : []), "complete_inspection_attempt", "get_recipe_elements", "create_inspection_attempt"]);
     assert.equal(current.selection.pipeNumber, "P010");
     assert.equal(current.activeInspection.attempt_id, 2);
     assert.equal(calls.at(-1).payload.params.inspection_scope, "full");

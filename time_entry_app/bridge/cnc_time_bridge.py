@@ -175,7 +175,9 @@ def main():
         if action == "resume_from_lunch":
             return _result(resume_from_lunch(payload.get("entry_id"),payload.get("original_adp")))
         if action == "stop_time_entry":
-            return _result(stop_time_entry(payload.get("entry_id"), payload.get("quantity"), payload.get("ending_pipe"), payload.get("original_adp"), payload.get("machine_no")))
+            if not str(payload.get("original_adp") or "").strip():
+                raise ValueError("Sign in as the operator to stop this time entry.")
+            return _result(stop_time_entry(payload.get("entry_id"), payload.get("quantity"), payload.get("ending_pipe"), payload["original_adp"]))
         if action == "edit_active_time_entry":
             return _result(
                 edit_active_time_entry(

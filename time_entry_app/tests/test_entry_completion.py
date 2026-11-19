@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime, timezone
 from unittest.mock import patch
@@ -43,25 +44,55 @@ class EntryCompletionTests(unittest.TestCase):
         for key,value in [('sp_id','OTHER'),('operation_id','20'),('production_number','WO2'),('start','2026-11-11T15:00:00+00:00')]:
             with self.subTest(key=key):self.assertIsNone(completion.starting_pipe({**self.entry,key:value}))
 
-    def test_owner_station_detail_and_missing_start_are_enforced(self):
-        for session in [{**self.session,'employee':{'emp_id':'999'}},{**self.session,'machine_no':'OTHER'}]:
-            with self.assertRaises(ValueError):completion.save_starting_pipe(session,'TEST-ENTRY','10')
+    def test_owner_detail_and_missing_start_are_enforced(self):
+        with self.assertRaises(ValueError):
+            completion.save_starting_pipe({**self.session, 'employee': {'emp_id': '999'}}, 'TEST-ENTRY', '10')
         with self.assertRaises(ValueError):completion.completion_quantity(self.entry,999,'20')
         self.entry['details_type']='Machining'
         with self.assertRaises(ValueError):completion.save_starting_pipe(self.session,'TEST-ENTRY','10')
         self.assertEqual(completion.completion_quantity(self.entry,'7',None),(7,None))
 
     def test_stop_uses_authoritative_range_quantity_and_keeps_pipe_metadata(self):
-        completion.save_starting_pipe(self.session,'TEST-ENTRY','10')
+        completion.save_starting_pipe({**self.session, 'machine_no': 'OTHER'}, 'TEST-ENTRY', '10')
         with patch.object(completion.backend,'_utc_now',return_value=datetime(2026,11,11,16,tzinfo=timezone.utc)), \
              patch.object(completion.backend,'_update_item',side_effect=RuntimeError('No remote writes during tests')), \
              patch.object(completion.backend,'lookup_employee_by_adp',return_value=self.session['employee']):
-            result=completion.backend.stop_time_entry('TEST-ENTRY','999','20','747',self.session['machine_no'])
+            with self.assertRaisesRegex(ValueError, 'another operator'):
+                completion.backend.stop_time_entry('TEST-ENTRY', '999', '20', '999')
+            result=completion.backend.stop_time_entry('TEST-ENTRY','999','20','000747')
         payload=json.loads(completion.store.get_approval_record(result['approval_id'])['payload'])
+        self.assertEqual(payload['fields']['MachineNo'], self.session['machine_no'])
         self.assertEqual(payload['fields']['Quantity'],11)
         self.assertEqual(payload['fields']['TotalMinutes'],120)
         self.assertEqual(payload['fields']['Average'],5.5)
         self.assertEqual(payload['pipe_range'],{'starting_pipe':'10','ending_pipe':'20'})
+
+    def test_two_workstations_submit_a_72_hour_timer_only_once(self):
+        self.entry.update(machine_no='1', details_type='Machining')
+        end = datetime(2026, 11, 14, 14, tzinfo=timezone.utc)
+
+        def stop():
+            try:
+                return completion.backend.stop_time_entry('TEST-ENTRY', '7', original_adp='747')
+            except ValueError as error:
+                return str(error)
+
+        with patch.object(completion.backend, '_utc_now', return_value=end), \
+             patch.object(completion.backend, '_update_item', side_effect=RuntimeError('Offline')), \
+             patch.object(completion.backend, 'lookup_employee_by_adp', return_value=self.session['employee']), \
+             ThreadPoolExecutor(max_workers=2) as workers:
+            results = list(workers.map(lambda _: stop(), range(2)))
+
+        submitted = [result for result in results if isinstance(result, dict)]
+        self.assertEqual(len(submitted), 1)
+        self.assertIn('This entry has already been submitted. Refresh the active entry.', results)
+        row = completion.store.get_approval_record(submitted[0]['approval_id'])
+        fields = json.loads(row['payload'])['fields']
+        self.assertEqual((row['machine_no'], fields['MachineNo'], fields['Shift']), ('1', '1', '40'))
+        self.assertEqual(fields['TotalMinutes'], 4320)
+        self.assertEqual(len(completion.store.list_pending_records(record_types=['complete_startstop'])), 1)
+        from time_entry_app.bridge.setup_transition import project_startstop_entries
+        self.assertEqual(project_startstop_entries([self.entry])[0]['status'], 'Submitted')
 
 
 class TabletPipeCompletionTests(unittest.TestCase):

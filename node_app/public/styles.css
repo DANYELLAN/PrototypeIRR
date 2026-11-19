@@ -2418,6 +2418,18 @@ td {
 
 @media (max-width: 1100px) {
   .app-shell { grid-template-columns: 1fr; }
+  .app-shell:has(.login-panel) {
+    grid-template-rows: max-content max-content;
+    align-content: start;
+  }
+  .app-shell:has(.login-panel) > .content {
+    grid-row: 1;
+    grid-column: 1;
+  }
+  .app-shell:has(.login-panel) > .sidebar {
+    grid-row: 2;
+    grid-column: 1;
+  }
   .split,
   .form-grid.two,
   .report-grid,
@@ -2451,6 +2463,33 @@ td {
   }
   .report-logo {
     width: 180px;
+  }
+}
+
+/* Keep the element beside the current pipe even when its history is wider
+   than a tablet. Drawing and gauge columns remain available by scrolling. */
+@media screen and (max-width: 1100px) {
+  .inspection-sheet-card .inspection-sheet-table {
+    --sheet-col-num: 34px;
+    --sheet-col-element: clamp(130px, 24vw, 200px);
+    --sheet-col-dwg: 140px;
+    --sheet-col-gauge: 100px;
+  }
+
+  .inspection-sheet-card .inspection-sheet-table th:nth-child(3),
+  .inspection-sheet-card .inspection-sheet-table td:nth-child(3),
+  .inspection-sheet-card .inspection-sheet-table th:nth-child(4),
+  .inspection-sheet-card .inspection-sheet-table td:nth-child(4) {
+    position: static;
+    left: auto;
+    z-index: auto;
+  }
+
+  .inspection-sheet-card .inspection-sheet-table th:nth-child(2),
+  .inspection-sheet-card .inspection-sheet-table td:nth-child(2) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    box-shadow: 2px 0 0 rgba(0, 0, 0, 0.2);
   }
 }
 
@@ -2698,3 +2737,129 @@ td {
 
 .measurement-actual { display:block; margin-top:5px; font-size:12px; font-weight:700; white-space:normal; }
 .measurement-actual[hidden] { display:none; }
+
+/* Shared live keypad, NCR, lunch comparison, and monitoring components. */
+.measurement-keypad{
+  position: fixed;
+  inset: auto 0 0;
+  margin: 0;
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  border: 0;
+  border-top: 1px solid #adb7ba;
+  padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+  background: #eef1f2;
+  color: #202526;
+  box-shadow: 0 -3px 14px rgba(0, 0, 0, 0.16);
+  z-index: 10000;
+}
+.measurement-keypad[hidden]{ display: none; }
+.measurement-keypad-inner{ max-width: 640px; margin: 0 auto; }
+.measurement-keypad-heading{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(80px, 140px) 40px; gap: 8px; align-items: center; height: 36px; margin-bottom: 6px; }
+.measurement-keypad-grid{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.measurement-keypad button{ min-width: 0; width: 100%; height: 48px; border: 1px solid #bec7cb; border-radius: 4px; background: #fff; color: #202526; font-size: 22px; font-weight: 600; cursor: pointer; touch-action: manipulation; }
+.measurement-keypad-heading button{ height: 34px; }
+.measurement-keypad button:active{ background: #dce3e6; }
+.measurement-keypad button:focus-visible{ outline: 2px solid #087c91; outline-offset: 1px; }
+.measurement-keypad [data-keypad-key="next"]{ background: #9e1b1e; border-color: #9e1b1e; color: #fff; font-size: 17px; }
+.measurement-keypad [data-keypad-key="clear"]{ font-size: 17px; }
+body.measurement-keypad-visible{ padding-bottom: var(--measurement-keypad-height, 270px); }
+dialog.measurement-keypad-host{ max-height: calc(100dvh - var(--measurement-keypad-height, 270px) - 2rem); margin-top: 1rem; margin-bottom: calc(var(--measurement-keypad-height, 270px) + 1rem); }
+@media (max-height: 500px){.measurement-keypad button{ height: 40px; }}
+/* Touch entry keeps the responsive element columns pinned. */
+.inspection-loading{
+  position: fixed;
+  inset: 0;
+  margin: 0;
+  width: 100%;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  box-sizing: border-box;
+  border: 0;
+  padding: 1rem;
+  background: rgba(245, 247, 247, 0.88);
+  color: #222;
+}
+.inspection-loading[open]{
+  display: grid;
+  place-items: center;
+}
+.inspection-loading::backdrop{
+  background: rgba(0, 0, 0, 0.12);
+}
+.inspection-loading-status{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  text-align: center;
+}
+.inspection-loading-spinner{
+  width: 44px;
+  height: 44px;
+  box-sizing: border-box;
+  border: 4px solid #ccd4d4;
+  border-top-color: #9e1b1e;
+  border-radius: 50%;
+  animation: inspection-loading-spin 0.8s linear infinite;
+}
+@keyframes inspection-loading-spin{
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce){.inspection-loading-spinner{ animation: none; }}
+.lunch-inspection-dialog{
+  width: min(1200px, calc(100% - 2rem));
+  max-width: none;
+  max-height: calc(100dvh - 2rem);
+  box-sizing: border-box;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+}
+.lunch-inspection-dialog::backdrop{ background: rgba(0, 0, 0, 0.45); }
+.lunch-dialog-header{ display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.lunch-dialog-header h3{ margin: 0; }
+.lunch-dialog-close{ width: 32px; height: 32px; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 24px; }
+.lunch-context{ overflow-wrap: anywhere; }
+.lunch-adp-field{ max-width: 250px; }
+.lunch-comparison-table{ width: 100%; min-width: 850px; table-layout: fixed; border-collapse: collapse; }
+.lunch-comparison-table th, .lunch-comparison-table td{ border: 1px solid var(--border); padding: 0.5rem; overflow-wrap: anywhere; }
+.lunch-comparison-table th{ background: var(--surface-2, #e7e7e7); text-align: left; }
+.lunch-comparison-table th:first-child{ width: 30px; }
+.lunch-comparison-table th:nth-child(2){ width: 23%; }
+.lunch-comparison-table input, .lunch-comparison-table select{ width: 100%; min-width: 0; box-sizing: border-box; }
+.lunch-comparison-table .measurement-pass{ outline: 2px solid #22a66b; outline-offset: -2px; }
+.lunch-comparison-table .measurement-fail{ outline: 2px solid #d84141; outline-offset: -2px; }
+.lunch-save-row{ display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; }
+.lunch-fail{ color: #a51c24; font-weight: bold; }
+.lunch-pass{ color: #087b50; font-weight: bold; }
+[data-lunch-error]:empty{ display: none; }
+[data-lunch-error]{ color: #a51c24; }
+.lunch-records{ margin-top: 1rem; }
+.lunch-records li{ margin: 0.5rem 0; }
+.lunch-records button{ border: 0; background: transparent; color: inherit; text-decoration: underline; text-align: left; cursor: pointer; }
+.admin-monitor-heading, .admin-monitor-controls{ display: flex; align-items: center; flex-wrap: wrap; gap: 1rem; }
+.admin-monitor-heading{ justify-content: space-between; }
+.admin-monitor-controls{ margin-bottom: 1.25rem; }
+.admin-monitor .admin-monitor-controls{ display: flex; }
+.admin-monitor .admin-monitor-controls button.button{ width: auto; }
+.admin-monitor-controls label{ display: flex; align-items: center; gap: 0.5rem; }
+.admin-monitor section{ padding: 1rem 0; border-top: 1px solid var(--border); }
+.admin-lunch-filters{ display: flex; align-items: end; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; }
+.admin-lunch-filters .field{ flex: 1 1 180px; }
+.admin-monitor form.admin-lunch-filters{ display: flex; }
+.admin-monitor .admin-lunch-filters button.button{ width: auto; flex: 0 0 auto; }
+@media print{.ncr-summary,
+  .report-card.ncr-summary{
+    page-break-before: auto;
+  }}
+
+/* The shared sign-in continues directly to machinist selection. */
+.app-shell:has(.machinist-setup) { grid-template-columns:minmax(0,1fr); align-content:start; }
+.app-shell:has(.machinist-setup) > .sidebar { display:none; }
+.machinist-setup { max-width:760px; margin:10px auto; }

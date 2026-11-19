@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -6,7 +7,22 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# All saved copies use the established notification history without copying data.
+from config import load_env_file
+load_env_file()
+runtime_file = ROOT / 'node_app' / 'config' / 'inspection-runtime.json'
+if runtime_file.exists():
+    runtime = json.loads(runtime_file.read_text(encoding='utf-8-sig'))
+    if runtime.get('sharedEnvironmentFile'):
+        load_env_file(Path(runtime['sharedEnvironmentFile']))
+    if runtime.get('moldNotificationDatabase'):
+        os.environ.setdefault('CNC_TIME_LOCAL_DB_PATH', runtime['moldNotificationDatabase'])
+
 from sharepoint_api import sync_inspection_recipes_to_postgres, sync_work_orders_to_postgres  # noqa: E402
+from ncr_workflow import get_ncr_detail, save_ncr_review, validate_capture, submit_ncr
+from lunch_workflow import begin_lunch_inspection, save_lunch_inspection, get_lunch_inspection
+from admin_inspections import get_admin_inspection_data, get_admin_lunch_inspection
+from node_app.bridge.time_entry_sign_in import prepare_time_entry_inspection, start_time_entry_inspection
 from irr_import import parse_irr_upload  # noqa: E402
 from node_app.bridge.lunch_popup import start_lunch_popup, complete_lunch_popup, get_popup_lunch
 from node_app.bridge.mold_approval import mold_approval_context, mold_approval_status, request_mold_approval
@@ -87,6 +103,9 @@ def main():
     action = payload.pop("action", None)
 
     try:
+        if action in {"prepare_time_entry_inspection", "start_time_entry_inspection"}:
+            handler = prepare_time_entry_inspection if action == "prepare_time_entry_inspection" else start_time_entry_inspection
+            return _result(handler(**payload.get("params", {})))
         if action == "initialize":
             initialize_workflow_schema()
             return _result({"initialized": True})
@@ -124,10 +143,10 @@ def main():
             return _result(save_live_inspection_draft(payload.get("attempt_id"), payload.get("session_id"), payload.get("inspector_adp"), payload.get("measurements"), payload.get("client_sequence"), payload.get("coverage_version"), payload.get("edited_sequence")))
         if action == "verify_pipe_inspection":
             return _result(verify_pipe_inspection(payload.get("attempt_id"), payload.get("expected_hash"), payload.get("verifier_adp")))
-        if action in {"tablet_inspection_prepare", "tablet_inspection_apply"}:
-            from node_app.bridge.tablet_inspection import prepare, apply_pipe
+        if action in {"tablet_inspection_prepare", "tablet_inspection_apply", "tablet_inspection_draft"}:
+            from node_app.bridge.tablet_inspection import prepare, apply_pipe, save_draft
             params=payload.get("params") or {}
-            return _result(prepare(params) if action == "tablet_inspection_prepare" else apply_pipe(params,payload.get("event") or {}))
+            return _result(prepare(params) if action == "tablet_inspection_prepare" else (save_draft if action == "tablet_inspection_draft" else apply_pipe)(params,payload.get("event") or {}))
         if action == "get_locations":
             return _result(get_locations())
         if action == "get_employee_by_adp":
@@ -215,6 +234,27 @@ def main():
                     operation_description=payload.get("operation_description"),
                 )
             )
+        if action == "validate_ncr_capture":
+            return _result(validate_capture(payload.get("values")))
+        if action == "get_ncr_detail":
+            return _result(get_ncr_detail(payload.get("ncr_id"), payload.get("branch")))
+        if action == "save_ncr_review":
+            return _result(save_ncr_review(
+                payload.get("ncr_id"), payload.get("values"), payload.get("actor_adp"),
+                payload.get("expected_version"), bool(payload.get("approve")), payload.get("review_notes", "")
+            ))
+        if action == "submit_ncr":
+            return _result(submit_ncr(payload.get("ncr_id"), payload.get("actor_adp"), payload.get("expected_version")))
+        if action == "get_admin_inspection_data":
+            return _result(get_admin_inspection_data(**payload.get("params", {})))
+        if action == "get_admin_lunch_inspection":
+            return _result(get_admin_lunch_inspection(**payload.get("params", {})))
+        if action == "begin_lunch_inspection":
+            return _result(begin_lunch_inspection(**payload.get("params", {})))
+        if action == "save_lunch_inspection":
+            return _result(save_lunch_inspection(**payload.get("params", {})))
+        if action == "get_lunch_inspection":
+            return _result(get_lunch_inspection(**payload.get("params", {})))
         if action == "get_ncr_reports":
             return _result(get_ncr_reports(payload.get("branch"), payload.get("status")))
         if action == "update_ncr_report":

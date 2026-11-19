@@ -8,7 +8,9 @@
   if(!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(text))return {value:NaN,isOffset:false};
   let value=Number(text);
   const baseText=String(nominal ?? '').trim();
-  const isOffset=/^[+-]/.test(text) && baseText!=='' && Number.isFinite(Number(baseText));
+  // Match exact zero text so tiny nonzero values that underflow stay full measurements.
+  const isZero=/^[+-]?(?:0+(?:\.0*)?|\.0+)(?:e[+-]?\d+)?$/i.test(text);
+  const isOffset=(/^[+-]/.test(text) || isZero) && baseText!=='' && Number.isFinite(Number(baseText));
   if(isOffset){
    const places=Math.min(15,Math.max(decimalPlaces(text),decimalPlaces(baseText)));
    value=Number((Number(baseText)+value).toFixed(places));

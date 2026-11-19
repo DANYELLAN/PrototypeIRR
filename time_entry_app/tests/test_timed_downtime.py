@@ -41,13 +41,14 @@ class TimedDowntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'already'):
             downtime.start_downtime(self.session, 'test-entry', 'M1')
         self.now += timedelta(minutes=17, seconds=12)
-        result = downtime.end_downtime(self.session, state['id'])
+        result = downtime.end_downtime({**self.session, 'machine_no': 'OTHER'}, state['id'])
         self.assertEqual(result['minutes'], 17)
         repeated = downtime.end_downtime(self.session, state['id'])
         self.assertEqual(result['approval_id'], repeated['approval_id'])
         self.assertEqual(len(self.records()), 1)
         row = self.records()[0]
         payload = json.loads(row['payload'])
+        self.assertEqual(payload['fields']['MachineNo'], self.entry['machine_no'])
         self.assertEqual(row['active_direct_entry_id'], 'test-entry')
         self.assertEqual(payload['fields']['TotalMinutes'], 17)
         self.assertEqual(payload['fields']['DetailsTypeII'], 'M1')

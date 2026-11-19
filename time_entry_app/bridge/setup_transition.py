@@ -28,11 +28,14 @@ def _db():
     return connection
 
 
-def project_completed_setups(entries):
-    """Keep closed Set-Up entries closed while their remote update is pending."""
+def project_startstop_entries(entries):
+    """Keep completed entries closed while their remote updates are pending."""
     connection = _db()
     try:
         completed = {row['entry_id']: json.loads(row['completed_fields']) for row in connection.execute('SELECT entry_id,completed_fields FROM setup_transitions')}
+        for row in connection.execute("SELECT payload FROM time_entries WHERE record_type='complete_startstop' AND sync_status='pending' ORDER BY id"):
+            payload = json.loads(row['payload'])
+            completed[str(payload['entry_id'])] = payload['fields']
     finally:
         connection.close()
     result = []
@@ -48,21 +51,19 @@ def project_completed_setups(entries):
 
 def end_setup(session, entry_id, detail_type, quantity=None):
     owner = str(session['employee']['emp_id']).lstrip('0') or '0'
-    machine = str(session['machine_no'])
     connection = _db()
     try:
         # The stable source entry ID makes retries, including lost responses, safe.
         prior = connection.execute('SELECT * FROM setup_transitions WHERE entry_id=?', (str(entry_id),)).fetchone()
         if prior:
-            if prior['emp_id'] != owner or prior['machine_no'] != machine:
-                raise ValueError('This Set-Up entry belongs to another operator or station.')
+            if prior['emp_id'] != owner:
+                raise ValueError('This Set-Up entry belongs to another operator.')
             return json.loads(prior['result'])
     finally:
         connection.close()
     entry = backend._get_startstop_by_id(entry_id)
     backend._require_break_owner(entry, session['employee']['emp_id'])
-    if str(entry.get('machine_no')) != machine:
-        raise ValueError('This Set-Up entry belongs to another station.')
+    machine = str(entry['machine_no'])
     if not is_setup(entry.get('details_type')) or entry.get('status') != 'In Progress':
         raise ValueError('End Set-Up is available only for a running Set-Up entry. Resume any break first.')
     if active_downtime(entry['sp_id']):
@@ -118,9 +119,10 @@ def end_setup(session, entry_id, detail_type, quantity=None):
         connection.execute('BEGIN IMMEDIATE')
         prior = connection.execute('SELECT * FROM setup_transitions WHERE entry_id=?', (str(entry['sp_id']),)).fetchone()
         if prior:
-            if prior['emp_id'] != owner or prior['machine_no'] != machine:
-                raise ValueError('This Set-Up entry belongs to another operator or station.')
+            if prior['emp_id'] != owner:
+                raise ValueError('This Set-Up entry belongs to another operator.')
             return json.loads(prior['result'])
+        store.require_unqueued_stop(connection, entry['sp_id'])
         def queue(kind, payload):
             return connection.execute('''INSERT INTO time_entries
                 (record_type,machine_no,emp_id,employee_name,payload,created_at,sync_status,source)

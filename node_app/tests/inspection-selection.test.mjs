@@ -56,7 +56,7 @@ test("unique or uniquely best specification/alias matches auto-select, while amb
   assert.equal(chooseInspectionRecipe([{ recipe_name: "Word overlap", match_type: "token", score: 5 }]), "");
 });
 
-test("starting an inspection revalidates the WO description and ignores posted manual specs or an unrelated IRR", async () => {
+test("starting an inspection honors manual corrections and still rejects an unrelated IRR", async () => {
   const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
   const start = source.indexOf('app.post("/workflow/start",');
   const end = source.indexOf('\napp.post("/workflow/scope",', start);
@@ -72,7 +72,7 @@ test("starting an inspection revalidates the WO description and ignores posted m
       if (action === "get_open_work_orders") return [box, pin, other];
       if (action === "get_pipe_unit") return null;
       if (action === "find_recipe_candidates") {
-        assert.equal(payload.operation_description, box.operation_description);
+        assert.equal(payload.operation_description, '2.875 8 BEN-HT6 PIN');
         return [{ recipe_name: "Box IRR", match_type: "specification", score: 110 }];
       }
       if (action === "get_recipe_elements") return { elements: [{ element_sequence: 1 }] };
@@ -81,22 +81,22 @@ test("starting an inspection revalidates the WO description and ignores posted m
     },
   });
   await handler({ session, body: { productionNumber: "WO1", operationDescription: box.operation_description,
-    sizeLabel: "999", weightLabel: "999", connectionLabel: "BAD", endType: "PIN", recipeName: "Unrelated IRR", pipeNumber: "022" } },
+    sizeLabel: "2.875", weightLabel: "8", connectionLabel: "BEN-HT6", endType: "PIN", recipeName: "Unrelated IRR", pipeNumber: "022" } },
     { redirect() {} }, (err) => { throw err; });
   const created = calls.find((call) => call.action === "create_inspection_attempt").payload.params;
   assert.equal(created.recipe_name, "Box IRR");
-  assert.equal(created.operation_description, '2 7/8" 7.90# BTS-6 BOX');
+  assert.equal(created.operation_description, '2.875 8 BEN-HT6 PIN');
   assert.equal(created.pipe_number, "022");
 });
 
-test("missing fields accept manual values, preserve them on reload, and keep parsed fields authoritative", () => {
+test("prefilled and missing fields accept manual corrections and preserve them on reload", () => {
   const incomplete={...box,inspection_entry:{size:'2 3/8"',end_type:'BOX'}};
   const previous={productionNumber:'WO1',operationDescription:box.operation_description};
   const result=resolveWorkOrderSelection([incomplete],{sizeLabel:'999',weightLabel:'4.70#',connectionLabel:'ben-eui',endType:'PIN'},previous);
-  assert.equal(result.selection.sizeLabel,'2 3/8"');
+  assert.equal(result.selection.sizeLabel,'999');
   assert.equal(result.selection.weightLabel,'4.70#');
   assert.equal(result.selection.connectionLabel,'BEN-EUI');
-  assert.equal(result.selection.endType,'BOX');
+  assert.equal(result.selection.endType,'PIN');
   assert.equal(result.usesManualDetails,true);
   assert.deepEqual(result.missingFields,['weightLabel','connectionLabel']);
   const reload=resolveWorkOrderSelection([incomplete],{},result.selection);

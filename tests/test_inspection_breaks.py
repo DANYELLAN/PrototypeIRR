@@ -6,8 +6,8 @@ from psycopg2 import sql
 import workflow_db as db
 from node_app.bridge import inspection_breaks as breaks, pipe_report as report
 
-OWNER={'adp_number':'TEST-I','name':'Original Inspector','item_id':1,'employee_status':'Active'}
-RELIEF={'adp_number':'TEST-R','name':'Relief Inspector','item_id':2,'employee_status':'Active'}
+OWNER={'adp_number':'TEST-I','name':'Original Inspector','item_id':1,'employee_status':'Active','branch':'Ennis'}
+RELIEF={'adp_number':'TEST-R','name':'Relief Inspector','item_id':2,'employee_status':'Active','branch':'Ennis'}
 PLAN=[{'element_sequence':1,'element_description':'Diameter','capture_type':'numeric','min':1,'max':2,'item_id':1}, {'element_sequence':2,'element_description':'Visual','capture_type':'boolean','item_id':2}]
 
 class BreakValidationTests(unittest.TestCase):
@@ -92,6 +92,13 @@ class BreakDatabaseTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'another active station'):
                     db.create_inspection_attempt('TEST-WO','TEST BOX','004','Ennis',next_session,OWNER,None,'Test IRR',{'elements':PLAN})
                 pause2=breaks.start_inspection_break(session,'without_relief',expected_version=end2['version'])
+                arrived=breaks.start_inspection_break(session,'with_relief','TEST-R',pause2['version'])
+                self.assertNotEqual(arrived['version'],pause2['version'])
+                self.assertEqual(arrived['acting_adp'],'TEST-R')
+                self.assertIsNotNone(db._fetch_one_dict('SELECT ended_at FROM inspection_breaks WHERE id=%s',(pause2['break_id'],))['ended_at'])
+                with self.assertRaisesRegex(ValueError,'changed'):
+                    breaks.validate_context(arrived,pause2['version'])
+
                 db.close_inspector_session(session)
                 self.assertIsNotNone(db._fetch_one_dict('SELECT ended_at FROM inspection_breaks WHERE id=%s',(pause2['break_id'],))['ended_at'])
                 resumed_pipe=db.create_inspection_attempt('TEST-WO','TEST BOX','004','Ennis',next_session,OWNER,None,'Test IRR',{'elements':PLAN})

@@ -1,156 +1,122 @@
-# AutoIRR Node App
+# Inspection Run Report app
 
-## Live Pipe Report and verification
+The unified release combines the live InspectionApp workflow with the offline,
+reporting, permissions, and recipe capabilities from PrototypeIRR-1.
 
-**Live Pipe Report** appears in navigation for Director of Quality, Quality Control Specialist, Quality Manager, Quality Supervisor (exact `ADPJobTitleDesc` matches), and IT employees. IT is recognized by the configured employee record's IT department or an IT title (`IT`, `IT Manager`, `Information Technology`, `Information Systems`, or `Integration Technologist`). Access is rechecked against the synced employee directory on every report, refresh, and verification request. Admin-only login works without reserving a station. This report permission does not expand saved-history editing beyond the four Quality titles.
+## Shared inspector sign-in
 
-The report shows all signed-in stations and the latest inspection attempt for every pipe, including inspections not yet published at end of shift. Filter by station and review the same worksheet grid used for inspections: Element, DWG DIM, and Gauge down the left, with one column per pipe. Separate grids keep stations, WOs, connections, and Digital IRRs aligned. Each pipe column includes its inspector, result, verification, timestamps, and a link to full saved attempt history. Recipe rows are visible even before live values arrive; checks outside that pipe’s plan are marked Not due. Each page contains 20 pipes, with Previous/Next arrows at the bottom. Visible report pages refresh every five seconds; each grid’s horizontal scroll position and the selected page/filter are preserved. Update timestamps and a refresh error message show when information may be stale.
+Inspectors sign into Time Entry once with their ADP, station, and shift, then go
+directly to **Choose Machinist**. No second badge, station, or shift entry appears.
+Active same-branch machinists are selected before opening the inspection workflow.
 
-While an inspector types, the active worksheet sends a provisional measurement snapshot after a 600 ms pause and retries outstanding updates every five seconds. These live drafts are separate from submitted inspection records. Draft writes require the current inspector, session, and in-progress attempt; older requests cannot overwrite newer snapshots. The report labels drafts as live/not submitted and does not allow verifying them.
+| Time Entry station | Inspection machine |
+| --- | --- |
+| Line 1 Inspection 1 | Machine 1 |
+| Line 1 Inspection 2 | Machine 2 |
+| Line 2 Inspection 1 | Machine 3 |
+| Line 2 Inspection 2 | Machine 4 |
 
-After submission, **Verify Inspection** records the reviewer's name, ADP number, title, timestamp, and a fingerprint of the saved inspection snapshot. Verification confirms the record was reviewed as correct; it does not change a pass, approved pass, re-work, or scrap disposition. An edit to saved measurements or identifiers causes **Needs re-verification**, and stale pages cannot verify content they have not displayed. Earlier snapshot verifications remain stored. Schema initialization creates `inspection_live_drafts`, `inspection_verifications`, and report indexes automatically. Restart the app and sign in again after updating; reload inspector worksheets to enable live draft updates.
+Inspection stations and inspector job titles automatically use this flow. Ordinary
+machinists retain their Time Entry dashboard. An existing inspection under another
+person or machine must be ended before switching. Hand-offs use short-lived,
+one-use codes bound to the requesting browser; employee status, branch, station
+locks, and machinist selection are checked by the inspection backend. Signing out
+or ending an inspection shift returns to the shared Time Entry sign-in.
 
-Validation: `node --test --test-isolation=none node_app/tests/*.mjs`, and `.venv/Scripts/python.exe -m unittest discover -s tests`. Set `IRR_REPORT_DB_TESTS=1` to run the PostgreSQL report integration test, which creates and removes an isolated test schema without modifying production inspection records.
+Both HTTP (3100 to 3000) and trusted tablet HTTPS (3443 to 3444) use the same flow.
+For custom DNS/reverse proxies, configure CNC_TIME_PUBLIC_ORIGIN and
+INSPECTION_PUBLIC_ORIGIN. The private code exchange defaults to loopback port 3100
+and can be configured with CNC_TIME_INTERNAL_ORIGIN. Both services must be online
+for a new sign-in; prepared inspection work continues using the offline workflow.
 
-## Inspector measurement entry and next pipe
+## Inspection entry
 
-Inspection setup now follows **WO → Description → Digital IRR**. Select a released/in-process work order, then one of its operation descriptions. Size, weight, connection, and Box/Pin are read-only values derived from that WO description. Changing the WO/description clears the previous pipe/recipe selection and refreshes the matching IRRs automatically; no Load Options step is needed. If the WO has only one description with complete connection specifications, it is selected automatically.
+- WO descriptions prefill size, weight, connection, and Box/Pin. Inspectors can
+  correct these fields. Matching IRRs are checked against the completed
+  specifications, including known drawing conflicts; a unique best match is selected.
+- Each pipe starts with blank measurements. Unsigned nonzero entries are complete
+  measurements; nonzero nominal offsets require an explicit `+` or `-`.
+  `0`, `.000`, and `0.000` mean zero offset when a nominal is configured.
+  Offset fields show the calculated **Actual** value. Without a nominal, zero is
+  a full measurement of zero. Stored numeric actuals are never offset twice.
+- The custom touch keypad handles signs, decimals, selections, Clear, Next,
+  and pipe-number loading. It works in the regular worksheet, lunch dialog,
+  and offline tablet worksheet.
+- Portrait layouts keep element numbers/names pinned while pipe columns scroll.
+- Pass, approved pass, and rework save before opening the next pipe. Stale
+  submissions cannot overwrite saved inspections or submit onto another pipe.
 
-Digital IRRs match the selected description's size (fractional and decimal forms are equivalent), weight, full connection name, and Box/Pin. A known drawing conflict excludes a recipe, while an exact drawing match ranks first; explicit description aliases remain authoritative. A unique best match is selected automatically. Tied matches require choosing among the matching IRRs, and missing specifications or no matching IRR prevent starting until the correct description/recipe data is available. The server revalidates the WO description and derives the fields again when starting, rather than trusting posted manual values. Older saved pipe/history labels with equivalent fraction/decimal, weight-unit, and connection-spacing formats remain recognized; duplicate equivalent records encountered during fallback lookup require Quality review.
+## NCR workflow
 
-Saved inspection editing and deletion are limited to employees whose **ADPJobTitleDesc** is **Director of Quality**, **Quality Control Specialist**, **Quality Manager**, or **Quality Supervisor** (complete title match, ignoring letter case and outer spaces). IT/general admin access and other job-title fields do not grant this permission. Edit controls follow that rule in both the worksheet's previous-pipe columns and Pipe History. The server rechecks the synced employee record on each edit-page request, save, and delete; missing/inactive employee records are denied. Sign out and back in after restarting to refresh the title used by navigation. Ordinary inspectors can still enter current-pipe measurements and load another pipe; submitted results cannot be overwritten by a stale completion request.
+Rework keeps the existing NCR Info form and independent Pending Review process.
+Active admins can review and verify; managers/supervisors explicitly send verified
+NCRs to SharePoint one record at a time. Edits require re-verification. Existing
+attachments, submission recovery, numbering, and review versions are preserved.
+Offline failures require notes and upload as rework; Quality can complete the
+remaining NCR details in the existing review screen.
 
-- Enter either an unsigned full measurement or an explicit `+`/`-` offset from the recipe nominal. With nominal `2.881`, `-.002` calculates and records `2.879`; `+.005` records `2.886`. The field retains the typed entry and shows an **Actual** preview for offsets. Tolerance checks, saved measurements, live drafts, and lunch inspections use the calculated actual value. Fields without a configured nominal treat entries as full values. Leading digits are never inferred and previous pipe values are never copied.
-- A visual checkbox passes only when checked. Unchecked, blank, or omitted visual results are failures and use the existing re-work / manager-approval flow. Numeric measurements still require an entry.
-- After a successful pass, approved pass, or re-work submission is saved, the next sequential pipe loads automatically with empty measurements and unchecked visual boxes. The existing pipe-number field, step buttons, and Load Pipe control remain available to change the pipe number.
-- If the next pipe cannot load (for example, its number is already completed), the saved result is preserved and the worksheet asks the inspector to check/change the pipe number. A non-sequential pipe number without trailing digits also requires entering the next number.
-- Restart the inspection server (or let development watch mode reload it) and reload browser clients to use the updated workflow.
+## Lunch and breaks
 
-This folder contains the IRR inspection workflow web app:
+Lunch Inspection opens the preserved original-versus-recheck comparison dialog.
+Any active employee in the same branch can identify themselves by ADP. Results
+remain separate in `inspection_lunch_checks`; production measurements, pipe
+progression, and counts are unchanged. Existing lunch records remain readable.
 
-- `src/server.js`
-  - the inspection workflow app
+Break Without Relief pauses entry. With Relief and Relief Arrived validate another
+active employee in the same branch. Ending a break restores the original inspector.
+Waiting/relief phases and all contributing relief inspectors are stored. Each
+coverage change invalidates older tablet drafts/submissions. Admin Tools → Breaks
+shows intervals, elapsed time, relief, station, shift, and filters in Central Time.
 
-## What it includes
+## Monitoring and verification
 
-- Express-based login flow
-- Sidebar theme toggle
-- Inspector session start / logout
-- Workflow page with:
-  - work order selection
-  - connection selection
-  - recipe selection
-  - recipe preview
-  - inspection preparation
-  - inspection completion
-  - pipe history search
-  - NCR queue view
-- Admin page for manager PIN setup
+Inspection Monitoring retains ongoing station inspections and the latest 100 lunch
+checks. Live Pipe Report adds worksheet grids, pipe history, saved-pipe verification,
+and re-verification after edits. Drafts from the regular and connected offline
+worksheets feed both views. Unsubmitted drafts cannot be verified.
 
-## Architecture
+Only Director of Quality, Quality Control Specialist, Quality Manager, and Quality
+Supervisor (exact ADPJobTitleDesc matches) can edit/delete saved inspection history.
+These permissions are rechecked against the synced employee record on each request.
+IT can monitor and use reports without receiving saved-history editing permission.
 
-- `src/server.js`
-  - Express web app and routes
-- `src/pythonBridge.js`
-  - Node-to-Python bridge helper
-- `bridge/workflow_bridge.py`
-  - Reuses the existing Python workflow logic from `workflow_db.py`
-- `public/styles.css`
-  - App styling
+## Offline tablets
 
-## Run The Inspection App
+Open **Open Offline Tablet Worksheet** after preparing the station/WO/IRR online.
+Trusted HTTPS and a completed service-worker cache are required on network tablets.
+Current measurements and queued pipes persist on the tablet, including after an
+offline reload. Reconnection uploads in order with transactional, idempotent receipts.
+New login, unprepared WOs, lunch, relief changes, and manager approvals need a connection.
+Do not end the station session until queued inspections have uploaded.
 
-1. Install Node.js if it is not already installed.
-2. From `node_app`, install dependencies:
+HTTP remains on port 3000; tablet HTTPS uses port 3444 and the installed protected
+certificate in ProgramData/Benoit/Apps/tls. The Windows task is **Benoit Inspection App**.
+
+## Mold approval and recipe import
+
+Mold Approval uses the existing Time Entry notification transport and history.
+`config/inspection-runtime.json` points every app copy to the established notification
+database and shared environment. Each copy loads its own .env first, preserving
+local settings. No notification data is copied during a code deployment.
+
+Admin recipe import accepts PDF, XLSX, and CSV and produces a draft for review.
+
+## Run and validate
+
+From node_app, use `npm start` (or `npm run dev` for watch mode).
+The launcher honors PYTHON_EXECUTABLE and otherwise uses Python on PATH.
+The installed Windows launcher uses the validated Python runtime recorded in
+config/inspection-runtime.json; each copy retains its own settings and data.
+
+From the repository root:
 
 ```powershell
-npm install
+node --test --test-isolation=none node_app/tests/*.mjs node_app/tests/*.js
+$env:IRR_REPORT_DB_TESTS = '1'
+python -m unittest discover -s tests
 ```
 
-3. Start the app:
-
-```powershell
-npm run dev
-```
-
-4. Open:
-
-```text
-http://localhost:3000
-```
-
-## Notes
-
-- This Node app currently reuses the existing Python business logic through the bridge script so behavior stays aligned with the Streamlit version.
-- It uses the same `.env` and PostgreSQL database as the Python app.
-- The CNC Time Entry app lives separately in `../time_entry_app`.
-
-
-## Lunch inspections
-
-Use **Lunch Inspection** at a signed-in station. Enter an active Quality admin or IT ADP number, select the station, and type the displayed last completed pipe number to confirm the physical pipe. Every Digital IRR element is included with blank measurements. Numeric measurements are required; unchecked visual boxes fail.
-
-Submissions are immutable records in `lunch_inspections`, with the reviewer identity, original pipe context, full recipe snapshot, results, notes, and timestamps. They do not create or update production attempts, production measurements, pipe status, sampling rotation, or the inspector session. **Lunch Inspections History** is available to signed-in Quality admins and IT, in pages of 20. The app creates the new table/index during normal startup initialization; restart the Node app to activate the routes and schema.
-
-
-## Break relief
-
-Inspection Entry has a **Break** button. **Without Relief** pauses production entry behind a persistent End Break dialog. **With Relief** validates a different active employee ADP, shows the replacement inspector, and changes the button to **End Break**. Ending coverage restores the original inspector without logging either person into a new station session.
-
-Break intervals are stored in `inspection_breaks`; production attempts store the final inspector ADP/name and link relief participation through `inspection_relief_attempts`. Relief columns have a red outline and a name/ADP label in the worksheet, Pipe History and Live Pipe Report. A pipe partly measured by relief retains that participation even when the owner finishes it; merely auto-loading the next empty pipe does not mark it. Drafts flush before each handoff, and a coverage version check rejects delayed drafts/submissions from an earlier handoff. Logout/unlock closes any active interval. Restart the Node app to apply the additive schema and activate the feature.
-
-
-## Admin break report
-
-Quality admins and IT can open **Admin Tools → Breaks** to review recorded break intervals across stations without starting a floor session. The report includes inspector and relief names/ADP numbers, break and relief start/end times, elapsed duration, station, branch, shift and active/completed status. All report times and break-start date filters use America/Chicago (Central Time). Relief coverage uses the recorded break interval. Filters include date range, station, person/ADP and status; pages contain 20 records with active breaks first. Active durations tick each second and the report refreshes every 15 seconds. Both page and live endpoint recheck current directory permissions; reporting only reads existing break records.
-
-
-## Mold Approval
-
-Signed-in inspectors can use **Mold Approval** to request approval for a work order at their active inspection station. Requests use the logged-in inspector badge/name and the station stored in the active session. The page shows recent requests and polls the selected pending request every 10 seconds for Quality’s response.
-
-This reuses the existing time-entry notification transport, SharePoint list, callback token validation, and durable `time_entry_app/data/cnc_time_local.db` history. Both apps must remain in this checkout and have access to that shared store and the existing notification environment configuration. Historical time-app requests and its decision callback remain supported. The inspection app also supports the same token-protected `/api/notifications/:id/decision` callback route. No Power Automate configuration change is required for the existing callback URL. The time app no longer accepts new mold approval submissions. Restart both Node apps and reload tablets to activate the move.
-
-
-## Lunch inspection popup
-
-The **Lunch Inspection** button in the compact inspection action row opens a modal. Enter an authorized Quality or IT reviewer ADP number. The app automatically snapshots the most recent completed pipe for the current station, selected work order, and connection, then displays its saved production column next to a blank full lunch inspection column. All recipe elements are included; numeric/text measurements and explicit visual Pass/Fail choices are required. Closing and reopening the popup retains typed values while the page stays open.
-
-The popup uses the signed-in inspector’s station session and the server’s current worksheet selection; posted station, pipe, and reviewer overrides are ignored. Reviewer authorization is rechecked when reading or saving. Lunch results remain in the separate lunch inspection history with the reference snapshot, reviewer identity, and source pipe. Production attempts, measurements, and progression are unchanged. Restart the Node app and refresh tablets to activate the popup.
-
-
-## Offline inspection in the browser
-
-No app installation is required. After signing in over trusted HTTPS and selecting a
-WO/detail/IRR, starting a pipe opens `/public/tablet-inspection.html`. The current
-worksheet, recipe, sampling rules and drafts are saved on the tablet. The original
-online workflow remains available for WO selection, history, lunch inspections, relief
-handoffs and manager approvals. The browser worksheet retains the three equal-width
-actions in Current Attempt and the date/drawing/machine/inspector/WO/connection metadata.
-
-Standard/full plans match `build_inspection_plan`, including rotating audit cycles.
-Numeric entry accepts full values and explicit signed nominal offsets, with inclusive
-tolerance limits normalized consistently. Every visual requires an explicit Pass/Fail.
-Load Next Pipe commits the current local inspection before clearing the next column.
-Offline failures require an NCR note and upload as rework, never as manager-approved
-passes. Previously completed or conflicting server pipe records cannot be overwritten.
-
-The browser uploads queued pipes in order when open and connected. A UUID receipt and
-the pipe/attempt/measurements/NCR changes commit in one PostgreSQL transaction through
-`workflow_transaction`; legacy helper commits/closes are deferred to that outer boundary.
-Retrying after a lost response returns the existing receipt. Current recipe fingerprints,
-station session and break coverage are revalidated. Conflict copies stay on the tablet
-for Quality review; current-worksheet recovery exports do not include other operators'
-profiles. Stale second-tab drafts cannot be copied onto another pipe and are preserved
-in that worksheet's recovery data. Finish and sync before ending the station session.
-
-Prepare the operator, station, WO and recipe while connected; new login, unprepared WOs,
-relief changes, lunch inspection, manager overrides and history editing need connectivity.
-The offline worker caches static UI assets only. It does not cache personalized online
-pages, login responses or APIs. HTTPS and cached assets must both be ready before an
-outage; accepting an untrusted certificate warning is insufficient for offline setup.
-
-Server2-PC's intended HTTPS port is 3444, using the same protected local CA as Time Entry.
-The Windows startup/watchdog task is `Benoit Inspection Server`; deployment requires the
-administrator configuration step. The independent cookie name `benoit.inspection.sid`
-prevents collisions with Time Entry on the same IP. The original HTTP port remains 3000.
+Database integration tests create and remove isolated schemas. Runtime
+`/api/app-version` reports the loaded build, so static files alone cannot be
+mistaken for an updated running server. Refresh tablets and sign in again after
+restarting an older release.

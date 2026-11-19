@@ -216,3 +216,6 @@ node_app/data/
 # Installed Node dependencies and local package download cache
 node_modules/
 .npm-cache/
+
+# Local inspection deployment backups and validation artifacts
+work/inspection-*

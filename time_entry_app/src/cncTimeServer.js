@@ -1,3 +1,5 @@
+import {isInspector} from "../../shared/inspectionHandoff.js";
+import {registerInspectionSignIn} from "./inspectionSignIn.js";
 import {timeNavigation} from "../public/time-entry-ui.js";
 import {isSetup,defaultNextDetail} from "../public/setup-handoff.js";
 import {renderEntryCompletion} from "../public/entry-completion.js";
@@ -43,6 +45,7 @@ app.get('/cnc-time-sw.js', (req,res)=>{
   res.sendFile(path.resolve(__dirname,'..','public','cnc-time-sw.js'));
 });
 registerTabletTime(app,{callBridge:callCncBridge,hasRole});
+registerInspectionSignIn(app);
 app.use("/public", express.static(path.resolve(__dirname, "..", "public")));
 const clickDiagnostics = createClickDiagnostics(path.resolve(__dirname, "..", "data", "diagnostics"));
 app.post("/diagnostics/events", (req, res) => clickDiagnostics.ingest(req, res));
@@ -266,6 +269,7 @@ function hasRole(sessionData, role) {
 }
 
 function defaultLandingPath(sessionData) {
+  if (isInspector(sessionData)) return "/inspection/open";
   if (hasRole(sessionData, "approver")) return "/admin";
   if (hasRole(sessionData, "exporter") && !hasRole(sessionData, "operator")) return "/exports";
   return "/dashboard";
@@ -987,12 +991,14 @@ app.get("/", async (req, res, next) => {
 
 app.post("/login", async (req, res) => {
   try {
-    req.session.cncUser = await callCncBridge("sign_in", {
+    const signedInUser = await callCncBridge("sign_in", {
       adp_number: req.body.adp_number,
       user_email: req.body.user_email,
       machine_no: req.body.machine_no,
       shift_id: req.body.shift_id,
     });
+    await new Promise((resolve,reject)=>req.session.regenerate(error=>error?reject(error):resolve()));
+    req.session.cncUser = signedInUser;
     req.session.dailyReviewDate = null;
     req.session.dailyReviewEditing = false;
     req.session.dailyReviewError = null;
@@ -1432,6 +1438,7 @@ app.get("/time", requireOperator, async (req, res, next) => {
                 ? `<div class="cnc-status-card">
                     <strong>${escapeHtml(context.active_entry.production_number || "")}</strong>
                     <p>${escapeHtml(context.active_entry.operation_description || "")}</p>
+                    ${String(context.active_entry.machine_no) !== String(sessionData.machine_no) ? `<p>Started on ${escapeHtml(stationDisplayName(context.active_entry.machine_no))}</p>` : ""}
                     <div class="cnc-chip-row"><span class="cnc-chip">${escapeHtml(context.active_entry.status)}</span><span class="cnc-chip secondary">${escapeHtml(context.active_entry.details_type || "")}</span></div>
                     ${
                       context.active_entry.status === "Paused" && context.active_break
@@ -1667,7 +1674,6 @@ app.post("/time/stop", requireOperator, async (req, res) => {
       quantity: req.body.quantity,
       ending_pipe: req.body.ending_pipe,
       original_adp: req.session.cncUser.employee.emp_id,
-      machine_no: req.session.cncUser.machine_no,
     });
     await setDailyReviewTarget(req, result);
     req.session.notice = { kind: "success", message: "Active time entry sent for supervisor approval." };

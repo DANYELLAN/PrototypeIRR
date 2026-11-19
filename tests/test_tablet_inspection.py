@@ -37,6 +37,19 @@ class TabletInspectionTests(unittest.TestCase):
    'inspector':{'item_id':1,'name':'Test Inspector','adp_number':'TEST-I','branch':'Ennis'},'cnc_operator':{'item_id':None,'name':'Test CNC'},'recipe_name':'TEST-RECIPE','inspection_scope':'full'}
   for target,key,options in [(db,'_open_workflow_connection',{'side_effect':isolated}),(db,'get_recipe_elements',{'return_value':RECIPE})]:
    p=patch.object(target,key,**options);p.start();self.addCleanup(p.stop)
+ def test_connected_tablet_draft_populates_both_monitors_without_completing_pipe(self):
+  context=tablet.prepare(self.params)
+  result=tablet.save_draft(self.params,{'pipe_number':'001','scope':'full','values':{'1':'.000','2':'Yes'},'recipe_hash':context['recipe_hash'],'coverage_version':context['coverage_version'],'client_sequence':10})
+  attempt=result['attempt']['attempt_id']
+  report=db._fetch_one_dict('SELECT measurements FROM inspection_live_drafts WHERE attempt_id=%s',(attempt,))
+  self.assertEqual(report['measurements'][0]['measured_value'],2.881)
+  self.assertEqual(report['measurements'][0]['entered_value'],'.000')
+  monitor=db._fetch_one_dict('SELECT readings FROM irr_inspection_monitor_drafts WHERE attempt_id=%s',(attempt,))
+  self.assertEqual(monitor['readings']['1'],'.000')
+  pipe=db.get_pipe_unit(self.params['production_number'],self.params['operation_description'],'001')
+  self.assertEqual(pipe['current_status'],'in_progress')
+  with self.assertRaisesRegex(ValueError,'changed'):
+   tablet.save_draft(self.params,{'pipe_number':'001','scope':'full','values':{'1':'.000'},'recipe_hash':context['recipe_hash'],'coverage_version':999,'client_sequence':11})
  def tearDown(self):
   with self.admin.cursor() as cursor:cursor.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(self.schema)))
   self.admin.commit();self.admin.close()

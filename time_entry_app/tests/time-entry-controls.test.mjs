@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import vm from 'node:vm';
 import {timeNavigation,renderTimeNavigation,renderActiveTimerActions,activeDowntimeData} from '../public/time-entry-ui.js';
 import {applyLocal} from '../public/tablet-time-store.js';
 import {registerTabletTime} from '../src/tabletTime.js';
@@ -34,6 +35,30 @@ test('tablet context returns role-checked navigation from the same source as tra
  const res={json:value=>result=value,status(){return this;}};
  await routes.get('/api/tablet-time/context')[1](req,res);
  assert.equal(result.navigation.length,6);assert.equal(result.navigation.find(item=>item.key==='notifications').href,'/notifications');
+});
+test('the Stop and Submit route uses the signed-in badge from another workstation',async()=>{
+ const source=await readFile(new URL('../src/cncTimeServer.js',import.meta.url),'utf8');
+ const start=source.indexOf('app.post("/time/stop",');
+ const route=source.slice(start,source.indexOf('app.post("/time/starting-pipe",',start));
+ let handler;
+ const requireOperator=()=>{};
+ const result={approval_id:12};
+ vm.runInNewContext(route,{
+  app:{post(path,guard,fn){assert.equal(path,'/time/stop');assert.equal(guard,requireOperator);handler=fn;}},
+  requireOperator,
+  async callCncBridge(action,payload){
+   assert.equal(action,'stop_time_entry');
+   assert.deepEqual({...payload},{entry_id:'entry',quantity:'7',ending_pipe:undefined,original_adp:'747'});
+   return result;
+  },
+  setDailyReviewTarget:async(_req,value)=>assert.equal(value,result),
+ });
+ const req={
+  session:{cncUser:{employee:{emp_id:'747'},machine_no:'2'}},
+  body:{entry_id:'entry',quantity:'7',original_adp:'999',machine_no:'3'},
+ };
+ await handler(req,{redirect:path=>assert.equal(path,'/time')});
+ assert.equal(req.session.notice.kind,'success');
 });
 test('offline release precaches shared controls without removing tablet storage',async()=>{
  const shell=await readFile(new URL('../public/tablet-time.html',import.meta.url),'utf8');

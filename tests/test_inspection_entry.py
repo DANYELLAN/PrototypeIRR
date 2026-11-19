@@ -32,12 +32,12 @@ class InspectionEntryTests(unittest.TestCase):
         }])
 
     def test_unsigned_complete_values_are_literal(self):
-        for entered, expected in [("1.234", 1.234), ("5", 5), (".234", .234)]:
+        for entered, expected in [("1.234", 1.234), ("5", 5), (".234", .234), ("0.234", .234)]:
             with self.subTest(entered=entered):
                 self.assertEqual(self.numeric(entered)["measurements"][0]["measured_value"], expected)
         self.assertFalse(self.numeric("1.234")["has_failures"])
         self.assertTrue(self.numeric("5")["has_failures"])
-        self.assertTrue(self.numeric(".234")["has_failures"])
+        self.assertTrue(self.numeric("0.234")["has_failures"])
 
     def test_boundaries_and_invalid_numbers(self):
         for value in ("1.23", "1.24"):

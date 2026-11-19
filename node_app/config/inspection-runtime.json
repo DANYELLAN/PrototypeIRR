@@ -1,0 +1,6 @@
+{
+  "version": "2026-11-17-shared-signin",
+  "sharedEnvironmentFile": "C:\\Users\\Benoit\\Documents\\PrototypeIRR-1\\.env",
+  "moldNotificationDatabase": "C:\\Users\\Benoit\\Documents\\PrototypeIRR-1\\time_entry_app\\data\\cnc_time_local.db",
+  "pythonExecutable": "C:\\Users\\Benoit\\Documents\\PrototypeIRR-1\\.venv\\Scripts\\python.exe"
+}

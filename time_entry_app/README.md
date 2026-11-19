@@ -2,6 +2,15 @@
 
 This workspace is dedicated to the CNC time-entry experience and is intentionally separate from the inspection workflow app.
 
+## Inspector sign-in
+
+Inspectors enter their badge, inspection station, and shift here once. The next
+page is **Choose Machinist**, followed by the inspection worksheet. The four line
+inspection stations map to Machines 1 through 4 in order: Line 1 Inspection 1,
+Line 1 Inspection 2, Line 2 Inspection 1, Line 2 Inspection 2. Existing station locks
+and inspection permissions still apply. Regular machinists retain the Time Entry
+view. No inspection ADP prompt is displayed during this continuation.
+
 ## Purpose
 
 - Run the machine time-entry, daily checklist, maintenance, and support flows.

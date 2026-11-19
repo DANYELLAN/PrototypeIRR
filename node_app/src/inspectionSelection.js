@@ -28,14 +28,14 @@ export function resolveWorkOrderSelection(workOrders, requested = {}, previous =
   const details={};
   for(const key of Object.keys(automatic)) {
     const fallback=acceptRequested && Object.hasOwn(requested,key) ? requested[key] : !changed ? previous[key] : '';
-    details[key]=operation ? automatic[key] || String(fallback ?? '').trim() : '';
+    details[key]=operation ? String(fallback ?? automatic[key]).trim() || automatic[key] : '';
   }
   details.connectionLabel=canonicalConnection(details.connectionLabel);
   details.endType=['BOX','PIN'].includes(details.endType.toUpperCase()) ? details.endType.toUpperCase() : '';
   const detailsChanged=!changed && Object.keys(details).some(key=>Object.hasOwn(previous,key) && previous[key]!==details[key]);
   return {
     descriptions, missingFields, specificationContext,
-    usesManualDetails:missingFields.some(key=>Boolean(details[key])),
+    usesManualDetails:Object.keys(automatic).some(key=>Boolean(details[key]) && details[key]!==automatic[key]),
     selection: {
       productionNumber,operationDescription:description,...details,
       recipeName:String(requested.recipeName ?? (changed || detailsChanged ? '' : previous.recipeName) ?? ''),

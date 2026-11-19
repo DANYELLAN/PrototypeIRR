@@ -32,7 +32,7 @@ class BridgeDispatchTests(unittest.TestCase):
     def test_stop_dispatch_keeps_ending_pipe_and_owner_for_server_quantity_calculation(self):
         with patch.object(bridge,'stop_time_entry',return_value={'approval_id':1}) as handler:
             self.dispatch({'action':'stop_time_entry','entry_id':'entry','quantity':'999','ending_pipe':'20','original_adp':'1','machine_no':'Line 1 - Drift'})
-        handler.assert_called_once_with('entry','999','20','1','Line 1 - Drift')
+        handler.assert_called_once_with('entry','999','20','1')
 
     def test_setup_handoff_uses_the_parsed_signed_in_session(self):
         session = {'employee': {'emp_id': '1'}}

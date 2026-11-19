@@ -31,7 +31,7 @@ def prepare(params):
             WHERE a.pipe_unit_id=%s AND a.session_id=%s AND a.status='in_progress'
             ORDER BY d.updated_at DESC LIMIT 1''',(pipe['id'],params['session_id']))
         if draft:
-            initial_values={str(row['element_sequence']):str(row['measured_value']) for row in draft['measurements'] if row.get('measured_value') is not None}
+            initial_values={str(row['element_sequence']):str(row.get('entered_value',row['measured_value'])) for row in draft['measurements'] if row.get('measured_value') is not None}
     return {'owner':owner_for(params),'recipe':recipe,'recipe_hash':fingerprint(recipe),'initial_values':initial_values,
             'coverage_version':coverage['version'],'inspecting':coverage['acting_name'],'inspecting_adp':coverage['acting_adp'],
             'pipe_number':params['pipe_number'],'attempt_no':pipe['latest_attempt_no'] if pipe else 1,
@@ -103,3 +103,26 @@ def apply_pipe(params,event):
             cursor.execute('INSERT INTO tablet_inspection_receipts(id,owner,body_hash,result,recorded_at) VALUES(%s,%s,%s,%s::jsonb,%s)',
                            (event_id,owner,body_hash,json.dumps(result),at))
         return result
+
+
+def save_draft(params, event):
+    """Publish an online tablet draft to both monitoring views, without completing a pipe."""
+    from node_app.bridge.pipe_report import save_live_inspection_draft
+    with db.workflow_transaction():
+        coverage = validate_context(inspection_break_state(params['session_id']), event.get('coverage_version'))
+        recipe = db.get_recipe_elements(params['recipe_name'], params['branch'])
+        if event.get('recipe_hash') != fingerprint(recipe):
+            raise ValueError('The Digital IRR changed. Keep this tablet draft and ask Quality to review it.')
+        pipe_number = str(event.get('pipe_number') or '').strip()
+        if not pipe_number or len(pipe_number) > 100:
+            raise ValueError('Enter a valid pipe number.')
+        scope = event.get('scope')
+        if scope not in {'standard', 'full'}:
+            raise ValueError('Select a valid inspection scope.')
+        attempt = db.create_inspection_attempt(**{**params, 'pipe_number': pipe_number, 'recipe_elements': recipe, 'inspection_scope': scope})
+        if attempt['inspection_scope'] != scope:
+            attempt = db.update_inspection_attempt_scope(attempt['attempt_id'], recipe, scope)
+        values = event.get('values') or {}
+        measurements = [{**element, 'measured_value': values.get(str(element['element_sequence']), 'No' if element['capture_type'] == 'boolean' else '')} for element in attempt['inspection_plan']]
+        save_live_inspection_draft(attempt['attempt_id'], params['session_id'], params['inspector']['adp_number'], measurements, int(event.get('client_sequence') or 0), coverage['version'])
+        return {'attempt': attempt, 'pipe_number': pipe_number}

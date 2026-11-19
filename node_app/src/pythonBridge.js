@@ -1,16 +1,20 @@
+import fs from "node:fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { spawn } from "child_process";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const runtimeFile = path.resolve(__dirname, "../config/inspection-runtime.json");
+const runtime = fs.existsSync(runtimeFile) ? JSON.parse(fs.readFileSync(runtimeFile,"utf8")) : {};
+const pythonExecutable = process.env.PYTHON_EXECUTABLE || runtime.pythonExecutable || "python";
 const bridgeScript = path.resolve(__dirname, "..", "bridge", "workflow_bridge.py");
 
 export function callBridge(action, extra = {}) {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify({ action, ...extra });
     const sendThroughStdin = payload.length > 16000;
-    const child = spawn("python", sendThroughStdin ? [bridgeScript] : [bridgeScript, payload], {
+    const child = spawn(pythonExecutable, sendThroughStdin ? [bridgeScript] : [bridgeScript, payload], {
       cwd: path.resolve(__dirname, "..", ".."),
       windowsHide: true,
     });
